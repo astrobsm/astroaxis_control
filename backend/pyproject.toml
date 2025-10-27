@@ -1,0 +1,6 @@
+[tool.poetry]
+name = "astro-asix-backend"
+version = "0.1.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
