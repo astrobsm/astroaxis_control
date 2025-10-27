@@ -1,0 +1,53 @@
+# Simple DigitalOcean App Platform Template
+# For ASTRO-ASIX ERP Deployment
+
+spec:
+  name: astroasix-erp
+  region: nyc
+  
+  databases:
+  - engine: PG
+    name: db
+    production: false
+    version: "15"
+  
+  services:
+  - name: backend
+    dockerfile_path: backend/Dockerfile
+    source_dir: backend
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: astrobsm/astroaxis_control
+    health_check:
+      http_path: /api/health
+    http_port: 8004
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+    - key: DATABASE_URL
+      scope: RUN_TIME
+      value: ${db.DATABASE_URL}
+    - key: DEBUG
+      scope: RUN_TIME
+      value: "False"
+    - key: PORT
+      scope: RUN_TIME
+      value: "8004"
+    routes:
+    - path: /api
+  
+  static_sites:
+  - name: frontend
+    source_dir: frontend
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: astrobsm/astroaxis_control
+    build_command: npm install && npm run build
+    output_dir: build
+    index_document: index.html
+    error_document: index.html
+    catchall_document: index.html
+    routes:
+    - path: /
