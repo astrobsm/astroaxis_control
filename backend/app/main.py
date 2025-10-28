@@ -50,8 +50,10 @@ except Exception as e:
     print(f"❌ Router setup failed: {e}")
 
 # Frontend serving
-frontend_build_path = Path(__file__).parent.parent.parent / "frontend" / "build"
+# Calculate path: __file__ is /app/app/main.py, so parent.parent is /app
+frontend_build_path = Path(__file__).parent.parent / "frontend" / "build"
 print(f"🔍 ASTRO-ASIX Frontend path: {frontend_build_path}")
+
 
 if frontend_build_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
