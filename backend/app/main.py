@@ -20,6 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Frontend serving - MUST be before API routers to avoid auth conflicts
+# Calculate path: __file__ is /app/app/main.py, so parent.parent is /app
+frontend_build_path = Path(__file__).parent.parent / "frontend" / "build"
+print(f"🔍 ASTRO-ASIX Frontend path: {frontend_build_path}")
+
+if frontend_build_path.exists():
+    # Mount static files FIRST (highest priority)
+    app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
+    print("✅ Static files mounted at /static")
+else:
+    print("⚠️ Frontend build not found, skipping static file serving")
+
 # Health check
 @app.get('/api/health')
 async def health():
@@ -49,15 +61,8 @@ except ImportError as e:
 except Exception as e:
     print(f"❌ Router setup failed: {e}")
 
-# Frontend serving
-# Calculate path: __file__ is /app/app/main.py, so parent.parent is /app
-frontend_build_path = Path(__file__).parent.parent / "frontend" / "build"
-print(f"🔍 ASTRO-ASIX Frontend path: {frontend_build_path}")
-
-
+# Frontend HTML routes (after API routers but before catch-all)
 if frontend_build_path.exists():
-    app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
-    
     @app.get("/")
     async def serve_frontend():
         index_path = frontend_build_path / "index.html"
