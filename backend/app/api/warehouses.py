@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, and_, or_
@@ -6,7 +6,7 @@ from typing import List, Optional
 import uuid
 
 from app.db import get_session
-from app.models import Warehouse, StockLevel, StockMovement
+from app.models import Warehouse, StockLevel, StockMovement, user_warehouses
 from app.schemas import (
     WarehouseSchema,
     WarehouseCreate,
@@ -14,6 +14,7 @@ from app.schemas import (
     PaginatedResponse,
     ApiResponse
 )
+from app.api.auth import get_current_user
 
 router = APIRouter(prefix='/api/warehouses', tags=['Warehouses'])
 
@@ -44,19 +45,68 @@ async def create_warehouse(
 async def list_warehouses(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
-    search: Optional[str] = Query(None, description="Search by code, name or location"),
-    active_only: bool = Query(True, description="Show only active warehouses"),
+    search: Optional[str] = Query(None, description="Search warehouses"),
+    active_only: bool = Query(True, description="Show only active"),
+    authorization: Optional[str] = Header(None),
     session: AsyncSession = Depends(get_session)
 ):
-    """List warehouses with pagination and search"""
+    """List warehouses - admins see all, others see only their assigned warehouses"""
     offset = (page - 1) * size
+    
+    # Get current user if authenticated
+    user_role = None
+    user_id = None
+    
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization header required",
+        )
+
+    token = authorization.replace("Bearer ", "")
+    try:
+        user_payload = await get_current_user(token, session)
+        user_role = user_payload.get('role')
+        user_id = user_payload.get('id')
+    except HTTPException:
+        raise
+    except Exception as auth_error:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid authentication context: {auth_error}",
+        )
+    
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="User context is missing an identifier",
+        )
+    
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid user identifier",
+        )
     
     query = select(Warehouse)
     count_query = select(func.count(Warehouse.id))
     
     filters = []
     if active_only:
-        filters.append(Warehouse.is_active == True)
+        filters.append(Warehouse.is_active.is_(True))
+    
+    # Filter warehouses based on user access (non-admins only)
+    if user_role and user_role != 'admin':
+        query = query.join(
+            user_warehouses,
+            Warehouse.id == user_warehouses.c.warehouse_id
+        ).where(user_warehouses.c.user_id == user_uuid)
+        count_query = count_query.join(
+            user_warehouses,
+            Warehouse.id == user_warehouses.c.warehouse_id
+        ).where(user_warehouses.c.user_id == user_uuid)
     
     if search:
         search_filter = or_(
@@ -75,7 +125,9 @@ async def list_warehouses(
     total = total_result.scalar()
     
     # Get paginated results
-    query = query.offset(offset).limit(size).order_by(Warehouse.created_at.desc())
+    query = query.offset(offset).limit(size).order_by(
+        Warehouse.created_at.desc()
+    )
     result = await session.execute(query)
     warehouses = result.scalars().all()
     

@@ -569,11 +569,12 @@ async def calculate_payroll(pay_data: PayrollEntryCreate, session: AsyncSession 
 
         # payroll rules: monthly standard hours 160 (40h/week * 4)
         standard_hours = Decimal('160')
-        rate = Decimal(staff.hourly_rate or 0)
+        regular_rate = Decimal('425')  # ₦425 per hour
+        overtime_rate = Decimal('450')  # ₦450 per hour
         total_hours_dec = Decimal(str(total_hours))
         regular_hours = min(total_hours_dec, standard_hours)
         overtime_hours = max(Decimal('0'), total_hours_dec - standard_hours)
-        gross_pay = (regular_hours * rate) + (overtime_hours * rate * Decimal('1.5'))
+        gross_pay = (regular_hours * regular_rate) + (overtime_hours * overtime_rate)
         deductions = Decimal('0')
         net_pay = gross_pay - deductions
 
@@ -626,7 +627,7 @@ async def generate_payslip_pdf(payroll_id: UUID, session: AsyncSession = Depends
 
         # Header
         p.setFont('Helvetica-Bold', 14)
-        p.drawString(130, height - 50, 'ASTRO-ASIX ERP - Payslip')
+        p.drawString(130, height - 50, 'BONNESANTE MEDICALS - Payslip')
         p.setFont('Helvetica', 10)
         p.drawString(40, height - 100, f'Employee: {staff.first_name} {staff.last_name} (#{staff.employee_id})')
         p.drawString(40, height - 115, f'Position: {staff.position or ""}')
@@ -638,11 +639,11 @@ async def generate_payslip_pdf(payroll_id: UUID, session: AsyncSession = Depends
         p.drawString(40, y, 'Earnings')
         p.setFont('Helvetica', 10)
         y -= 20
-        p.drawString(60, y, f'Regular hours: {payroll.regular_hours}')
-        p.drawString(300, y, f'₦{payroll.regular_hours * Decimal(str(staff.hourly_rate or 0)):.2f}')
+        p.drawString(60, y, f'Regular hours: {payroll.regular_hours} @ ₦425/hr')
+        p.drawString(300, y, f'₦{payroll.regular_hours * Decimal("425"):.2f}')
         y -= 18
-        p.drawString(60, y, f'Overtime hours: {payroll.overtime_hours}')
-        p.drawString(300, y, f'₦{(payroll.overtime_hours * Decimal(str(staff.hourly_rate or 0)) * Decimal("1.5")):.2f}')
+        p.drawString(60, y, f'Overtime hours: {payroll.overtime_hours} @ ₦450/hr')
+        p.drawString(300, y, f'₦{payroll.overtime_hours * Decimal("450"):.2f}')
         y -= 18
         p.setFont('Helvetica-Bold', 10)
         p.drawString(60, y, f'Gross Pay:')

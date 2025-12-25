@@ -1,4 +1,5 @@
 ﻿import React, { useState } from 'react';
+import API_BASE_URL from './config';
 
 function Login({ onLoginSuccess }) {
   const [isRegistering, setIsRegistering] = useState(false);
@@ -42,14 +43,14 @@ function Login({ onLoginSuccess }) {
     // Check if admin credentials
     if (phoneNumber === '08033328385' && password === 'NATISS') {
       try {
-        const response = await fetch('http://127.0.0.1:8004/api/auth/login', {
+        const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ 
             email: 'admin@astroasix.com', 
-            password: 'Admin123!' 
+            password: 'NATISS' 
           }),
         });
 
@@ -71,9 +72,16 @@ function Login({ onLoginSuccess }) {
       }
     }
 
+    // Validate role selection for regular users
+    if (!role || role === '') {
+      setError('Please select your role before logging in');
+      setLoading(false);
+      return;
+    }
+
     // For regular users, try to find by phone
     try {
-      const response = await fetch(`http://127.0.0.1:8004/api/auth/login-phone`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login-phone`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,7 +112,7 @@ function Login({ onLoginSuccess }) {
     setSuccess('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/auth/register', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -153,7 +161,7 @@ function Login({ onLoginSuccess }) {
     setSuccess('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/attendance/quick-attendance', {
+      const response = await fetch(`${API_BASE_URL}/api/attendance/quick-attendance`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -263,17 +271,17 @@ function Login({ onLoginSuccess }) {
           // ATTENDANCE FORM (No login required)
           <form onSubmit={handleQuickAttendance}>
             <div className="mb-4">
-              <label className="block text-gray-700 font-medium mb-2">Staff PIN *</label>
+              <label className="block text-gray-700 font-medium mb-2">Staff Clock PIN *</label>
               <input
                 type="password"
-                maxLength="6"
+                maxLength="4"
                 value={attendancePin}
                 onChange={(e) => setAttendancePin(e.target.value)}
-                placeholder="Enter your 6-digit PIN"
+                placeholder="Enter your 4-digit Clock PIN"
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent text-center text-2xl tracking-widest"
                 required
               />
-              <p className="text-xs text-gray-500 mt-1">Your PIN is on your staff ID card</p>
+              <p className="text-xs text-gray-500 mt-1">Your 4-digit Clock PIN is shown in the Staff table</p>
             </div>
 
             <div className="mb-4">
@@ -324,11 +332,11 @@ function Login({ onLoginSuccess }) {
                   : 'bg-red-600 hover:bg-red-700 text-white'
               }`}
             >
-              {loading ? '⏳ Processing...' : `${attendanceAction === 'clock_in' ? '✅ Clock In' : '⏹️ Clock Out'}`}
+              {loading ? 'Processing...' : `${attendanceAction === 'clock_in' ? 'Clock In' : 'Clock Out'}`}
             </button>
 
             <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-              <strong>ℹ️ Note:</strong> Use this for quick attendance tracking without logging in.
+              <strong>Note:</strong> Use this for quick attendance tracking without logging in.
             </div>
           </form>
         ) : !isRegistering ? (
@@ -475,7 +483,7 @@ function Login({ onLoginSuccess }) {
 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-gray-500">
-          <p> 2025 ASTRO-ASIX. All rights reserved.</p>
+          <p> 2025 AstroBSM StockMaster. All rights reserved.</p>
         </div>
       </div>
     </div>

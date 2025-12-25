@@ -5,8 +5,9 @@ from app.db import get_session
 from app.models import User, UserSession, AuditLog, RolePermission
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+from uuid import UUID
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import secrets
 from jose import jwt, JWTError
@@ -53,9 +54,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -92,14 +93,17 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_sessi
         role=user_data.role,
         phone=user_data.phone,
         department=user_data.department,
-        is_active=True,
+        is_active=False,  # Users start as pending approval
         is_locked=False,
         failed_login_attempts=0,
         two_factor_enabled=False
     )
     
     db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
     
+    # Create audit log AFTER user is committed
     audit_log = AuditLog(
         id=uuid.uuid4(),
         user_id=new_user.id,
@@ -108,13 +112,11 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_sessi
         details=f"New user registered: {user_data.email} with role {user_data.role}"
     )
     db.add(audit_log)
-    
     await db.commit()
-    await db.refresh(new_user)
     
     return {
         "success": True,
-        "message": "User registered successfully",
+        "message": "Registration successful! Your account is pending approval by an administrator.",
         "user": {
             "id": str(new_user.id),
             "email": new_user.email,
@@ -151,7 +153,7 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     user.failed_login_attempts = 0
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     
     access_token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role}
@@ -162,7 +164,7 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
         id=uuid.uuid4(),
         user_id=user.id,
         token=session_token,
-        expires_at=datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     db.add(user_session)
     
@@ -228,7 +230,7 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
         raise HTTPException(status_code=401, detail="Invalid phone, password, or role")
     
     user.failed_login_attempts = 0
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     
     access_token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role}
@@ -239,7 +241,7 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
         id=uuid.uuid4(),
         user_id=user.id,
         token=session_token,
-        expires_at=datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     db.add(user_session)
     
@@ -268,10 +270,13 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
     }
 
 # Logout
+class LogoutRequest(BaseModel):
+    token: str
+
 @router.post("/logout")
-async def logout(token: str, db: AsyncSession = Depends(get_session)):
+async def logout(request: LogoutRequest, db: AsyncSession = Depends(get_session)):
     """Logout user by invalidating session token"""
-    result = await db.execute(select(UserSession).where(UserSession.token == token))
+    result = await db.execute(select(UserSession).where(UserSession.token == request.token))
     session = result.scalar_one_or_none()
     
     if session:
@@ -397,3 +402,125 @@ async def check_permission(
     has_permission = action_map.get(action, False)
     
     return {"has_permission": has_permission}
+
+
+# User Management Endpoints
+@router.get("/users")
+async def list_all_users(db: AsyncSession = Depends(get_session)):
+    """Get all users with their status"""
+    try:
+        result = await db.execute(
+            select(User).order_by(User.created_at.desc())
+        )
+        users = result.scalars().all()
+        
+        return [{
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "department": user.department,
+            "phone": user.phone,
+            "is_active": user.is_active,
+            "is_locked": user.is_locked,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        } for user in users]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
+
+
+@router.post("/users/{user_id}/approve")
+async def approve_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Approve a pending user registration"""
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user.is_active = True
+        
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            action="USER_APPROVED",
+            module="auth",
+            details=f"User {user.email} approved by administrator"
+        )
+        db.add(audit_log)
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"User {user.email} has been approved and activated"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error approving user: {str(e)}")
+
+
+@router.post("/users/{user_id}/reject")
+async def reject_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Reject and delete a pending user registration"""
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        email = user.email
+        
+        await db.delete(user)
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"User registration for {email} has been rejected and removed"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error rejecting user: {str(e)}")
+
+
+@router.post("/users/{user_id}/toggle-lock")
+async def toggle_user_lock(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Lock or unlock a user account"""
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user.is_locked = not user.is_locked
+        action = "LOCKED" if user.is_locked else "UNLOCKED"
+        
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            action=f"USER_{action}",
+            module="auth",
+            details=f"User {user.email} {action.lower()} by administrator"
+        )
+        db.add(audit_log)
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"User {user.email} has been {action.lower()}",
+            "is_locked": user.is_locked
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error toggling user lock: {str(e)}")
+

@@ -1,7 +1,7 @@
-// ASTRO-ASIX ERP - Service Worker for PWA
+// AstroBSM StockMaster - Service Worker for PWA
 // This service worker provides offline support and caching
 
-const CACHE_NAME = 'astro-asix-v1';
+const CACHE_NAME = 'astrobsm-stockmaster-v1';
 const urlsToCache = [
   '/',
   '/index.html',

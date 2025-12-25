@@ -1,0 +1,28 @@
+"""add_cost_price_to_product_pricing
+
+Revision ID: 7875bb035283
+Revises: 07bc80bd3ddc
+Create Date: 2025-11-05 07:01:48.505093
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = '7875bb035283'
+down_revision: Union[str, None] = 'eeaba5084f0e'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    # Add cost_price column to product_pricing table
+    op.add_column('product_pricing', sa.Column('cost_price', sa.Numeric(precision=18, scale=2), nullable=False, server_default='0'))
+
+
+def downgrade() -> None:
+    # Remove cost_price column from product_pricing table
+    op.drop_column('product_pricing', 'cost_price')

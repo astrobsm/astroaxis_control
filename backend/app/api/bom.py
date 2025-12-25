@@ -6,7 +6,8 @@ from sqlalchemy import and_, func
 from typing import List, Optional
 from uuid import UUID
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from pydantic import BaseModel
 
 from app.db import get_session
 from app.models import (
@@ -19,12 +20,27 @@ getcontext().prec = 28
 
 router = APIRouter(prefix='/api/bom')
 
+class ApproveProductionRequest(BaseModel):
+    product_id: str
+    quantity: float
+    warehouse_id: str
+    notes: Optional[str] = None
+
+# Pydantic schemas
+class BOMLineCreate(BaseModel):
+    raw_material_id: str
+    qty_per_unit: float
+    unit: Optional[str] = None
+
+class BOMCreateRequest(BaseModel):
+    product_id: str
+    lines: List[BOMLineCreate]
+
 # ==================== BOM MANAGEMENT ====================
 
 @router.post('/create')
 async def create_bom(
-    product_id: str,
-    lines: List[dict],
+    request: BOMCreateRequest,
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -33,13 +49,13 @@ async def create_bom(
     """
     try:
         # Verify product exists
-        product_result = await session.execute(select(Product).where(Product.id == UUID(product_id)))
+        product_result = await session.execute(select(Product).where(Product.id == UUID(request.product_id)))
         product = product_result.scalars().first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         
         # Check if BOM already exists for this product
-        existing_bom = await session.execute(select(BOM).where(BOM.product_id == UUID(product_id)))
+        existing_bom = await session.execute(select(BOM).where(BOM.product_id == UUID(request.product_id)))
         bom = existing_bom.scalars().first()
         
         if bom:
@@ -50,29 +66,26 @@ async def create_bom(
             # Create new BOM
             bom = BOM(
                 id=uuid.uuid4(),
-                product_id=UUID(product_id),
-                version="1.0",
-                is_active=True
+                product_id=UUID(request.product_id)
             )
             session.add(bom)
             await session.flush()
         
         # Create BOM lines
-        for line_data in lines:
+        for line_data in request.lines:
             # Verify raw material exists
             rm_result = await session.execute(
-                select(RawMaterial).where(RawMaterial.id == UUID(line_data['raw_material_id']))
+                select(RawMaterial).where(RawMaterial.id == UUID(line_data.raw_material_id))
             )
             raw_material = rm_result.scalars().first()
             if not raw_material:
-                raise HTTPException(status_code=404, detail=f"Raw material {line_data['raw_material_id']} not found")
+                raise HTTPException(status_code=404, detail=f"Raw material {line_data.raw_material_id} not found")
             
             bom_line = BOMLine(
                 id=uuid.uuid4(),
                 bom_id=bom.id,
-                raw_material_id=UUID(line_data['raw_material_id']),
-                qty_per_unit=Decimal(str(line_data['qty_per_unit'])),
-                unit=line_data.get('unit', raw_material.unit)
+                raw_material_id=UUID(line_data.raw_material_id),
+                qty_per_unit=Decimal(str(line_data.qty_per_unit))
             )
             session.add(bom_line)
         
@@ -84,10 +97,16 @@ async def create_bom(
             "message": f"BOM created for {product.name}",
             "bom_id": str(bom.id),
             "product_id": str(product.id),
-            "lines_count": len(lines)
+            "lines_count": len(request.lines)
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
+        import traceback
+        error_detail = f"Error creating BOM: {str(e)}\n{traceback.format_exc()}"
+        print(f"BOM CREATE ERROR: {error_detail}")
         raise HTTPException(status_code=400, detail=f"Error creating BOM: {str(e)}")
 
 
@@ -100,7 +119,7 @@ async def get_product_bom(
     try:
         # Get BOM
         bom_result = await session.execute(
-            select(BOM).where(and_(BOM.product_id == UUID(product_id), BOM.is_active == True))
+            select(BOM).where(BOM.product_id == UUID(product_id))
         )
         bom = bom_result.scalars().first()
         
@@ -125,7 +144,7 @@ async def get_product_bom(
                 "raw_material_name": raw_material.name,
                 "raw_material_sku": raw_material.sku,
                 "qty_per_unit": float(line.qty_per_unit),
-                "unit": line.unit or raw_material.unit,
+                "unit": raw_material.unit,
                 "unit_cost": float(raw_material.unit_cost),
                 "line_cost": float(line.qty_per_unit * raw_material.unit_cost)
             })
@@ -142,7 +161,6 @@ async def get_product_bom(
             "product_id": str(product.id),
             "product_name": product.name,
             "product_sku": product.sku,
-            "version": bom.version,
             "lines": bom_lines,
             "total_material_cost": total_material_cost,
             "lines_count": len(bom_lines)
@@ -151,7 +169,7 @@ async def get_product_bom(
         raise HTTPException(status_code=500, detail=f"Error fetching BOM: {str(e)}")
 
 
-@router.post('/calculate-requirements')
+@router.get('/calculate-requirements')
 async def calculate_production_requirements(
     product_id: str,
     quantity: float,
@@ -164,7 +182,7 @@ async def calculate_production_requirements(
     try:
         # Get BOM
         bom_result = await session.execute(
-            select(BOM).where(and_(BOM.product_id == UUID(product_id), BOM.is_active == True))
+            select(BOM).where(BOM.product_id == UUID(product_id))
         )
         bom = bom_result.scalars().first()
         
@@ -219,7 +237,7 @@ async def calculate_production_requirements(
                 "raw_material_sku": raw_material.sku,
                 "qty_per_unit": float(line.qty_per_unit),
                 "required_quantity": float(required_qty),
-                "unit": line.unit or raw_material.unit,
+                "unit": raw_material.unit,
                 "unit_cost": float(raw_material.unit_cost),
                 "line_cost": float(line_cost),
                 "available_stock": available_stock,
@@ -242,16 +260,18 @@ async def calculate_production_requirements(
             "shortages": shortages,
             "warehouse_id": warehouse_id
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        error_detail = f"Error calculating requirements: {str(e)}\n{traceback.format_exc()}"
+        print(f"CALCULATE REQUIREMENTS ERROR: {error_detail}")
         raise HTTPException(status_code=500, detail=f"Error calculating requirements: {str(e)}")
 
 
 @router.post('/approve-production')
 async def approve_production_and_deduct_stock(
-    product_id: str,
-    quantity: float,
-    warehouse_id: str,
-    notes: Optional[str] = None,
+    request: ApproveProductionRequest,
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -261,7 +281,7 @@ async def approve_production_and_deduct_stock(
     try:
         # Get BOM
         bom_result = await session.execute(
-            select(BOM).where(and_(BOM.product_id == UUID(product_id), BOM.is_active == True))
+            select(BOM).where(BOM.product_id == UUID(request.product_id))
         )
         bom = bom_result.scalars().first()
         
@@ -269,7 +289,7 @@ async def approve_production_and_deduct_stock(
             raise HTTPException(status_code=404, detail="No BOM defined for this product")
         
         # Verify warehouse exists
-        warehouse_result = await session.execute(select(Warehouse).where(Warehouse.id == UUID(warehouse_id)))
+        warehouse_result = await session.execute(select(Warehouse).where(Warehouse.id == UUID(request.warehouse_id)))
         warehouse = warehouse_result.scalars().first()
         if not warehouse:
             raise HTTPException(status_code=404, detail="Warehouse not found")
@@ -286,12 +306,12 @@ async def approve_production_and_deduct_stock(
         
         # First pass: Check if we have enough stock for all materials
         for line, raw_material in lines_result:
-            required_qty = Decimal(str(quantity)) * line.qty_per_unit
+            required_qty = Decimal(str(request.quantity)) * line.qty_per_unit
             
             # Check stock availability
             stock_result = await session.execute(
                 select(StockLevel).where(and_(
-                    StockLevel.warehouse_id == UUID(warehouse_id),
+                    StockLevel.warehouse_id == UUID(request.warehouse_id),
                     StockLevel.raw_material_id == raw_material.id
                 ))
             )
@@ -324,12 +344,12 @@ async def approve_production_and_deduct_stock(
         )
         
         for line, raw_material in lines_result:
-            required_qty = Decimal(str(quantity)) * line.qty_per_unit
+            required_qty = Decimal(str(request.quantity)) * line.qty_per_unit
             
             # Get stock level
             stock_result = await session.execute(
                 select(StockLevel).where(and_(
-                    StockLevel.warehouse_id == UUID(warehouse_id),
+                    StockLevel.warehouse_id == UUID(request.warehouse_id),
                     StockLevel.raw_material_id == raw_material.id
                 ))
             )
@@ -337,18 +357,18 @@ async def approve_production_and_deduct_stock(
             
             # Deduct from stock
             stock_level.current_stock -= required_qty
-            stock_level.updated_at = datetime.utcnow()
+            stock_level.updated_at = datetime.now(timezone.utc)
             
             # Create stock movement record
             movement = StockMovement(
                 id=uuid.uuid4(),
-                warehouse_id=UUID(warehouse_id),
+                warehouse_id=UUID(request.warehouse_id),
                 raw_material_id=raw_material.id,
                 movement_type='PRODUCTION',
                 quantity=required_qty,
                 unit_cost=raw_material.unit_cost,
-                reference=f"Production: {quantity} units of product {product_id}",
-                notes=notes or f"Raw material consumed for production"
+                reference=f"Production: {request.quantity} units of product {request.product_id}",
+                notes=request.notes or f"Raw material consumed for production"
             )
             session.add(movement)
             
@@ -360,14 +380,14 @@ async def approve_production_and_deduct_stock(
             })
         
         # Get product details
-        product_result = await session.execute(select(Product).where(Product.id == UUID(product_id)))
+        product_result = await session.execute(select(Product).where(Product.id == UUID(request.product_id)))
         product = product_result.scalars().first()
         
         await session.commit()
         
         return {
             "success": True,
-            "message": f"Production approved and raw materials deducted for {quantity} units of {product.name}",
+            "message": f"Production approved and raw materials deducted for {request.quantity} units of {product.name}",
             "product_id": str(product.id),
             "product_name": product.name,
             "quantity_produced": quantity,
@@ -389,7 +409,6 @@ async def list_products_with_bom(session: AsyncSession = Depends(get_session)):
         result = await session.execute(
             select(Product, BOM)
             .join(BOM, Product.id == BOM.product_id)
-            .where(BOM.is_active == True)
         )
         
         products = []

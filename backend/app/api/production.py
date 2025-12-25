@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.db import get_session
 from app.models import (
@@ -34,19 +34,20 @@ async def create_production_order(
             raise HTTPException(status_code=404, detail="Product not found")
         
         # Verify sales order exists if provided
-        if order_data.sales_order_id:
+        if hasattr(order_data, 'sales_order_id') and order_data.sales_order_id:
             sales_result = await session.execute(select(SalesOrder).where(SalesOrder.id == order_data.sales_order_id))
             sales_order = sales_result.scalars().first()
             if not sales_order:
                 raise HTTPException(status_code=404, detail="Sales order not found")
         
         # Generate production order number
-        order_number = f"PO-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        order_number = f"PO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         
-        # Create production order
+        # Create production order (exclude sales_order_id as it's not in the model yet)
+        order_dict = order_data.dict(exclude={'sales_order_id'})
         production_order = ProductionOrder(
             order_number=order_number,
-            **order_data.dict()
+            **order_dict
         )
         session.add(production_order)
         await session.flush()  # Get the ID
@@ -86,6 +87,9 @@ async def create_production_order(
         raise
     except Exception as e:
         await session.rollback()
+        import traceback
+        error_detail = f"Error creating production order: {str(e)}\n{traceback.format_exc()}"
+        print(f"PRODUCTION ORDER ERROR: {error_detail}")
         raise HTTPException(status_code=400, detail=f"Error creating production order: {str(e)}")
 
 @router.get('/orders', response_model=PaginatedResponse[ProductionOrderSchema])
@@ -191,7 +195,7 @@ async def start_production_order(
     
     try:
         order.status = 'in_progress'
-        order.actual_start_date = datetime.utcnow()
+        order.actual_start_date = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(order)
         return order
@@ -231,7 +235,7 @@ async def complete_production_order(
         # Update production order
         order.status = 'completed'
         order.quantity_produced = quantity_produced
-        order.actual_end_date = datetime.utcnow()
+        order.actual_end_date = datetime.now(timezone.utc)
         
         # Create stock movement for produced goods
         stock_movement = StockMovement(
@@ -466,7 +470,7 @@ async def execute_production(
             raise HTTPException(status_code=404, detail="No warehouse found")
         
         # Generate production order number
-        order_number = f"PO-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        order_number = f"PO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         
         # Create production order
         production_order = ProductionOrder(
@@ -475,8 +479,8 @@ async def execute_production(
             quantity_planned=quantity,
             quantity_produced=quantity,  # Mark as produced immediately
             status='completed',
-            start_date=datetime.now(),
-            end_date=datetime.now(),
+            start_date=datetime.now(timezone.utc),
+            end_date=datetime.now(timezone.utc),
             notes=notes or "Automated production via console",
             warehouse_id=warehouse.id
         )
@@ -607,7 +611,7 @@ async def register_production_output(
         if completion_date:
             production_order.end_date = datetime.fromisoformat(completion_date)
         else:
-            production_order.end_date = datetime.now()
+            production_order.end_date = datetime.now(timezone.utc)
         
         if notes:
             production_order.notes = (production_order.notes or '') + f"\nOutput Notes: {notes}"

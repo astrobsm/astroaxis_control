@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 
 from app.db import get_session
 from app.models import Attendance, Staff
@@ -23,7 +23,7 @@ async def clock_in(att: AttendanceCreate, session: AsyncSession = Depends(get_se
             raise HTTPException(status_code=404, detail="Staff not found")
 
         # create attendance
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         attendance = Attendance(staff_id=att.staff_id, clock_in=now, notes=att.notes)
         session.add(attendance)
         await session.commit()
@@ -48,7 +48,7 @@ async def clock_out(staff_id: UUID = Query(...), session: AsyncSession = Depends
         if not attendance:
             raise HTTPException(status_code=404, detail="Open attendance record not found for staff")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         attendance.clock_out = now
         # compute hours worked
         delta = now - attendance.clock_in
@@ -114,7 +114,7 @@ async def quick_attendance(request: QuickAttendanceRequest, session: AsyncSessio
                 message="Invalid PIN. Please check your PIN and try again."
             )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         if request.action == "clock_in":
             # Check if staff already has an open attendance record
@@ -222,17 +222,20 @@ async def get_attendance_status(session: AsyncSession = Depends(get_session)):
             
             if open_attendance:
                 # Calculate how long they've been clocked in
-                now = datetime.utcnow()
-                duration = now - open_attendance.clock_in
+                now = datetime.now(timezone.utc)
+                # Make clock_in timezone-naive if it's timezone-aware
+                clock_in_naive = open_attendance.clock_in.replace(tzinfo=None) if open_attendance.clock_in.tzinfo else open_attendance.clock_in
+                duration = now - clock_in_naive
                 hours = duration.total_seconds() / 3600
                 
+                clock_in_str = clock_in_naive.strftime('%Y-%m-%d %H:%M:%S')
                 status_list.append({
                     'staff_id': str(staff.id),
                     'employee_id': staff.employee_id,
                     'staff_name': f"{staff.first_name} {staff.last_name}",
                     'position': staff.position,
                     'status': 'clocked_in',
-                    'clock_in_time': open_attendance.clock_in.strftime('%Y-%m-%d %H:%M:%S'),
+                    'clock_in_time': clock_in_str,
                     'hours_so_far': round(hours, 2),
                     'notes': open_attendance.notes
                 })
@@ -250,14 +253,17 @@ async def get_attendance_status(session: AsyncSession = Depends(get_session)):
                 completed = completed_result.scalars().first()
                 
                 if completed:
+                    # Make datetimes timezone-naive if they're timezone-aware
+                    clock_in_naive = completed.clock_in.replace(tzinfo=None) if completed.clock_in.tzinfo else completed.clock_in
+                    clock_out_naive = completed.clock_out.replace(tzinfo=None) if completed.clock_out.tzinfo else completed.clock_out
                     status_list.append({
                         'staff_id': str(staff.id),
                         'employee_id': staff.employee_id,
                         'staff_name': f"{staff.first_name} {staff.last_name}",
                         'position': staff.position,
                         'status': 'clocked_out',
-                        'clock_in_time': completed.clock_in.strftime('%Y-%m-%d %H:%M:%S'),
-                        'clock_out_time': completed.clock_out.strftime('%Y-%m-%d %H:%M:%S'),
+                        'clock_in_time': clock_in_naive.strftime('%Y-%m-%d %H:%M:%S'),
+                        'clock_out_time': clock_out_naive.strftime('%Y-%m-%d %H:%M:%S'),
                         'hours_worked': completed.hours_worked,
                         'notes': completed.notes
                     })
@@ -304,12 +310,14 @@ async def get_detailed_attendance_log(
         
         detailed_log = []
         for attendance, staff in records:
-            clock_in_time = attendance.clock_in.time()
-            attendance_date = attendance.clock_in.date()
+            # Make datetime timezone-naive if it's timezone-aware
+            clock_in_naive = attendance.clock_in.replace(tzinfo=None) if attendance.clock_in.tzinfo else attendance.clock_in
+            clock_in_time = clock_in_naive.time()
+            attendance_date = clock_in_naive.date()
             
             # Calculate punctuality
             expected_datetime = datetime.combine(attendance_date, STANDARD_START_TIME)
-            actual_datetime = attendance.clock_in
+            actual_datetime = clock_in_naive
             
             time_diff = (actual_datetime - expected_datetime).total_seconds() / 60  # minutes
             
@@ -326,6 +334,12 @@ async def get_detailed_attendance_log(
                 punctuality_status = 'late'
                 punctuality_minutes = int(time_diff)
             
+            # Handle clock_out timezone
+            clock_out_str = None
+            if attendance.clock_out:
+                clock_out_naive = attendance.clock_out.replace(tzinfo=None) if attendance.clock_out.tzinfo else attendance.clock_out
+                clock_out_str = clock_out_naive.strftime('%H:%M:%S')
+            
             detailed_log.append({
                 'attendance_id': str(attendance.id),
                 'staff_id': str(staff.id),
@@ -333,8 +347,8 @@ async def get_detailed_attendance_log(
                 'staff_name': f"{staff.first_name} {staff.last_name}",
                 'position': staff.position,
                 'date': attendance_date.strftime('%Y-%m-%d'),
-                'clock_in': attendance.clock_in.strftime('%H:%M:%S'),
-                'clock_out': attendance.clock_out.strftime('%H:%M:%S') if attendance.clock_out else None,
+                'clock_in': clock_in_naive.strftime('%H:%M:%S'),
+                'clock_out': clock_out_str,
                 'hours_worked': attendance.hours_worked,
                 'punctuality_status': punctuality_status,
                 'punctuality_minutes': punctuality_minutes,
@@ -393,7 +407,9 @@ async def get_best_performing_staff(
             total_late_minutes = 0
             
             for attendance in attendance_records:
-                clock_in_time = attendance.clock_in
+                # Make datetime timezone-naive if it's timezone-aware
+                clock_in_naive = attendance.clock_in.replace(tzinfo=None) if attendance.clock_in.tzinfo else attendance.clock_in
+                clock_in_time = clock_in_naive
                 attendance_date = clock_in_time.date()
                 expected_datetime = datetime.combine(attendance_date, STANDARD_START_TIME)
                 

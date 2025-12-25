@@ -1,7 +1,7 @@
 """Add RBAC permissions table
 
-Revision ID: rbac_permissions_001
-Revises: 
+Revision ID: g6789012345f
+Revises: f5678901234e
 Create Date: 2025-10-27 10:00:00.000000
 
 """
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 # revision identifiers, used by Alembic.
-revision = 'rbac_permissions_001'
-down_revision = 'c2345678901b'  # Latest migration
+revision = 'g6789012345f'
+down_revision = 'f5678901234e'
 branch_labels = None
 depends_on = None
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import API_BASE_URL from './config';
 
 function Settings({ currentUser }) {
   const [activeTab, setActiveTab] = useState('general');
@@ -25,7 +26,7 @@ function Settings({ currentUser }) {
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/settings/');
+      const response = await fetch(`${API_BASE_URL}/api/settings/`);
       const data = await response.json();
       setSettings(data);
     } catch (error) {
@@ -37,39 +38,62 @@ function Settings({ currentUser }) {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/auth/users');
+      const response = await fetch(`${API_BASE_URL}/api/auth/users`);
+      if (!response.ok) {
+        console.warn('Users endpoint not available yet');
+        setUsers([]);
+        return;
+      }
       const data = await response.json();
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching users:', error);
+      setUsers([]);
     }
   };
 
   const fetchPermissions = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/permissions/');
+      const response = await fetch(`${API_BASE_URL}/api/permissions/`);
+      if (!response.ok) {
+        console.warn('Permissions endpoint not available yet');
+        setPermissions([]);
+        return;
+      }
       const data = await response.json();
-      setPermissions(data);
+      setPermissions(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching permissions:', error);
+      setPermissions([]);
     }
   };
 
   const fetchModules = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/permissions/modules');
+      const response = await fetch(`${API_BASE_URL}/api/permissions/modules`);
+      if (!response.ok) {
+        console.warn('Modules endpoint not available yet');
+        setModules({});
+        return;
+      }
       const data = await response.json();
-      setModules(data);
+      setModules(data && typeof data === 'object' ? data : {});
     } catch (error) {
       console.error('Error fetching modules:', error);
+      setModules({});
     }
   };
 
   const fetchUserPermissions = async (userId) => {
     try {
-      const response = await fetch(`http://127.0.0.1:8004/api/permissions/user/${userId}`);
+      const response = await fetch(`${API_BASE_URL}/api/permissions/user/${userId}`);
+      if (!response.ok) {
+        console.warn('User permissions endpoint not available yet');
+        setUserPermissions([]);
+        return;
+      }
       const data = await response.json();
-      setUserPermissions(data.permissions.map(p => p.id));
+      setUserPermissions(Array.isArray(data.permissions) ? data.permissions.map(p => p.id) : []);
     } catch (error) {
       console.error('Error fetching user permissions:', error);
       setUserPermissions([]);
@@ -81,7 +105,7 @@ function Settings({ currentUser }) {
     setMessage('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/settings/', {
+      const response = await fetch(`${API_BASE_URL}/api/settings/`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
@@ -109,7 +133,7 @@ function Settings({ currentUser }) {
     setMessage('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8004/api/permissions/grant', {
+      const response = await fetch(`${API_BASE_URL}/api/permissions/grant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -150,20 +174,20 @@ function Settings({ currentUser }) {
   }
 
   const tabs = [
-    { id: 'general', label: 'General', icon: '🏢' },
-    { id: 'localization', label: 'Localization', icon: '🌍' },
-    { id: 'inventory', label: 'Inventory', icon: '📦' },
-    { id: 'sales', label: 'Sales', icon: '💰' },
-    { id: 'security', label: 'Security', icon: '🔒' },
-    { id: 'modules', label: 'Modules', icon: '🧩' },
-    ...(currentUser && currentUser.role === 'admin' ? [{ id: 'permissions', label: 'User Permissions', icon: '👥' }] : []),
+    { id: 'general', label: 'General', icon: '' },
+    { id: 'localization', label: 'Localization', icon: '' },
+    { id: 'inventory', label: 'Inventory', icon: '' },
+    { id: 'sales', label: 'Sales', icon: '' },
+    { id: 'security', label: 'Security', icon: '' },
+    { id: 'modules', label: 'Modules', icon: '' },
+    ...(currentUser && currentUser.role === 'admin' ? [{ id: 'permissions', label: 'User Permissions', icon: '' }] : []),
   ];
 
   return (
     <div className="settings-container">
       <div className="settings-header">
         <h2>System Settings</h2>
-        <p>Configure your ASTRO-ASIX ERP system</p>
+        <p>Configure your AstroBSM StockMaster system</p>
       </div>
 
       {/* Tabs */}
@@ -437,7 +461,7 @@ function Settings({ currentUser }) {
                 className="form-control"
               >
                 <option value="">-- Select a user --</option>
-                {users.map(user => (
+                {Array.isArray(users) && users.map(user => (
                   <option key={user.id} value={user.id}>
                     {user.full_name} ({user.email}) - {user.role}
                   </option>
@@ -449,13 +473,13 @@ function Settings({ currentUser }) {
               <div>
                 <h4 style={{ marginBottom: '15px', color: '#374151' }}>Permissions</h4>
                 <div className="permissions-grid">
-                  {Object.keys(modules).map(moduleName => (
+                  {modules && Object.keys(modules).map(moduleName => (
                     <div key={moduleName} className="permission-module-card">
                       <h5 style={{ marginBottom: '10px', color: '#4f46e5', textTransform: 'capitalize' }}>
                         {moduleName}
                       </h5>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {modules[moduleName].map(perm => (
+                        {Array.isArray(modules[moduleName]) && modules[moduleName].map(perm => (
                           <label key={perm.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                             <input
                               type="checkbox"

@@ -1,6 +1,8 @@
 import pytest
+import pytest_asyncio
 import sys
 import os
+import uuid
 from httpx import AsyncClient
 from sqlalchemy import text
 from decimal import Decimal
@@ -13,10 +15,43 @@ if ROOT not in sys.path:
 from app import main as main_mod
 from app import db as db_mod
 from app import models as models_mod
+from app.api import auth as auth_mod
 
 engine = db_mod.engine
 Base = models_mod.Base
 app = main_mod.app
+
+
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def setup_database():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+async def create_test_user_headers(role: str = "admin") -> dict:
+    """Create a test user directly in the DB and return auth headers."""
+    email = f"test_{uuid.uuid4().hex}@example.com"
+    password = "TestPass123!"
+
+    async with db_mod.AsyncSessionLocal() as session:
+        user_id = uuid.uuid4()
+        user = models_mod.User(
+            id=user_id,
+            email=email,
+            hashed_password=auth_mod.hash_password(password),
+            full_name="Test User",
+            role=role,
+            is_active=True,
+            is_locked=False,
+        )
+        session.add(user)
+        await session.commit()
+
+    token = auth_mod.create_access_token(
+        data={"sub": str(user_id), "email": email, "role": role}
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 @pytest.mark.asyncio
 async def test_products_crud():
@@ -101,6 +136,8 @@ async def test_raw_materials_crud():
 async def test_warehouses_crud():
     """Test CRUD operations for warehouses"""
     async with AsyncClient(app=app, base_url='http://test') as client:
+        headers = await create_test_user_headers()
+
         # Test CREATE warehouse
         warehouse_data = {
             "code": "TEST-WH",
@@ -108,38 +145,69 @@ async def test_warehouses_crud():
             "location": "Test Location"
         }
         
-        response = await client.post('/api/warehouses/', json=warehouse_data)
+        response = await client.post(
+            '/api/warehouses/',
+            json=warehouse_data,
+            headers=headers,
+        )
         assert response.status_code == 200
         result = response.json()
         warehouse_id = result['data']['id']
         
         # Test READ
-        response = await client.get(f'/api/warehouses/{warehouse_id}')
+        response = await client.get(
+            f'/api/warehouses/{warehouse_id}',
+            headers=headers,
+        )
         assert response.status_code == 200
         
         # Test UPDATE
         update_data = {"location": "Updated Location"}
-        response = await client.put(f'/api/warehouses/{warehouse_id}', json=update_data)
+        response = await client.put(
+            f'/api/warehouses/{warehouse_id}',
+            json=update_data,
+            headers=headers,
+        )
         assert response.status_code == 200
         
         # Test warehouse summary
-        response = await client.get(f'/api/warehouses/{warehouse_id}/summary')
+        response = await client.get(
+            f'/api/warehouses/{warehouse_id}/summary',
+            headers=headers,
+        )
         assert response.status_code == 200
         result = response.json()
         assert 'stock_summary' in result
+
+        # Test DELETE
+        response = await client.delete(
+            f'/api/warehouses/{warehouse_id}',
+            headers=headers,
+            params={'force': True},
+        )
+        assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_stock_movements():
     """Test stock movement operations"""
     async with AsyncClient(app=app, base_url='http://test') as client:
+        headers = await create_test_user_headers()
+
         # First ensure we have a warehouse and raw material
         # Get existing warehouse
-        response = await client.get('/api/warehouses/')
+        response = await client.get('/api/warehouses/', headers=headers)
         warehouses = response.json()
         if warehouses['total'] == 0:
             # Create warehouse if none exists
-            warehouse_data = {"code": "STOCK-TEST", "name": "Stock Test Warehouse"}
-            response = await client.post('/api/warehouses/', json=warehouse_data)
+            warehouse_data = {
+                "code": "STOCK-TEST",
+                "name": "Stock Test Warehouse",
+            }
+            response = await client.post(
+                '/api/warehouses/',
+                json=warehouse_data,
+                headers=headers,
+            )
             warehouse_id = response.json()['data']['id']
         else:
             warehouse_id = warehouses['items'][0]['id']
@@ -166,7 +234,10 @@ async def test_stock_movements():
             "notes": "Test stock in"
         }
         
-        response = await client.post('/api/stock/movement/raw-material', json=movement_data)
+        response = await client.post(
+            '/api/stock/movement/raw-material',
+            json=movement_data,
+        )
         assert response.status_code == 200
         result = response.json()
         assert result['success'] == True

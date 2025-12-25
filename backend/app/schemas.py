@@ -1,11 +1,29 @@
-from pydantic import BaseModel, Field, validator
-from typing import Optional, List, Generic, TypeVar
+from pydantic import BaseModel, Field, validator, ConfigDict
+from typing import Optional, List, Generic, TypeVar, Any
 from decimal import Decimal
 from datetime import datetime, date
 from uuid import UUID
 import uuid
 
 T = TypeVar('T')
+
+# Product Pricing Schemas
+class ProductPricingBase(BaseModel):
+    unit: str = Field(..., min_length=1, max_length=50)
+    cost_price: Decimal = Field(default=0, ge=0)
+    retail_price: Decimal = Field(..., ge=0)
+    wholesale_price: Decimal = Field(..., ge=0)
+
+class ProductPricingCreate(ProductPricingBase):
+    pass
+
+class ProductPricingSchema(ProductPricingBase):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 # Product Schemas
 class ProductBase(BaseModel):
@@ -23,7 +41,7 @@ class ProductBase(BaseModel):
     minimum_order_quantity: Optional[Decimal] = Field(default=1, gt=0)
 
 class ProductCreate(ProductBase):
-    pass
+    pricing: Optional[List[ProductPricingCreate]] = Field(default_factory=list)
 
 class ProductUpdate(BaseModel):
     sku: Optional[str] = Field(None, min_length=1, max_length=64)
@@ -38,10 +56,12 @@ class ProductUpdate(BaseModel):
     wholesale_price: Optional[Decimal] = Field(None, ge=0)
     lead_time_days: Optional[int] = Field(None, ge=0)
     minimum_order_quantity: Optional[Decimal] = Field(None, gt=0)
+    pricing: Optional[List[ProductPricingCreate]] = None
 
 class ProductSchema(ProductBase):
     id: uuid.UUID
     created_at: datetime
+    pricing: List[ProductPricingSchema] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -51,6 +71,9 @@ class RawMaterialBase(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
     unit_cost: Decimal = Field(..., ge=0)
+    manufacturer: Optional[str] = Field(None, max_length=255)
+    unit: Optional[str] = Field(default="kg", max_length=32)
+    reorder_level: Optional[Decimal] = Field(default=0, ge=0)
 
 class RawMaterialCreate(RawMaterialBase):
     pass
@@ -59,13 +82,15 @@ class RawMaterialUpdate(BaseModel):
     sku: Optional[str] = Field(None, min_length=1, max_length=64)
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     unit_cost: Optional[Decimal] = Field(None, ge=0)
+    manufacturer: Optional[str] = Field(None, max_length=255)
+    unit: Optional[str] = Field(None, max_length=32)
+    reorder_level: Optional[Decimal] = Field(None, ge=0)
 
 class RawMaterialSchema(RawMaterialBase):
     id: uuid.UUID
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Warehouse Schemas
 class WarehouseBase(BaseModel):
@@ -165,7 +190,7 @@ class PaginatedResponse(BaseModel, Generic[T]):
 class ApiResponse(BaseModel):
     success: bool = True
     message: str = "Operation completed successfully"
-    data: Optional[BaseModel] = None
+    data: Optional[Any] = None
 
 # Sales Schemas
 class CustomerBase(BaseModel):
@@ -198,6 +223,7 @@ class CustomerSchema(CustomerBase):
 
 class SalesOrderLineBase(BaseModel):
     product_id: UUID
+    unit: Optional[str] = Field(None, max_length=50)  # Unit of measure for pricing
     quantity: Decimal = Field(..., gt=0)
     unit_price: Decimal = Field(..., ge=0)
 
@@ -213,6 +239,7 @@ class SalesOrderLineSchema(SalesOrderLineBase):
 
 class SalesOrderBase(BaseModel):
     customer_id: UUID
+    warehouse_id: Optional[UUID] = None
     required_date: Optional[datetime] = None
     notes: Optional[str] = None
 
@@ -221,6 +248,7 @@ class SalesOrderCreate(SalesOrderBase):
 
 class SalesOrderUpdate(BaseModel):
     status: Optional[str] = Field(None, pattern="^(pending|confirmed|production|shipped|delivered|cancelled)$")
+    payment_status: Optional[str] = Field(None, pattern="^(paid|unpaid|partial)$")
     required_date: Optional[datetime] = None
     notes: Optional[str] = None
 
@@ -228,6 +256,8 @@ class SalesOrderSchema(SalesOrderBase):
     id: UUID
     order_number: str
     status: str
+    payment_status: str
+    payment_date: Optional[datetime] = None
     order_date: datetime
     total_amount: Decimal
     lines: List[SalesOrderLineSchema] = []
@@ -244,6 +274,7 @@ class ProductionOrderBase(BaseModel):
     scheduled_end_date: Optional[datetime] = None
     priority: Optional[int] = Field(default=5, ge=1, le=10)
     notes: Optional[str] = None
+    sales_order_id: Optional[UUID] = None
 
 class ProductionOrderCreate(ProductionOrderBase):
     pass
@@ -382,6 +413,16 @@ class StaffSchema(StaffBase):
     clock_pin: str  # Include PIN in response for admin use
     is_active: bool
     created_at: datetime
+    full_name: Optional[str] = None  # Computed field
+    
+    @validator('full_name', always=True, pre=False)
+    def compute_full_name(cls, v, values):
+        """Compute full_name from first_name and last_name"""
+        if v:
+            return v
+        first = values.get('first_name', '')
+        last = values.get('last_name', '')
+        return f"{first} {last}".strip()
     
     class Config:
         from_attributes = True

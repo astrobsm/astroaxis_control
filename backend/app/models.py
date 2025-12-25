@@ -7,6 +7,15 @@ from sqlalchemy import func
 
 Base = declarative_base()
 
+# Association table for User-Warehouse many-to-many relationship
+user_warehouses = sa.Table(
+    'user_warehouses',
+    Base.metadata,
+    sa.Column('user_id', UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    sa.Column('warehouse_id', UUID(as_uuid=True), sa.ForeignKey('warehouses.id', ondelete='CASCADE'), primary_key=True),
+    sa.Column('granted_at', sa.TIMESTAMP(timezone=True), server_default=func.now())
+)
+
 class User(Base):
     __tablename__ = 'users'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -24,6 +33,9 @@ class User(Base):
     department = sa.Column(sa.String(100))
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+    
+    # Warehouse access relationship
+    accessible_warehouses = relationship("Warehouse", secondary=user_warehouses, back_populates="authorized_users")
 
 class Permission(Base):
     __tablename__ = 'permissions'
@@ -66,6 +78,22 @@ class Product(Base):
     lead_time_days = sa.Column(sa.Integer, default=0)
     minimum_order_quantity = sa.Column(sa.Numeric(18,6), default=1)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    
+    # Relationships
+    pricing = relationship("ProductPricing", back_populates="product", cascade="all, delete-orphan")
+
+class ProductPricing(Base):
+    __tablename__ = 'product_pricing'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'), nullable=False, index=True)
+    unit = sa.Column(sa.String(50), nullable=False)
+    cost_price = sa.Column(sa.Numeric(18,2), nullable=False, default=0)
+    retail_price = sa.Column(sa.Numeric(18,2), nullable=False)
+    wholesale_price = sa.Column(sa.Numeric(18,2), nullable=False)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    
+    # Relationships
+    product = relationship("Product", back_populates="pricing")
 
 class RawMaterial(Base):
     __tablename__ = 'raw_materials'
@@ -113,6 +141,9 @@ class Warehouse(Base):
     manager_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('staff.id'), nullable=True)
     is_active = sa.Column(sa.Boolean, default=True)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    
+    # User access relationship
+    authorized_users = relationship("User", secondary=user_warehouses, back_populates="accessible_warehouses")
 
 class StockMovement(Base):
     __tablename__ = 'stock_movements'
@@ -192,7 +223,10 @@ class SalesOrder(Base):
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_number = sa.Column(sa.String(64), unique=True, nullable=False, index=True)
     customer_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('customers.id'), nullable=False, index=True)
+    warehouse_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('warehouses.id'), nullable=True, index=True)
     status = sa.Column(sa.String(32), nullable=False, default='pending')  # pending, confirmed, production, shipped, delivered, cancelled
+    payment_status = sa.Column(sa.String(32), nullable=False, default='unpaid', index=True)  # paid, unpaid, partial
+    payment_date = sa.Column(sa.TIMESTAMP(timezone=True))
     order_date = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
     required_date = sa.Column(sa.TIMESTAMP(timezone=True))
     total_amount = sa.Column(sa.Numeric(18,2), default=0)
@@ -202,6 +236,7 @@ class SalesOrder(Base):
     
     # Relationships
     customer = relationship("Customer", foreign_keys=[customer_id])
+    warehouse = relationship("Warehouse", foreign_keys=[warehouse_id])
     lines = relationship("SalesOrderLine", back_populates="sales_order")
 
 class SalesOrderLine(Base):
@@ -209,6 +244,7 @@ class SalesOrderLine(Base):
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sales_order_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('sales_orders.id'), nullable=False, index=True)
     product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'), nullable=False)
+    unit = sa.Column(sa.String(50), nullable=True)  # Unit of measure for this line item
     quantity = sa.Column(sa.Numeric(18,6), nullable=False)
     unit_price = sa.Column(sa.Numeric(18,6), nullable=False)
     line_total = sa.Column(sa.Numeric(18,2), nullable=False)

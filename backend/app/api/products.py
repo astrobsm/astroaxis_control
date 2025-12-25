@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, and_, or_
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from decimal import Decimal
 import uuid
 
 from app.db import get_session
-from app.models import Product, StockLevel, StockMovement, Warehouse
+from app.models import Product, ProductPricing, StockLevel, StockMovement, Warehouse
 from app.schemas import (
     ProductSchema,
     ProductCreate,
@@ -31,14 +32,41 @@ async def create_product(
     if existing.scalar():
         raise HTTPException(status_code=400, detail=f"Product with SKU '{product_data.sku}' already exists")
     
-    new_product = Product(**product_data.model_dump())
+    # Extract pricing data
+    pricing_data = product_data.pricing if hasattr(product_data, 'pricing') else []
+    product_dict = product_data.model_dump(exclude={'pricing'})
+    
+    new_product = Product(**product_dict)
     session.add(new_product)
+    await session.flush()  # Get the product ID before adding pricing
+    
+    # Add pricing entries
+    if pricing_data:
+        for pricing_item in pricing_data:
+            # Convert Pydantic model to dict if needed
+            pricing_dict = pricing_item.model_dump() if hasattr(pricing_item, 'model_dump') else pricing_item
+            new_pricing = ProductPricing(
+                product_id=new_product.id,
+                unit=pricing_dict['unit'],
+                cost_price=pricing_dict['cost_price'],
+                retail_price=pricing_dict['retail_price'],
+                wholesale_price=pricing_dict['wholesale_price']
+            )
+            session.add(new_pricing)
+    
     await session.commit()
-    await session.refresh(new_product)
+    
+    # Reload product with pricing relationship
+    result = await session.execute(
+        select(Product).where(Product.id == new_product.id).options(selectinload(Product.pricing))
+    )
+    new_product = result.scalar()
+    
+    product_schema = ProductSchema.model_validate(new_product)
     
     return ApiResponse(
         message=f"Product '{new_product.name}' created successfully",
-        data=ProductSchema.model_validate(new_product)
+        data=product_schema
     )
 
 @router.get('/')
@@ -49,9 +77,11 @@ async def list_products(
     session: AsyncSession = Depends(get_session)
 ):
     """List products with pagination and search"""
+    from sqlalchemy.orm import selectinload
+    
     offset = (page - 1) * size
     
-    query = select(Product)
+    query = select(Product).options(selectinload(Product.pricing))
     count_query = select(func.count(Product.id))
     
     if search:
@@ -96,7 +126,9 @@ async def get_product(
 ):
     """Get a specific product by ID"""
     result = await session.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.pricing))
+        .where(Product.id == product_id)
     )
     product = result.scalar()
     
@@ -116,7 +148,9 @@ async def update_product(
 ):
     """Update a product"""
     result = await session.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.pricing))
+        .where(Product.id == product_id)
     )
     product = result.scalar()
     
@@ -131,8 +165,36 @@ async def update_product(
         if existing.scalar():
             raise HTTPException(status_code=400, detail=f"Product with SKU '{product_data.sku}' already exists")
     
+    # Handle pricing updates if provided
+    pricing_data = None
+    if hasattr(product_data, 'pricing') and product_data.pricing is not None:
+        pricing_data = product_data.pricing
+        # Delete existing pricing
+        await session.execute(
+            select(ProductPricing).where(ProductPricing.product_id == product_id)
+        )
+        existing_pricing = await session.execute(
+            select(ProductPricing).where(ProductPricing.product_id == product_id)
+        )
+        for pricing in existing_pricing.scalars():
+            await session.delete(pricing)
+        
+        # Add new pricing
+        if pricing_data:
+            for pricing_item in pricing_data:
+                # Convert Pydantic model to dict if needed
+                pricing_dict = pricing_item.model_dump() if hasattr(pricing_item, 'model_dump') else pricing_item
+                new_pricing = ProductPricing(
+                    product_id=product_id,
+                    unit=pricing_dict['unit'],
+                    cost_price=pricing_dict['cost_price'],
+                    retail_price=pricing_dict['retail_price'],
+                    wholesale_price=pricing_dict['wholesale_price']
+                )
+                session.add(new_pricing)
+    
     # Update fields
-    update_data = product_data.model_dump(exclude_unset=True)
+    update_data = product_data.model_dump(exclude_unset=True, exclude={'pricing'})
     for field, value in update_data.items():
         setattr(product, field, value)
     

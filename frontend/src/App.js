@@ -2,14 +2,19 @@
 import Login from './Login';
 import AppMain from './AppMain';
 import Settings from './Settings';
+import NotificationSettings from './NotificationSettings';
+import API_BASE_URL from './config';
+import { isPushSupported, getNotificationPermission, subscribeToPush } from './utils/pushNotifications';
 import './styles.css';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [online, setOnline] = useState(navigator.onLine);
 
   useEffect(() => {
     const token = localStorage.getItem('access_token');
@@ -18,6 +23,11 @@ function App() {
       try {
         setCurrentUser(JSON.parse(user));
         setIsAuthenticated(true);
+        
+        // Auto-subscribe to push notifications if permission granted
+        if (isPushSupported() && getNotificationPermission() === 'granted') {
+          subscribeToPush().catch(err => console.log('Push subscription check:', err));
+        }
       } catch (error) {
         console.error('Error parsing user data:', error);
         localStorage.clear();
@@ -31,7 +41,13 @@ function App() {
       setShowInstallPrompt(true);
     };
 
+    // Online/offline handlers
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     // Detect if app is installed
     window.addEventListener('appinstalled', () => {
@@ -42,6 +58,8 @@ function App() {
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
@@ -69,7 +87,7 @@ function App() {
   const handleLogout = () => {
     const token = localStorage.getItem('access_token');
     if (token) {
-      fetch('http://127.0.0.1:8004/api/auth/logout', {
+      fetch(`${API_BASE_URL}/api/auth/logout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
@@ -82,19 +100,6 @@ function App() {
     setShowSettings(false);
   };
 
-  const hasPermission = (module, action) => {
-    if (!currentUser) return false;
-    if (currentUser.role === 'admin') return true;
-    const permissions = {
-      sales_staff: ['products', 'sales', 'customers', 'inventory'],
-      marketer: ['products', 'customers', 'sales'],
-      customer_care: ['customers', 'sales', 'products'],
-      production_staff: ['production', 'products', 'raw_materials', 'inventory', 'warehouses'],
-    };
-    const allowedModules = permissions[currentUser.role] || [];
-    return allowedModules.includes(module);
-  };
-
   if (!isAuthenticated) {
     return <Login onLoginSuccess={handleLoginSuccess} />;
   }
@@ -105,7 +110,7 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <img 
             src="/company-logo.png" 
-            alt="ASTRO-ASIX Logo" 
+            alt="AstroBSM StockMaster" 
             style={{ 
               width: '50px', 
               height: '50px', 
@@ -117,7 +122,20 @@ function App() {
             }}
             onError={(e) => { e.target.style.display = 'none'; }}
           />
-          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>ASTRO-ASIX ERP</h1>
+          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>AstroBSM StockMaster</h1>
+          {/* Offline indicator */}
+          {!online && (
+            <span style={{ 
+              marginLeft: '12px', 
+              padding: '4px 10px', 
+              background: '#ff6b6b', 
+              borderRadius: '12px', 
+              fontSize: '11px', 
+              fontWeight: 600 
+            }}>
+              OFFLINE
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
@@ -144,22 +162,67 @@ function App() {
                 }}
                 title="Install ASTRO-ASIX as an app"
               >
-                📱 Install App
+                Install App
               </button>
             )}
+            {/* Notification Settings Button */}
+            <button 
+              onClick={() => setShowNotificationSettings(!showNotificationSettings)} 
+              style={{ 
+                padding: '8px 16px', 
+                border: '2px solid white', 
+                background: showNotificationSettings ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)', 
+                color: 'white', 
+                borderRadius: '6px', 
+                cursor: 'pointer', 
+                fontWeight: 600 
+              }}
+              title="Notification Settings"
+            >
+              🔔
+            </button>
             {currentUser?.role === 'admin' && (
               <button onClick={() => setShowSettings(!showSettings)} style={{ padding: '8px 16px', border: '2px solid white', background: 'rgba(255,255,255,0.1)', color: 'white', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-                 Settings
+                Settings
               </button>
             )}
             <button onClick={handleLogout} style={{ padding: '8px 16px', border: '2px solid white', background: 'rgba(255,255,255,0.1)', color: 'white', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>
-               Logout
+              Logout
             </button>
           </div>
         </div>
       </nav>
+      
+      {/* Notification Settings Modal */}
+      {showNotificationSettings && (
+        <div style={{ 
+          position: 'fixed', 
+          top: 0, 
+          left: 0, 
+          right: 0, 
+          bottom: 0, 
+          background: 'rgba(0,0,0,0.5)', 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          zIndex: 1000 
+        }}>
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            maxWidth: '500px', 
+            width: '90%', 
+            maxHeight: '80vh', 
+            overflow: 'auto',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.3)'
+          }}>
+            <NotificationSettings onClose={() => setShowNotificationSettings(false)} />
+          </div>
+        </div>
+      )}
+      
       <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
-        {showSettings ? <Settings currentUser={currentUser} /> : <AppMain currentUser={currentUser} hasPermission={hasPermission} />}
+        {showSettings ? <Settings currentUser={currentUser} /> : <AppMain currentUser={currentUser} />}
       </div>
     </div>
   );

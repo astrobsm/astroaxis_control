@@ -4,8 +4,9 @@ from sqlalchemy.future import select
 from sqlalchemy import func, and_, or_, case
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
+from pydantic import BaseModel
 
 from app.db import get_session
 from app.models import (
@@ -15,48 +16,72 @@ from app.models import (
 
 router = APIRouter(prefix='/api/stock-management')
 
+# Pydantic schemas
+class ProductIntakeRequest(BaseModel):
+    warehouse_id: UUID
+    product_id: UUID
+    quantity: float
+    unit_cost: float
+    supplier: Optional[str] = None
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+
+class RawMaterialIntakeRequest(BaseModel):
+    warehouse_id: UUID
+    raw_material_id: UUID
+    quantity: float
+    unit_cost: float
+    supplier: Optional[str] = None
+    batch_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# Transfer Request Schema
+class TransferRequest(BaseModel):
+    product_id: UUID
+    from_warehouse_id: UUID
+    to_warehouse_id: UUID
+    quantity: float
+    unit: Optional[str] = None
+    reference: Optional[str] = None
+    notes: Optional[str] = None
+
 # Product Stock Intake
 @router.post('/product-intake')
 async def product_stock_intake(
-    warehouse_id: UUID,
-    product_id: UUID,
-    quantity: float,
-    unit_cost: float,
-    supplier: Optional[str] = None,
-    batch_number: Optional[str] = None,
-    notes: Optional[str] = None,
+    request: ProductIntakeRequest,
     session: AsyncSession = Depends(get_session)
 ):
     """Record product stock intake"""
     try:
         # Create stock movement
         movement = StockMovement(
-            warehouse_id=warehouse_id,
-            product_id=product_id,
+            warehouse_id=request.warehouse_id,
+            product_id=request.product_id,
             movement_type='IN',
-            quantity=Decimal(str(quantity)),
-            unit_cost=Decimal(str(unit_cost)),
-            reference=f"Supplier: {supplier or 'N/A'}" + (f", Batch: {batch_number}" if batch_number else ""),
-            notes=notes
+            quantity=Decimal(str(request.quantity)),
+            unit_cost=Decimal(str(request.unit_cost)),
+            reference=f"Supplier: {request.supplier or 'N/A'}" + (f", Batch: {request.batch_number}" if request.batch_number else ""),
+            notes=request.notes
         )
         session.add(movement)
         
         # Update or create stock level
         stock_level_result = await session.execute(
             select(StockLevel).where(
-                and_(StockLevel.warehouse_id == warehouse_id, StockLevel.product_id == product_id)
+                and_(StockLevel.warehouse_id == request.warehouse_id, StockLevel.product_id == request.product_id)
             )
         )
         stock_level = stock_level_result.scalars().first()
         
         if stock_level:
-            stock_level.current_stock += Decimal(str(quantity))
-            stock_level.updated_at = datetime.utcnow()
+            stock_level.current_stock += Decimal(str(request.quantity))
+            stock_level.updated_at = datetime.now(timezone.utc)
         else:
             stock_level = StockLevel(
-                warehouse_id=warehouse_id,
-                product_id=product_id,
-                current_stock=Decimal(str(quantity))
+                warehouse_id=request.warehouse_id,
+                product_id=request.product_id,
+                current_stock=Decimal(str(request.quantity))
             )
             session.add(stock_level)
         
@@ -65,7 +90,7 @@ async def product_stock_intake(
         
         return {
             "success": True,
-            "message": f"Stock intake recorded: {quantity} units added",
+            "message": f"Stock intake recorded: {request.quantity} units added",
             "movement_id": str(movement.id),
             "new_stock_level": float(stock_level.current_stock)
         }
@@ -77,45 +102,39 @@ async def product_stock_intake(
 # Raw Material Stock Intake
 @router.post('/raw-material-intake')
 async def raw_material_stock_intake(
-    warehouse_id: UUID,
-    raw_material_id: UUID,
-    quantity: float,
-    unit_cost: float,
-    supplier: Optional[str] = None,
-    batch_number: Optional[str] = None,
-    notes: Optional[str] = None,
+    request: RawMaterialIntakeRequest,
     session: AsyncSession = Depends(get_session)
 ):
     """Record raw material stock intake"""
     try:
         # Create stock movement
         movement = StockMovement(
-            warehouse_id=warehouse_id,
-            raw_material_id=raw_material_id,
+            warehouse_id=request.warehouse_id,
+            raw_material_id=request.raw_material_id,
             movement_type='IN',
-            quantity=Decimal(str(quantity)),
-            unit_cost=Decimal(str(unit_cost)),
-            reference=f"Supplier: {supplier or 'N/A'}" + (f", Batch: {batch_number}" if batch_number else ""),
-            notes=notes
+            quantity=Decimal(str(request.quantity)),
+            unit_cost=Decimal(str(request.unit_cost)),
+            reference=f"Supplier: {request.supplier or 'N/A'}" + (f", Batch: {request.batch_number}" if request.batch_number else ""),
+            notes=request.notes
         )
         session.add(movement)
         
         # Update or create stock level
         stock_level_result = await session.execute(
             select(StockLevel).where(
-                and_(StockLevel.warehouse_id == warehouse_id, StockLevel.raw_material_id == raw_material_id)
+                and_(StockLevel.warehouse_id == request.warehouse_id, StockLevel.raw_material_id == request.raw_material_id)
             )
         )
         stock_level = stock_level_result.scalars().first()
         
         if stock_level:
-            stock_level.current_stock += Decimal(str(quantity))
-            stock_level.updated_at = datetime.utcnow()
+            stock_level.current_stock += Decimal(str(request.quantity))
+            stock_level.updated_at = datetime.now(timezone.utc)
         else:
             stock_level = StockLevel(
-                warehouse_id=warehouse_id,
-                raw_material_id=raw_material_id,
-                current_stock=Decimal(str(quantity))
+                warehouse_id=request.warehouse_id,
+                raw_material_id=request.raw_material_id,
+                current_stock=Decimal(str(request.quantity))
             )
             session.add(stock_level)
         
@@ -124,7 +143,7 @@ async def raw_material_stock_intake(
         
         return {
             "success": True,
-            "message": f"Raw material intake recorded: {quantity} units added",
+            "message": f"Raw material intake recorded: {request.quantity} units added",
             "movement_id": str(movement.id),
             "new_stock_level": float(stock_level.current_stock)
         }
@@ -277,7 +296,7 @@ async def record_damaged_product(
         
         if stock_level:
             stock_level.current_stock -= Decimal(str(quantity))
-            stock_level.updated_at = datetime.utcnow()
+            stock_level.updated_at = datetime.now(timezone.utc)
         
         await session.commit()
         await session.refresh(damaged)
@@ -338,7 +357,7 @@ async def record_damaged_raw_material(
         
         if stock_level:
             stock_level.current_stock -= Decimal(str(quantity))
-            stock_level.updated_at = datetime.utcnow()
+            stock_level.updated_at = datetime.now(timezone.utc)
         
         await session.commit()
         await session.refresh(damaged)
@@ -403,7 +422,7 @@ async def record_returned_product(
             
             if stock_level:
                 stock_level.current_stock += Decimal(str(quantity))
-                stock_level.updated_at = datetime.utcnow()
+                stock_level.updated_at = datetime.now(timezone.utc)
             else:
                 stock_level = StockLevel(
                     warehouse_id=warehouse_id,
@@ -424,6 +443,94 @@ async def record_returned_product(
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording product return: {str(e)}")
+
+
+# Transfer product between warehouses
+@router.post('/transfer')
+async def transfer_product(
+    request: TransferRequest,
+    session: AsyncSession = Depends(get_session)
+):
+    """Transfer product quantity from one warehouse to another atomically"""
+    if request.from_warehouse_id == request.to_warehouse_id:
+        raise HTTPException(status_code=400, detail="Source and destination warehouse must differ")
+
+    if request.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
+
+    try:
+        # Fetch source stock level
+        src_result = await session.execute(
+            select(StockLevel).where(
+                and_(StockLevel.warehouse_id == request.from_warehouse_id, StockLevel.product_id == request.product_id)
+            )
+        )
+        src_level = src_result.scalars().first()
+
+        if not src_level or src_level.current_stock < Decimal(str(request.quantity)):
+            raise HTTPException(status_code=400, detail="Insufficient stock in source warehouse")
+
+        # Fetch destination stock level
+        dst_result = await session.execute(
+            select(StockLevel).where(
+                and_(StockLevel.warehouse_id == request.to_warehouse_id, StockLevel.product_id == request.product_id)
+            )
+        )
+        dst_level = dst_result.scalars().first()
+
+        # Perform updates
+        src_level.current_stock -= Decimal(str(request.quantity))
+        src_level.updated_at = datetime.now(timezone.utc)
+
+        if dst_level:
+            dst_level.current_stock += Decimal(str(request.quantity))
+            dst_level.updated_at = datetime.now(timezone.utc)
+        else:
+            dst_level = StockLevel(
+                warehouse_id=request.to_warehouse_id,
+                product_id=request.product_id,
+                current_stock=Decimal(str(request.quantity))
+            )
+            session.add(dst_level)
+
+        # Record stock movements
+        out_movement = StockMovement(
+            warehouse_id=request.from_warehouse_id,
+            product_id=request.product_id,
+            movement_type='TRANSFER_OUT',
+            quantity=Decimal(str(request.quantity)),
+            reference=request.reference or f"Transfer to {request.to_warehouse_id}",
+            notes=request.notes
+        )
+        in_movement = StockMovement(
+            warehouse_id=request.to_warehouse_id,
+            product_id=request.product_id,
+            movement_type='TRANSFER_IN',
+            quantity=Decimal(str(request.quantity)),
+            reference=request.reference or f"Transfer from {request.from_warehouse_id}",
+            notes=request.notes
+        )
+        session.add(out_movement)
+        session.add(in_movement)
+
+        await session.commit()
+        # refresh levels for response
+        await session.refresh(src_level)
+        await session.refresh(dst_level)
+
+        return {
+            "success": True,
+            "message": f"Transferred {request.quantity} units",
+            "from_warehouse_new_level": float(src_level.current_stock),
+            "to_warehouse_new_level": float(dst_level.current_stock),
+            "out_movement_id": str(out_movement.id),
+            "in_movement_id": str(in_movement.id)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Error transferring product: {str(e)}")
 
 
 # Stock Analysis & Dashboard
