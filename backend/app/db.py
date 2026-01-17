@@ -7,8 +7,8 @@ load_dotenv()
 # Allow overriding DATABASE_URL in environment; use your specified PostgreSQL credentials as default
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
-    # Use your specified PostgreSQL credentials: user=postgres, password=natiss_natiss, database=axis_db
-    DATABASE_URL = 'postgresql+asyncpg://postgres:natiss_natiss@localhost:5432/axis_db'
+    # Use your specified PostgreSQL credentials: user=postgres, password=blackvelvet, database=axis_db
+    DATABASE_URL = 'postgresql+asyncpg://postgres:blackvelvet@localhost:5432/axis_db'
 
 engine = create_async_engine(DATABASE_URL, future=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

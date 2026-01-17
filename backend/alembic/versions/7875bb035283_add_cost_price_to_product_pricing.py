@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add cost_price column to product_pricing table
-    op.add_column('product_pricing', sa.Column('cost_price', sa.Numeric(precision=18, scale=2), nullable=False, server_default='0'))
+    # Column already exists in initial migration b6c76a408167 - no-op
+    pass
 
 
 def downgrade() -> None:
-    # Remove cost_price column from product_pricing table
-    op.drop_column('product_pricing', 'cost_price')
+    # No-op since upgrade does nothing
+    pass

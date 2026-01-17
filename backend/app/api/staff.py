@@ -101,6 +101,10 @@ async def list_departments(
     count_result = await session.execute(select(func.count(Department.id)).select_from(query.subquery()))
     total = count_result.scalar_one()
     
+    # Calculate page from skip/limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    size = limit
+    
     # Get paginated results
     query = query.offset(skip).limit(limit).order_by(Department.name)
     result = await session.execute(query)
@@ -109,9 +113,9 @@ async def list_departments(
     return PaginatedResponse(
         items=departments,
         total=total,
-        skip=skip,
-        limit=limit,
-        pages=(total + limit - 1) // limit
+        page=page,
+        size=size,
+        pages=(total + size - 1) // size if size > 0 else 1
     )
 
 @router.get('/departments/{department_id}', response_model=DepartmentSchema)
@@ -267,6 +271,10 @@ async def list_employees(
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     
+    # Calculate page from skip/limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    size = limit
+    
     # Get paginated results
     query = query.offset(skip).limit(limit).order_by(Employee.first_name, Employee.last_name)
     result = await session.execute(query)
@@ -275,9 +283,9 @@ async def list_employees(
     return PaginatedResponse(
         items=employees,
         total=total,
-        skip=skip,
-        limit=limit,
-        pages=(total + limit - 1) // limit
+        page=page,
+        size=size,
+        pages=(total + size - 1) // size if size > 0 else 1
     )
 
 @router.get('/employees/{employee_id}', response_model=EmployeeSchema)
@@ -417,6 +425,10 @@ async def list_work_logs(
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     
+    # Calculate page from skip/limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    size = limit
+    
     # Get paginated results
     query = query.offset(skip).limit(limit).order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
     result = await session.execute(query)
@@ -425,9 +437,9 @@ async def list_work_logs(
     return PaginatedResponse(
         items=work_logs,
         total=total,
-        skip=skip,
-        limit=limit,
-        pages=(total + limit - 1) // limit
+        page=page,
+        size=size,
+        pages=(total + size - 1) // size if size > 0 else 1
     )
 
 @router.get('/work-logs/{work_log_id}', response_model=WorkLogSchema)
@@ -516,7 +528,12 @@ async def list_staffs(skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, l
     total = count_result.scalar_one()
     result = await session.execute(query.offset(skip).limit(limit).order_by(Staff.first_name))
     items = result.scalars().all()
-    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit, pages=(total + limit - 1) // limit)
+    
+    # Calculate page from skip/limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    size = limit
+    
+    return PaginatedResponse(items=items, total=total, page=page, size=size, pages=(total + size - 1) // size if size > 0 else 1)
 
 
 @router.get('/staffs/{staff_id}', response_model=StaffSchema)

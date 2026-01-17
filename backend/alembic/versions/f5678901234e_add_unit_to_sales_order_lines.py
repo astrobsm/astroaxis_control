@@ -17,10 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add unit column to sales_order_lines table
-    op.add_column('sales_order_lines', sa.Column('unit', sa.String(length=50), nullable=True))
+    # Column already exists in initial migration b6c76a408167 - no-op
+    pass
 
 
 def downgrade() -> None:
-    # Remove unit column from sales_order_lines table
-    op.drop_column('sales_order_lines', 'unit')
+    # No-op since upgrade does nothing
+    pass

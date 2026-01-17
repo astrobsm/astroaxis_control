@@ -4,6 +4,6 @@
 
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
   ? '' // Empty string means relative URLs (e.g., /api/auth/login)
-  : 'http://127.0.0.1:8004';
+  : 'http://127.0.0.1:8008';
 
 export default API_BASE_URL;

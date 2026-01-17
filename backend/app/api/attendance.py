@@ -94,10 +94,15 @@ async def list_attendance(
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
 
-    result = await session.execute(query.offset(skip).limit(limit).order_by(Attendance.clock_in.desc()))
+    # Calculate offset from page
+    offset = skip
+    size = limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    
+    result = await session.execute(query.offset(offset).limit(size).order_by(Attendance.clock_in.desc()))
     items = result.scalars().all()
 
-    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit, pages=(total + limit - 1) // limit)
+    return PaginatedResponse(items=items, total=total, page=page, size=size, pages=(total + size - 1) // size if size > 0 else 1)
 
 
 @router.post('/quick-attendance', response_model=QuickAttendanceResponse)

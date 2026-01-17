@@ -19,20 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        'product_pricing',
-        sa.Column('id', sa.UUID(), nullable=False),
-        sa.Column('product_id', sa.UUID(), nullable=False),
-        sa.Column('unit', sa.String(length=50), nullable=False),
-        sa.Column('retail_price', sa.Numeric(precision=18, scale=2), nullable=False),
-        sa.Column('wholesale_price', sa.Numeric(precision=18, scale=2), nullable=False),
-        sa.Column('created_at', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=True),
-        sa.ForeignKeyConstraint(['product_id'], ['products.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_product_pricing_product_id'), 'product_pricing', ['product_id'], unique=False)
+    # Table already exists in initial migration b6c76a408167 - no-op
+    pass
 
 
 def downgrade() -> None:
-    op.drop_index(op.f('ix_product_pricing_product_id'), table_name='product_pricing')
-    op.drop_table('product_pricing')
+    # No-op since upgrade does nothing
+    pass

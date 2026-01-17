@@ -2,7 +2,7 @@
   "name": "astrobsm-stockmaster-frontend",
   "version": "0.1.0",
   "private": true,
-  "proxy": "http://localhost:8004",
+  "proxy": "http://localhost:8008",
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",

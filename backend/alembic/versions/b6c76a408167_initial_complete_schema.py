@@ -253,7 +253,10 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('order_number', sa.String(length=64), nullable=False),
     sa.Column('customer_id', sa.UUID(), nullable=False),
+    sa.Column('warehouse_id', sa.UUID(), nullable=True),
     sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('payment_status', sa.String(length=32), nullable=False, server_default='unpaid'),
+    sa.Column('payment_date', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('order_date', sa.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('required_date', sa.TIMESTAMP(timezone=True), nullable=True),
     sa.Column('total_amount', sa.Numeric(precision=18, scale=2), nullable=True),
@@ -266,6 +269,8 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_sales_orders_customer_id'), 'sales_orders', ['customer_id'], unique=False)
     op.create_index(op.f('ix_sales_orders_order_number'), 'sales_orders', ['order_number'], unique=True)
+    op.create_index(op.f('ix_sales_orders_warehouse_id'), 'sales_orders', ['warehouse_id'], unique=False)
+    op.create_index(op.f('ix_sales_orders_payment_status'), 'sales_orders', ['payment_status'], unique=False)
     op.create_table('user_permissions',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
@@ -302,6 +307,8 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_warehouses_code'), 'warehouses', ['code'], unique=True)
+    # Add FK from sales_orders to warehouses (deferred since warehouses created after sales_orders)
+    op.create_foreign_key('fk_sales_orders_warehouse_id', 'sales_orders', 'warehouses', ['warehouse_id'], ['id'])
     op.create_table('bom_lines',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('bom_id', sa.UUID(), nullable=False),

@@ -125,6 +125,10 @@ async def list_production_orders(
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     
+    # Calculate page from skip/limit
+    page = (skip // limit) + 1 if limit > 0 else 1
+    size = limit
+    
     # Get paginated results
     query = query.offset(skip).limit(limit).order_by(ProductionOrder.created_at.desc())
     result = await session.execute(query)
@@ -133,9 +137,9 @@ async def list_production_orders(
     return PaginatedResponse(
         items=orders,
         total=total,
-        skip=skip,
-        limit=limit,
-        pages=(total + limit - 1) // limit
+        page=page,
+        size=size,
+        pages=(total + size - 1) // size if size > 0 else 1
     )
 
 @router.get('/orders/{order_id}', response_model=ProductionOrderSchema)

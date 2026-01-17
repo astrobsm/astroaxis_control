@@ -16,12 +16,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add new columns to staff table
-    op.add_column('staff', sa.Column('phone', sa.String(length=20), nullable=True))
-    op.add_column('staff', sa.Column('date_of_birth', sa.Date(), nullable=True))
+    # Columns already exist in initial migration b6c76a408167 - no-op
+    pass
 
 
 def downgrade() -> None:
-    # Remove added columns
-    op.drop_column('staff', 'date_of_birth')
-    op.drop_column('staff', 'phone')
+    # No-op since upgrade does nothing
+    pass
