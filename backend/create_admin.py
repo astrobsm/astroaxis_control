@@ -26,7 +26,6 @@ async def create_admin():
         # Create admin
         admin = User(
             email='admin@astrobsm.com',
-            username='admin',
             hashed_password=hash_password('admin123'),
             full_name='System Administrator',
             phone='08033328385',
