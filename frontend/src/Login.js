@@ -200,7 +200,7 @@ function Login({ onLoginSuccess }) {
     <div 
       className="min-h-screen flex items-center justify-center"
       style={{
-        backgroundImage: 'url(/company-logo.png)',
+        backgroundImage: 'url(/company-logo.png?v=20260118)',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat',
@@ -212,7 +212,7 @@ function Login({ onLoginSuccess }) {
         {/* Logo and Title */}
         <div className="text-center mb-6">
           <img 
-            src="/company-logo.png" 
+            src="/company-logo.png?v=20260118" 
             alt="ASTRO-ASIX" 
             className="w-24 h-24 mx-auto mb-4 rounded-full shadow-lg border-4 border-indigo-100"
             onError={(e) => { e.target.style.display = 'none'; }}

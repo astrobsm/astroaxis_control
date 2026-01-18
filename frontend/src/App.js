@@ -109,7 +109,7 @@ function App() {
       <nav style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <img 
-            src="/company-logo.png" 
+            src="/company-logo.png?v=20260118" 
             alt="AstroBSM StockMaster" 
             style={{ 
               width: '50px', 
