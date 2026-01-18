@@ -425,9 +425,18 @@ async def generate_invoice_pdf(
         story = []
         styles = getSampleStyleSheet()
         
-        # Add Company Logo
-        logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
-        if os.path.exists(logo_path):
+        # Add Company Logo - try multiple locations
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png',
+            os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
             logo = Image(logo_path, width=1.5*inch, height=1.5*inch)
             story.append(logo)
             story.append(Spacer(1, 0.2*inch))
@@ -757,9 +766,17 @@ async def generate_receipt(
         elements = []
         styles = getSampleStyleSheet()
         
-        # Add company logo if exists
-        logo_path = '/app/frontend/build/company-logo.png'
-        if os.path.exists(logo_path):
+        # Add company logo - try multiple locations
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png'
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
             img = Image(logo_path, width=1.5*inch, height=1.5*inch)
             elements.append(img)
             elements.append(Spacer(1, 12))
@@ -867,9 +884,17 @@ async def generate_invoice(
         elements = []
         styles = getSampleStyleSheet()
         
-        # Add company logo if exists
-        logo_path = '/app/frontend/build/company-logo.png'
-        if os.path.exists(logo_path):
+        # Add company logo - try multiple locations
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png'
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
             img = Image(logo_path, width=1.5*inch, height=1.5*inch)
             elements.append(img)
             elements.append(Spacer(1, 12))

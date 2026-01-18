@@ -637,9 +637,18 @@ async def generate_payslip_pdf(payroll_id: UUID, session: AsyncSession = Depends
         p = canvas.Canvas(buffer, pagesize=A4)
         width, height = A4
 
-        # Add Company Logo
-        logo_path = os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
-        if os.path.exists(logo_path):
+        # Add Company Logo - try multiple locations
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png',
+            os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
             p.drawImage(logo_path, 40, height - 80, width=80, height=80, preserveAspectRatio=True)
 
         # Header

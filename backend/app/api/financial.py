@@ -298,9 +298,17 @@ async def export_financial_report(
             spaceBefore=20
         )
         
-        # Add company logo if exists
-        logo_path = '/app/frontend/build/company-logo.png'
-        if os.path.exists(logo_path):
+        # Add company logo - try multiple locations
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png'
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
             img = Image(logo_path, width=2*inch, height=2*inch)
             img.hAlign = 'CENTER'
             elements.append(img)
