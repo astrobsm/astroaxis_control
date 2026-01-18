@@ -1,14 +1,13 @@
 import asyncio
-import bcrypt
+import hashlib
 from app.db import AsyncSessionLocal
 from app.models import User
 from sqlalchemy import select
 
 
 def hash_password(password: str) -> str:
-    """Hash password using bcrypt directly."""
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+    """Hash password using SHA-256 (matching auth.py)."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
 async def create_admin():
