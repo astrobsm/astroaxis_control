@@ -89,18 +89,15 @@ async def create_raw_material(
         if r.scalar_one() > 0:
             raise HTTPException(status_code=400, detail=f"Raw material with SKU '{data['sku']}' already exists")
     
-    # Insert using raw SQL (production DB has integer ID with auto-increment)
-    # Production columns: name(NOT NULL), category(NOT NULL), source(NOT NULL), uom(NOT NULL),
-    # reorder_point(NOT NULL int), unit_cost(NOT NULL float), rm_id, opening_stock,
-    # sku, manufacturer, unit, reorder_level, created_at
+    # Insert using raw SQL (compatible with both UUID and integer ID schemas)
     result = await session.execute(
         text("""
             INSERT INTO raw_materials (
-                name, sku, manufacturer, unit, reorder_level, unit_cost, created_at,
+                id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at,
                 category, source, uom, reorder_point
             )
             VALUES (
-                :name, :sku, :manufacturer, :unit, :reorder_level, :unit_cost, NOW(),
+                gen_random_uuid(), :name, :sku, :manufacturer, :unit, :reorder_level, :unit_cost, NOW(),
                 :category, :source, :uom, :reorder_point
             )
             RETURNING id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at
@@ -180,7 +177,7 @@ async def list_raw_materials(
 
 @router.get('/{material_id}')
 async def get_raw_material(
-    material_id: int,
+    material_id: str,
     session: AsyncSession = Depends(get_session)
 ):
     """Get a specific raw material by ID"""
@@ -201,7 +198,7 @@ async def get_raw_material(
 
 @router.put('/{material_id}')
 async def update_raw_material(
-    material_id: int,
+    material_id: str,
     material_data: RawMaterialUpdate,
     session: AsyncSession = Depends(get_session)
 ):
@@ -246,7 +243,7 @@ async def update_raw_material(
 
 @router.delete('/{material_id}')
 async def delete_raw_material(
-    material_id: int,
+    material_id: str,
     session: AsyncSession = Depends(get_session)
 ):
     """Delete a raw material"""
@@ -288,17 +285,17 @@ async def delete_raw_material(
 
 @router.get('/{material_id}/stock')
 async def get_raw_material_stock(
-    material_id: int,
+    material_id: str,
     session: AsyncSession = Depends(get_session)
 ):
     """Get stock levels for a raw material across all warehouses"""
     result = await session.execute(
         text("""
             SELECT sl.current_stock, sl.min_stock, sl.max_stock,
-                   w.id as wh_id, w.name as wh_name, w.wh_id as wh_code
+                   w.id as wh_id, w.name as wh_name, COALESCE(w.wh_id, w.code) as wh_code
             FROM stock_levels sl
             LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
-            WHERE sl.raw_material_id = :rm_id
+            WHERE sl.raw_material_id::text = :rm_id
         """),
         {"rm_id": material_id}
     )

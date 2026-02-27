@@ -278,7 +278,7 @@ async def download_product_stock_intake_template(session: AsyncSession = Depends
         products = []
     
     try:
-        wh_result = await session.execute(text("SELECT wh_id, name FROM warehouses ORDER BY name LIMIT 10"))
+        wh_result = await session.execute(text("SELECT COALESCE(wh_id, code) as wh_id, name FROM warehouses ORDER BY name LIMIT 10"))
         warehouses = wh_result.fetchall()
     except Exception:
         warehouses = []
@@ -348,7 +348,7 @@ async def download_raw_material_stock_intake_template(session: AsyncSession = De
         raw_materials = []
     
     try:
-        wh_result = await session.execute(text("SELECT wh_id, name FROM warehouses ORDER BY name LIMIT 10"))
+        wh_result = await session.execute(text("SELECT COALESCE(wh_id, code) as wh_id, name FROM warehouses ORDER BY name LIMIT 10"))
         warehouses = wh_result.fetchall()
     except Exception:
         warehouses = []
@@ -870,11 +870,11 @@ async def bulk_upload_raw_materials(file: UploadFile = File(...), session: Async
                 result = await session.execute(
                     text("""
                         INSERT INTO raw_materials (
-                            name, sku, category, source, uom, unit_cost,
+                            id, name, sku, category, source, uom, unit_cost,
                             manufacturer, reorder_point, opening_stock,
                             unit, reorder_level, created_at
                         ) VALUES (
-                            :name, :sku, :category, :source, :uom, :unit_cost,
+                            gen_random_uuid(), :name, :sku, :category, :source, :uom, :unit_cost,
                             :manufacturer, :reorder_point, :opening_stock,
                             :unit, :reorder_level, NOW()
                         ) RETURNING id, name, sku
@@ -1056,7 +1056,7 @@ async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), se
                 
                 # Find warehouse by name or wh_id (production has no 'code' column)
                 wh_result = await session.execute(
-                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR wh_id = :name LIMIT 1"),
+                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR COALESCE(wh_id, code) = :name LIMIT 1"),
                     {"name": warehouse_name or 'Sales Warehouse'}
                 )
                 wh = wh_result.fetchone()
@@ -1087,8 +1087,8 @@ async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), se
                 else:
                     await session.execute(
                         text("""
-                            INSERT INTO stock_levels (warehouse_id, raw_material_id, current_stock, min_stock, max_stock, created_at, updated_at)
-                            VALUES (:wid, :rmid, :qty, 0, 0, NOW(), NOW())
+                            INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock, min_stock, max_stock, updated_at)
+                            VALUES (gen_random_uuid(), :wid::uuid, :rmid::uuid, :qty, 0, 0, NOW())
                         """),
                         {"wid": str(wh_id), "rmid": str(rm_id), "qty": quantity}
                     )
@@ -1097,11 +1097,11 @@ async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), se
                 try:
                     await session.execute(
                         text("""
-                            INSERT INTO stock_movements (warehouse_id, raw_material_id, movement_type, quantity, unit_cost, reference, notes, created_at)
-                            VALUES (:wid, :rmid, 'INTAKE', :qty, :cost, :ref, :notes, NOW())
+                            INSERT INTO stock_movements (id, warehouse_id, raw_material_id, movement_type, quantity, unit_cost, reference, notes, created_at)
+                            VALUES (gen_random_uuid(), :wid::uuid, :rmid::uuid, 'INTAKE', :qty, :cost, :ref, :notes, NOW())
                         """),
                         {
-                            "wid": wh_id, "rmid": rm_id, "qty": quantity,
+                            "wid": str(wh_id), "rmid": str(rm_id), "qty": quantity,
                             "cost": unit_cost,
                             "ref": f"Bulk Upload - {batch_number}",
                             "notes": notes or f"Supplier: {supplier}"
@@ -1172,10 +1172,10 @@ async def bulk_upload_warehouses(file: UploadFile = File(...), session: AsyncSes
                 
                 await session.execute(
                     text("""
-                        INSERT INTO warehouses (name, wh_id, manager_phone, created_at)
-                        VALUES (:name, :wh_id, :phone, NOW())
+                        INSERT INTO warehouses (id, name, code, wh_id, location, manager_phone, is_active, created_at)
+                        VALUES (gen_random_uuid(), :name, :wh_id, :wh_id, :location, :phone, true, NOW())
                     """),
-                    {"name": name, "wh_id": wh_id, "phone": manager_phone}
+                    {"name": name, "wh_id": wh_id, "location": location, "phone": manager_phone}
                 )
                 
                 created_count += 1
@@ -1222,7 +1222,7 @@ async def bulk_upload_damaged_products(file: UploadFile = File(...), session: As
                 
                 # Find warehouse by name/wh_id (raw SQL)
                 wh_result = await session.execute(
-                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR wh_id = :name LIMIT 1"),
+                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR COALESCE(wh_id, code) = :name LIMIT 1"),
                     {"name": warehouse_name or ''}
                 )
                 wh = wh_result.fetchone()
@@ -1232,7 +1232,7 @@ async def bulk_upload_damaged_products(file: UploadFile = File(...), session: As
                 
                 # Find product by id or name
                 prod_result = await session.execute(
-                    text("SELECT id FROM products WHERE id = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
+                    text("SELECT id FROM products WHERE id::text = :ref OR sku = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
                     {"ref": product_ref or ''}
                 )
                 prod = prod_result.fetchone()
@@ -1245,10 +1245,10 @@ async def bulk_upload_damaged_products(file: UploadFile = File(...), session: As
                 try:
                     await session.execute(
                         text("""
-                            INSERT INTO damaged_stock (warehouse_id, product_id, quantity, damage_type, damage_date, notes, created_at)
-                            VALUES (:wid, :pid, :qty, :dtype, NOW(), :notes, NOW())
+                            INSERT INTO damaged_stock (id, warehouse_id, product_id, quantity, damage_type, disposal_status, damage_date, notes, created_at)
+                            VALUES (gen_random_uuid(), :wid::uuid, :pid::uuid, :qty, :dtype, 'pending', CURRENT_DATE, :notes, NOW())
                         """),
-                        {"wid": wh.id, "pid": str(prod.id), "qty": quantity, "dtype": damage_type, "notes": notes or damage_reason}
+                        {"wid": str(wh.id), "pid": str(prod.id), "qty": quantity, "dtype": damage_type, "notes": notes or damage_reason}
                     )
                 except Exception:
                     pass
@@ -1299,7 +1299,7 @@ async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), sessio
                 
                 # Find warehouse by name/wh_id (raw SQL)
                 wh_result = await session.execute(
-                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR wh_id = :name LIMIT 1"),
+                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR COALESCE(wh_id, code) = :name LIMIT 1"),
                     {"name": warehouse_name or ''}
                 )
                 wh = wh_result.fetchone()
@@ -1334,10 +1334,10 @@ async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), sessio
                 try:
                     await session.execute(
                         text("""
-                            INSERT INTO damaged_stock (warehouse_id, product_id, quantity, damage_type, damage_date, notes, created_at)
-                            VALUES (:wid, :rmid, :qty, :dtype, NOW(), :notes, NOW())
+                            INSERT INTO damaged_stock (id, warehouse_id, raw_material_id, quantity, damage_type, disposal_status, damage_date, notes, created_at)
+                            VALUES (gen_random_uuid(), :wid::uuid, :rmid::uuid, :qty, :dtype, 'pending', CURRENT_DATE, :notes, NOW())
                         """),
-                        {"wid": wh.id, "rmid": str(rm.id), "qty": quantity, "dtype": damage_type, "notes": notes or damage_reason}
+                        {"wid": str(wh.id), "rmid": str(rm.id), "qty": quantity, "dtype": damage_type, "notes": notes or damage_reason}
                     )
                 except Exception:
                     pass  # Table may not have all columns
@@ -1388,7 +1388,7 @@ async def bulk_upload_product_returns(file: UploadFile = File(...), session: Asy
                 
                 # Find warehouse
                 wh_result = await session.execute(
-                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR wh_id = :name LIMIT 1"),
+                    text("SELECT id FROM warehouses WHERE LOWER(name) = LOWER(:name) OR COALESCE(wh_id, code) = :name LIMIT 1"),
                     {"name": warehouse_name or ''}
                 )
                 wh = wh_result.fetchone()
@@ -1398,7 +1398,7 @@ async def bulk_upload_product_returns(file: UploadFile = File(...), session: Asy
                 
                 # Find product
                 prod_result = await session.execute(
-                    text("SELECT id FROM products WHERE id = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
+                    text("SELECT id FROM products WHERE id::text = :ref OR sku = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
                     {"ref": product_ref or ''}
                 )
                 prod = prod_result.fetchone()
@@ -1411,14 +1411,14 @@ async def bulk_upload_product_returns(file: UploadFile = File(...), session: Asy
                 try:
                     await session.execute(
                         text("""
-                            INSERT INTO returned_stock (warehouse_id, product_id, quantity, return_reason, return_condition,
-                                customer_name, refund_amount, notes, created_at)
-                            VALUES (:wid, :pid, :qty, :reason, :condition, :customer, :refund, :notes, NOW())
+                            INSERT INTO returned_stock (id, warehouse_id, product_id, quantity, return_reason, return_condition,
+                                refund_status, refund_amount, notes, created_at)
+                            VALUES (gen_random_uuid(), :wid::uuid, :pid::uuid, :qty, :reason, :condition, 'pending', :refund, :notes, NOW())
                         """),
                         {
-                            "wid": wh.id, "pid": str(prod.id), "qty": quantity,
+                            "wid": str(wh.id), "pid": str(prod.id), "qty": quantity,
                             "reason": return_reason, "condition": return_condition,
-                            "customer": customer_name, "refund": refund_amount,
+                            "refund": refund_amount,
                             "notes": notes
                         }
                     )
@@ -1504,7 +1504,7 @@ async def bulk_upload_bom(file: UploadFile = File(...), session: AsyncSession = 
             try:
                 # Find product by id or name
                 prod_result = await session.execute(
-                    text("SELECT id, name FROM products WHERE id = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
+                    text("SELECT id, name FROM products WHERE id::text = :ref OR sku = :ref OR LOWER(name) = LOWER(:ref) LIMIT 1"),
                     {"ref": product_ref}
                 )
                 prod = prod_result.fetchone()

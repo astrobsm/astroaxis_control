@@ -169,7 +169,7 @@ async def get_product_stock_levels(
                    sl.updated_at,
                    w.name as warehouse_name
             FROM stock_levels sl
-            LEFT JOIN products p ON sl.product_id = p.id::text
+            LEFT JOIN products p ON sl.product_id::text = p.id::text
             LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
             WHERE sl.product_id IS NOT NULL
         """
@@ -222,9 +222,9 @@ async def get_raw_material_stock_levels(
         sql = """
             SELECT sl.id, sl.warehouse_id, sl.raw_material_id, sl.current_stock,
                    COALESCE(sl.min_stock, 0) as min_stock,
-                   rm.name as rm_name, COALESCE(rm.rm_id, rm.name) as rm_sku,
-                   COALESCE(rm.reorder_point, 10) as reorder_level,
-                   COALESCE(rm.uom, 'kg') as unit,
+                   rm.name as rm_name, COALESCE(rm.rm_id, rm.sku, rm.name) as rm_sku,
+                   COALESCE(rm.reorder_point, rm.reorder_level::integer, 10) as reorder_level,
+                   COALESCE(rm.uom, rm.unit, 'kg') as unit,
                    sl.updated_at,
                    w.name as warehouse_name
             FROM stock_levels sl
