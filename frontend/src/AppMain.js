@@ -367,6 +367,21 @@ function AppMain({ currentUser = null }) {
   }
 
   function handleFormChange(formName, field, value) {
+    if (formName === 'rawMaterial' && field === 'name') {
+      // Auto-generate SKU from raw material name
+      const words = value.replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter(w => w);
+      let initials;
+      if (words.length === 0) {
+        initials = '';
+      } else if (words.length === 1) {
+        initials = words[0].substring(0, 3).toUpperCase();
+      } else {
+        initials = words.map(w => w[0].toUpperCase()).join('');
+      }
+      const autoSku = initials ? `RM-${initials}` : '';
+      setForms((prev) => ({ ...prev, rawMaterial: { ...prev.rawMaterial, name: value, sku: autoSku } }));
+      return;
+    }
     if (formName === 'salesOrder' && field === 'order_type') {
       setForms((prev) => {
         const orderType = value || 'retail';
@@ -2771,7 +2786,7 @@ function AppMain({ currentUser = null }) {
                 <form onSubmit={(e)=>{e.preventDefault(); saveItem('rawMaterial','/api/raw-materials/');}}>
                   <div className="form-row">
                     <div className="form-group"><label>Raw Material Name *</label><input value={forms.rawMaterial.name} onChange={(e)=>handleFormChange('rawMaterial','name',e.target.value)} required placeholder="e.g., Cotton Gauze"/></div>
-                    <div className="form-group"><label>Raw Material Code / SKU *</label><input value={forms.rawMaterial.sku} onChange={(e)=>handleFormChange('rawMaterial','sku',e.target.value)} required placeholder="e.g., RM-001"/></div>
+                    <div className="form-group"><label>Raw Material Code / SKU (Auto-generated)</label><input value={forms.rawMaterial.sku} readOnly style={{backgroundColor: '#f0f0f0', cursor: 'default'}} placeholder="Auto-generated from name"/></div>
                   </div>
                   <div className="form-row">
                     <div className="form-group"><label>Manufacturer / Supplier</label><input value={forms.rawMaterial.manufacturer} onChange={(e)=>handleFormChange('rawMaterial','manufacturer',e.target.value)} placeholder="e.g., ABC Medical Supplies"/></div>

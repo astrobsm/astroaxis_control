@@ -68,12 +68,14 @@ class ProductSchema(ProductBase):
 
 # Raw Material Schemas
 class RawMaterialBase(BaseModel):
-    sku: str = Field(..., min_length=1, max_length=64)
+    sku: Optional[str] = Field(None, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
     unit_cost: Decimal = Field(..., ge=0)
     manufacturer: Optional[str] = Field(None, max_length=255)
     unit: Optional[str] = Field(default="kg", max_length=32)
     reorder_level: Optional[Decimal] = Field(default=0, ge=0)
+    category: Optional[str] = Field(default="General", max_length=255)
+    source: Optional[str] = Field(default="Local", max_length=255)
 
 class RawMaterialCreate(RawMaterialBase):
     pass
@@ -85,6 +87,8 @@ class RawMaterialUpdate(BaseModel):
     manufacturer: Optional[str] = Field(None, max_length=255)
     unit: Optional[str] = Field(None, max_length=32)
     reorder_level: Optional[Decimal] = Field(None, ge=0)
+    category: Optional[str] = Field(None, max_length=255)
+    source: Optional[str] = Field(None, max_length=255)
 
 class RawMaterialSchema(RawMaterialBase):
     id: uuid.UUID

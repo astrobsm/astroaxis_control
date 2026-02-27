@@ -24,6 +24,8 @@ from app.models import (
     SalesOrderLine,
     Product,
     user_warehouses,
+    StockLevel,
+    StockMovement,
 )
 from app.schemas import (
     CustomerSchema, CustomerCreate, CustomerUpdate,
@@ -31,8 +33,101 @@ from app.schemas import (
     PaginatedResponse, ApiResponse
 )
 from app.api.auth import get_current_user
+from decimal import Decimal
+from sqlalchemy import and_
 
 router = APIRouter(prefix='/api/sales')
+
+
+async def deduct_stock_for_order(session: AsyncSession, order: SalesOrder):
+    """Deduct stock from warehouse for all lines in the order"""
+    # Get order lines
+    lines_result = await session.execute(
+        select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id)
+    )
+    lines = lines_result.scalars().all()
+    
+    for line in lines:
+        # Get stock level for product in warehouse
+        stock_result = await session.execute(
+            select(StockLevel).where(
+                and_(
+                    StockLevel.warehouse_id == order.warehouse_id,
+                    StockLevel.product_id == line.product_id
+                )
+            )
+        )
+        stock_level = stock_result.scalars().first()
+        
+        if not stock_level:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"No stock record found for product in selected warehouse"
+            )
+        
+        quantity = Decimal(str(line.quantity))
+        
+        if stock_level.current_stock < quantity:
+            # Get product name for error message
+            product_result = await session.execute(
+                select(Product).where(Product.id == line.product_id)
+            )
+            product = product_result.scalars().first()
+            product_name = product.name if product else "Unknown"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock for {product_name}. Available: {stock_level.current_stock}, Required: {quantity}"
+            )
+        
+        # Deduct stock
+        stock_level.current_stock -= quantity
+        
+        # Create stock movement record
+        movement = StockMovement(
+            warehouse_id=order.warehouse_id,
+            product_id=line.product_id,
+            movement_type='OUT',
+            quantity=quantity,
+            reference=f"Sales Order: {order.order_number}",
+            notes=f"Stock deducted for sales order {order.order_number}"
+        )
+        session.add(movement)
+
+
+async def restore_stock_for_order(session: AsyncSession, order: SalesOrder):
+    """Restore stock to warehouse when order is cancelled"""
+    # Get order lines
+    lines_result = await session.execute(
+        select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id)
+    )
+    lines = lines_result.scalars().all()
+    
+    for line in lines:
+        # Get stock level for product in warehouse
+        stock_result = await session.execute(
+            select(StockLevel).where(
+                and_(
+                    StockLevel.warehouse_id == order.warehouse_id,
+                    StockLevel.product_id == line.product_id
+                )
+            )
+        )
+        stock_level = stock_result.scalars().first()
+        
+        if stock_level:
+            quantity = Decimal(str(line.quantity))
+            stock_level.current_stock += quantity
+            
+            # Create stock movement record for return
+            movement = StockMovement(
+                warehouse_id=order.warehouse_id,
+                product_id=line.product_id,
+                movement_type='RETURN',
+                quantity=quantity,
+                reference=f"Cancelled Order: {order.order_number}",
+                notes=f"Stock restored from cancelled order {order.order_number}"
+            )
+            session.add(movement)
 
 # Customer endpoints
 @router.post('/customers', response_model=ApiResponse)
@@ -243,6 +338,11 @@ async def create_sales_order(
             session.add(order_line)
         
         sales_order.total_amount = total_amount
+        
+        # Deduct stock if order is confirmed
+        if sales_order.status == 'confirmed':
+            await deduct_stock_for_order(session, sales_order)
+        
         await session.commit()
         
         # Reload with relationships
@@ -344,9 +444,21 @@ async def update_sales_order(
         raise HTTPException(status_code=404, detail="Sales order not found")
     
     try:
+        old_status = order.status
         update_data = order_data.dict(exclude_unset=True)
+        new_status = update_data.get('status', old_status)
+        
         for field, value in update_data.items():
             setattr(order, field, value)
+        
+        # Handle stock changes based on status transitions
+        if old_status != new_status:
+            # Deduct stock when confirming an order
+            if old_status in ['pending', 'draft'] and new_status == 'confirmed':
+                await deduct_stock_for_order(session, order)
+            # Restore stock when reverting from confirmed to pending
+            elif old_status == 'confirmed' and new_status in ['pending', 'draft']:
+                await restore_stock_for_order(session, order)
         
         await session.commit()
         
@@ -358,6 +470,9 @@ async def update_sales_order(
         )
         return result.scalars().first()
         
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error updating sales order: {str(e)}")
@@ -378,9 +493,16 @@ async def cancel_sales_order(
         raise HTTPException(status_code=400, detail="Cannot cancel shipped or delivered orders")
     
     try:
+        # Restore stock if the order was confirmed (stock was deducted)
+        if order.status == 'confirmed':
+            await restore_stock_for_order(session, order)
+        
         order.status = 'cancelled'
         await session.commit()
-        return ApiResponse(message="Sales order cancelled successfully")
+        return ApiResponse(message="Sales order cancelled successfully and stock restored")
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error cancelling sales order: {str(e)}")

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_, or_, case
+from sqlalchemy import func, and_, or_, case, text
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, date, timedelta, timezone
@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.db import get_session
 from app.models import (
     StockLevel, StockMovement, DamagedStock, ReturnedStock,
-    Product, RawMaterial, Warehouse
+    Product, RawMaterial, Warehouse, ProductPricing
 )
 
 router = APIRouter(prefix='/api/stock-management')
@@ -155,45 +155,54 @@ async def raw_material_stock_intake(
 # Get Product Stock Levels
 @router.get('/product-levels')
 async def get_product_stock_levels(
-    warehouse_id: Optional[UUID] = None,
+    warehouse_id: Optional[str] = None,
     low_stock_only: bool = False,
     session: AsyncSession = Depends(get_session)
 ):
-    """Get current product stock levels"""
+    """Get current product stock levels (raw SQL for production schema compatibility)"""
     try:
-        query = select(StockLevel, Product, Warehouse).join(
-            Product, StockLevel.product_id == Product.id
-        ).join(
-            Warehouse, StockLevel.warehouse_id == Warehouse.id
-        ).where(StockLevel.product_id != None)
-        
+        sql = """
+            SELECT sl.id, sl.warehouse_id, sl.product_id, sl.current_stock,
+                   COALESCE(sl.min_stock, 0) as min_stock,
+                   p.name as product_name, p.sku as product_sku,
+                   COALESCE(NULLIF(sl.min_stock, 0), 10) as reorder_level,
+                   sl.updated_at,
+                   w.name as warehouse_name
+            FROM stock_levels sl
+            LEFT JOIN products p ON sl.product_id = p.id::text
+            LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
+            WHERE sl.product_id IS NOT NULL
+        """
+        params = {}
         if warehouse_id:
-            query = query.where(StockLevel.warehouse_id == warehouse_id)
+            sql += " AND sl.warehouse_id::text = :wh_id"
+            params['wh_id'] = str(warehouse_id)
         
-        result = await session.execute(query)
-        records = result.all()
+        result = await session.execute(text(sql), params)
+        rows = result.fetchall()
         
         stock_levels = []
-        for stock_level, product, warehouse in records:
-            # Check if low stock
-            is_low_stock = stock_level.current_stock <= product.reorder_level if product.reorder_level else False
+        for row in rows:
+            current_stock = float(row.current_stock or 0)
+            reorder_level = float(row.reorder_level or 10)
+            is_low_stock = current_stock <= reorder_level
             
             if low_stock_only and not is_low_stock:
                 continue
             
             stock_levels.append({
-                'stock_level_id': str(stock_level.id),
-                'warehouse_id': str(warehouse.id),
-                'warehouse_name': warehouse.name,
-                'product_id': str(product.id),
-                'product_name': product.name,
-                'product_sku': product.sku,
-                'current_stock': float(stock_level.current_stock),
-                'reserved_stock': float(stock_level.reserved_stock or 0),
-                'available_stock': float(stock_level.current_stock - (stock_level.reserved_stock or 0)),
-                'reorder_level': float(product.reorder_level) if product.reorder_level else 0,
+                'stock_level_id': str(row.id),
+                'warehouse_id': str(row.warehouse_id or ''),
+                'warehouse_name': row.warehouse_name or 'Default',
+                'product_id': str(row.product_id),
+                'product_name': row.product_name or 'Unknown',
+                'product_sku': row.product_sku or '',
+                'current_stock': current_stock,
+                'reserved_stock': 0,
+                'available_stock': current_stock,
+                'reorder_level': reorder_level,
                 'is_low_stock': is_low_stock,
-                'updated_at': stock_level.updated_at.isoformat() if stock_level.updated_at else None
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None
             })
         
         return stock_levels
@@ -204,46 +213,56 @@ async def get_product_stock_levels(
 # Get Raw Material Stock Levels
 @router.get('/raw-material-levels')
 async def get_raw_material_stock_levels(
-    warehouse_id: Optional[UUID] = None,
+    warehouse_id: Optional[str] = None,
     low_stock_only: bool = False,
     session: AsyncSession = Depends(get_session)
 ):
-    """Get current raw material stock levels"""
+    """Get current raw material stock levels (raw SQL for production schema compatibility)"""
     try:
-        query = select(StockLevel, RawMaterial, Warehouse).join(
-            RawMaterial, StockLevel.raw_material_id == RawMaterial.id
-        ).join(
-            Warehouse, StockLevel.warehouse_id == Warehouse.id
-        ).where(StockLevel.raw_material_id != None)
-        
+        sql = """
+            SELECT sl.id, sl.warehouse_id, sl.raw_material_id, sl.current_stock,
+                   COALESCE(sl.min_stock, 0) as min_stock,
+                   rm.name as rm_name, COALESCE(rm.rm_id, rm.name) as rm_sku,
+                   COALESCE(rm.reorder_point, 10) as reorder_level,
+                   COALESCE(rm.uom, 'kg') as unit,
+                   sl.updated_at,
+                   w.name as warehouse_name
+            FROM stock_levels sl
+            LEFT JOIN raw_materials rm ON sl.raw_material_id = rm.id
+            LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
+            WHERE sl.raw_material_id IS NOT NULL
+        """
+        params = {}
         if warehouse_id:
-            query = query.where(StockLevel.warehouse_id == warehouse_id)
+            sql += " AND sl.warehouse_id::text = :wh_id"
+            params['wh_id'] = str(warehouse_id)
         
-        result = await session.execute(query)
-        records = result.all()
+        result = await session.execute(text(sql), params)
+        rows = result.fetchall()
         
         stock_levels = []
-        for stock_level, raw_material, warehouse in records:
-            # Check if low stock
-            is_low_stock = stock_level.current_stock <= raw_material.reorder_level if raw_material.reorder_level else False
+        for row in rows:
+            current_stock = float(row.current_stock or 0)
+            reorder_level = float(row.reorder_level or 10)
+            is_low_stock = current_stock <= reorder_level
             
             if low_stock_only and not is_low_stock:
                 continue
             
             stock_levels.append({
-                'stock_level_id': str(stock_level.id),
-                'warehouse_id': str(warehouse.id),
-                'warehouse_name': warehouse.name,
-                'raw_material_id': str(raw_material.id),
-                'raw_material_name': raw_material.name,
-                'raw_material_sku': raw_material.sku,
-                'current_stock': float(stock_level.current_stock),
-                'reserved_stock': float(stock_level.reserved_stock or 0),
-                'available_stock': float(stock_level.current_stock - (stock_level.reserved_stock or 0)),
-                'reorder_level': float(raw_material.reorder_level) if raw_material.reorder_level else 0,
+                'stock_level_id': str(row.id),
+                'warehouse_id': str(row.warehouse_id or ''),
+                'warehouse_name': row.warehouse_name or 'Default',
+                'raw_material_id': str(row.raw_material_id),
+                'raw_material_name': row.rm_name or 'Unknown',
+                'raw_material_sku': row.rm_sku or '',
+                'current_stock': current_stock,
+                'reserved_stock': 0,
+                'available_stock': current_stock,
+                'reorder_level': reorder_level,
                 'is_low_stock': is_low_stock,
-                'unit': raw_material.unit,
-                'updated_at': stock_level.updated_at.isoformat() if stock_level.updated_at else None
+                'unit': row.unit or 'kg',
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None
             })
         
         return stock_levels
@@ -536,74 +555,74 @@ async def transfer_product(
 # Stock Analysis & Dashboard
 @router.get('/analysis')
 async def get_stock_analysis(session: AsyncSession = Depends(get_session)):
-    """Get comprehensive stock analysis and statistics"""
+    """Get comprehensive stock analysis and statistics (raw SQL for production schema compatibility)"""
     try:
         # Total products in stock
-        product_stock_result = await session.execute(
-            select(func.count(StockLevel.id)).where(StockLevel.product_id != None)
-        )
-        total_product_items = product_stock_result.scalar_one()
+        r = await session.execute(text("SELECT COUNT(*) FROM stock_levels WHERE product_id IS NOT NULL"))
+        total_product_items = r.scalar_one()
         
         # Total raw materials in stock
-        raw_material_stock_result = await session.execute(
-            select(func.count(StockLevel.id)).where(StockLevel.raw_material_id != None)
-        )
-        total_raw_material_items = raw_material_stock_result.scalar_one()
+        r = await session.execute(text("SELECT COUNT(*) FROM stock_levels WHERE raw_material_id IS NOT NULL"))
+        total_raw_material_items = r.scalar_one()
         
-        # Low stock products
-        low_stock_products_result = await session.execute(
-            select(func.count(StockLevel.id)).select_from(StockLevel).join(
-                Product, StockLevel.product_id == Product.id
-            ).where(
-                and_(
-                    StockLevel.product_id != None,
-                    StockLevel.current_stock <= Product.reorder_level
-                )
-            )
-        )
-        low_stock_products = low_stock_products_result.scalar_one()
+        # Low stock products (use stock_levels.min_stock as reorder level, default 10)
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM stock_levels sl
+            WHERE sl.product_id IS NOT NULL
+              AND sl.current_stock <= COALESCE(NULLIF(sl.min_stock, 0), 10)
+        """))
+        low_stock_products = r.scalar_one()
         
         # Low stock raw materials
-        low_stock_raw_materials_result = await session.execute(
-            select(func.count(StockLevel.id)).select_from(StockLevel).join(
-                RawMaterial, StockLevel.raw_material_id == RawMaterial.id
-            ).where(
-                and_(
-                    StockLevel.raw_material_id != None,
-                    StockLevel.current_stock <= RawMaterial.reorder_level
-                )
-            )
-        )
-        low_stock_raw_materials = low_stock_raw_materials_result.scalar_one()
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM stock_levels sl
+            LEFT JOIN raw_materials rm ON sl.raw_material_id = rm.id
+            WHERE sl.raw_material_id IS NOT NULL
+              AND sl.current_stock <= COALESCE(rm.reorder_point, 10)
+        """))
+        low_stock_raw_materials = r.scalar_one()
         
         # Damaged items (last 30 days)
-        thirty_days_ago = date.today() - timedelta(days=30)
-        damaged_count_result = await session.execute(
-            select(func.count(DamagedStock.id)).where(DamagedStock.damage_date >= thirty_days_ago)
-        )
-        damaged_items_count = damaged_count_result.scalar_one()
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM damaged_stock
+            WHERE damage_date >= CURRENT_DATE - INTERVAL '30 days'
+        """))
+        damaged_items_count = r.scalar_one()
         
         # Returned items (last 30 days)
-        returned_count_result = await session.execute(
-            select(func.count(ReturnedStock.id)).where(ReturnedStock.return_date >= thirty_days_ago)
-        )
-        returned_items_count = returned_count_result.scalar_one()
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM returned_stock
+            WHERE return_date >= CURRENT_DATE - INTERVAL '30 days'
+        """))
+        returned_items_count = r.scalar_one()
         
-        # Total stock value (products)
-        product_value_result = await session.execute(
-            select(func.sum(StockLevel.current_stock * Product.cost_price)).select_from(StockLevel).join(
-                Product, StockLevel.product_id == Product.id
-            ).where(StockLevel.product_id != None)
-        )
-        total_product_value = product_value_result.scalar_one() or 0
+        # Total stock value (products) - use product_pricing cost_price
+        r = await session.execute(text("""
+            SELECT COALESCE(SUM(sl.current_stock * pp.cost_price), 0)
+            FROM stock_levels sl
+            JOIN product_pricing pp ON sl.product_id = pp.product_id
+            WHERE sl.product_id IS NOT NULL
+        """))
+        total_product_value = float(r.scalar_one() or 0)
+        
+        # Fallback: if no product_pricing data, use products.price
+        if total_product_value == 0:
+            r = await session.execute(text("""
+                SELECT COALESCE(SUM(sl.current_stock * COALESCE(p.price, 0)), 0)
+                FROM stock_levels sl
+                LEFT JOIN products p ON sl.product_id = p.id::text
+                WHERE sl.product_id IS NOT NULL
+            """))
+            total_product_value = float(r.scalar_one() or 0)
         
         # Total stock value (raw materials)
-        raw_material_value_result = await session.execute(
-            select(func.sum(StockLevel.current_stock * RawMaterial.unit_cost)).select_from(StockLevel).join(
-                RawMaterial, StockLevel.raw_material_id == RawMaterial.id
-            ).where(StockLevel.raw_material_id != None)
-        )
-        total_raw_material_value = raw_material_value_result.scalar_one() or 0
+        r = await session.execute(text("""
+            SELECT COALESCE(SUM(sl.current_stock * COALESCE(rm.unit_cost, 0)), 0)
+            FROM stock_levels sl
+            LEFT JOIN raw_materials rm ON sl.raw_material_id = rm.id
+            WHERE sl.raw_material_id IS NOT NULL
+        """))
+        total_raw_material_value = float(r.scalar_one() or 0)
         
         return {
             "summary": {
@@ -613,9 +632,9 @@ async def get_stock_analysis(session: AsyncSession = Depends(get_session)):
                 "low_stock_raw_materials": low_stock_raw_materials,
                 "damaged_items_30_days": damaged_items_count,
                 "returned_items_30_days": returned_items_count,
-                "total_product_value": float(total_product_value),
-                "total_raw_material_value": float(total_raw_material_value),
-                "total_stock_value": float(total_product_value + total_raw_material_value)
+                "total_product_value": total_product_value,
+                "total_raw_material_value": total_raw_material_value,
+                "total_stock_value": total_product_value + total_raw_material_value
             }
         }
     except Exception as e:
