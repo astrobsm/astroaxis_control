@@ -26,7 +26,8 @@ const BulkUpload = ({ module, onClose, onSuccess }) => {
       templateUrl: '/api/bulk-upload/template/raw-materials',
       uploadUrl: '/api/bulk-upload/raw-materials',
       icon: '🧪',
-      description: 'Register raw materials for production with unit costs and reorder levels'
+      description: 'Register raw materials with auto-generated SKU codes. Template includes Category, Source, Unit, and Cost columns. SKU is auto-generated from name initials (e.g., Medical Grade Honey = RM-MGH) if left blank.',
+      maxRows: 500
     },
     productStockIntake: {
       title: 'Product Stock Intake',
@@ -90,7 +91,22 @@ const BulkUpload = ({ module, onClose, onSuccess }) => {
   };
 
   const handleFileChange = (e) => {
-    setSelectedFile(e.target.files[0]);
+    const file = e.target.files[0];
+    if (file) {
+      // Validate file size (5MB max)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File is too large. Maximum size is 5MB.');
+        e.target.value = '';
+        return;
+      }
+      // Validate file type
+      if (!file.name.match(/\.(xlsx|xls)$/i)) {
+        alert('Please select an Excel file (.xlsx or .xls)');
+        e.target.value = '';
+        return;
+      }
+    }
+    setSelectedFile(file);
     setResult(null);
   };
 
@@ -197,13 +213,16 @@ const BulkUpload = ({ module, onClose, onSuccess }) => {
 
               {result.created && result.created.length > 0 && (
                 <div className="created-items">
-                  <h4>📊 Created Records ({result.created.length}):</h4>
+                  <h4>Created Records ({result.created.length}):</h4>
                   <div className="created-list">
                     {result.created.slice(0, 10).map((item, idx) => (
                       <div key={idx} className="created-item">
                         <strong>Row {item.row}:</strong> {item.name || item.employee_id || 'Record created'}
                         {item.employee_id && <span> - ID: {item.employee_id}</span>}
                         {item.clock_pin && <span> - PIN: {item.clock_pin}</span>}
+                        {item.sku && <span> - SKU: {item.sku}</span>}
+                        {item.category && <span> ({item.category})</span>}
+                        {item.unit_cost > 0 && <span> - N{Number(item.unit_cost).toLocaleString()}</span>}
                       </div>
                     ))}
                     {result.created.length > 10 && (
@@ -217,7 +236,10 @@ const BulkUpload = ({ module, onClose, onSuccess }) => {
 
               {result.created_count > 0 && (
                 <div className="success-summary">
-                  <strong>✅ {result.created_count} records created successfully</strong>
+                  <strong>{result.created_count} records created successfully</strong>
+                  {result.skipped_count > 0 && (
+                    <span> | {result.skipped_count} duplicates skipped</span>
+                  )}
                 </div>
               )}
 
