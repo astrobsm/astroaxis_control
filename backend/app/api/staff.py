@@ -563,6 +563,22 @@ async def update_staff(staff_id: UUID, staff_data: StaffUpdate, session: AsyncSe
         raise HTTPException(status_code=400, detail=f"Error updating staff: {str(e)}")
 
 
+@router.delete('/staffs/{staff_id}', response_model=ApiResponse)
+async def delete_staff(staff_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Delete a staff member. Removes the record permanently."""
+    result = await session.execute(select(Staff).where(Staff.id == staff_id))
+    staff = result.scalars().first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    try:
+        await session.delete(staff)
+        await session.commit()
+        return ApiResponse(message=f"Staff {staff.employee_id} ({staff.first_name} {staff.last_name}) deleted successfully")
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Error deleting staff: {str(e)}")
+
+
 # Payroll calculation endpoint
 @router.post('/payroll/calculate', response_model=PayrollEntrySchema)
 async def calculate_payroll(pay_data: PayrollEntryCreate, session: AsyncSession = Depends(get_session)):

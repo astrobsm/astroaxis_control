@@ -1571,6 +1571,7 @@ function AppMain({ currentUser = null }) {
                       <td className="actions">
                         <button onClick={() => openForm('staff', staff)} className="btn-edit">Edit</button>
                         <button onClick={() => openForm('payroll', { staff_id: staff.id })} className="btn-download">Payroll</button>
+                        <button onClick={() => deleteItem('staff', staff.id)} className="btn-delete">Delete</button>
                       </td>
                     </tr>
                   ))}
