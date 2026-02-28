@@ -3340,7 +3340,7 @@ function AppMain({ currentUser = null }) {
           const clockOut = todayRecord.clock_out ? new Date(todayRecord.clock_out) : new Date();
           const diffMs = clockOut - clockIn;
           const hours = diffMs / (1000 * 60 * 60);
-          if (todayRecord.clock_out_time) {
+          if (todayRecord.clock_out) {
             hoursWorked = hours;
           } else {
             hoursSoFar = hours;
