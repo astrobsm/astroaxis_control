@@ -78,7 +78,7 @@ class RawMaterialBase(BaseModel):
     source: Optional[str] = Field(default="Local", max_length=255)
 
 class RawMaterialCreate(RawMaterialBase):
-    pass
+    opening_stock: Optional[Decimal] = Field(default=0, ge=0)
 
 class RawMaterialUpdate(BaseModel):
     sku: Optional[str] = Field(None, min_length=1, max_length=64)

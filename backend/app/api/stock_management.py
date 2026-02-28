@@ -219,23 +219,29 @@ async def get_raw_material_stock_levels(
 ):
     """Get current raw material stock levels (raw SQL for production schema compatibility)"""
     try:
+        # Query raw materials with their stock levels (LEFT JOIN so materials without stock_levels show as 0)
         sql = """
-            SELECT sl.id, sl.warehouse_id, sl.raw_material_id, sl.current_stock,
-                   COALESCE(sl.min_stock, 0) as min_stock,
-                   rm.name as rm_name, COALESCE(rm.rm_id, rm.sku, rm.name) as rm_sku,
+            SELECT rm.id as raw_material_id,
+                   rm.name as rm_name,
+                   COALESCE(rm.rm_id, rm.sku, rm.name) as rm_sku,
                    COALESCE(rm.reorder_point, rm.reorder_level::integer, 10) as reorder_level,
                    COALESCE(rm.uom, rm.unit, 'kg') as unit,
-                   sl.updated_at,
-                   w.name as warehouse_name
-            FROM stock_levels sl
-            LEFT JOIN raw_materials rm ON sl.raw_material_id = rm.id
+                   COALESCE(sl.id, gen_random_uuid()) as stock_level_id,
+                   COALESCE(sl.current_stock, rm.opening_stock, 0) as current_stock,
+                   COALESCE(sl.min_stock, 0) as min_stock,
+                   sl.warehouse_id,
+                   COALESCE(w.name, 'Default') as warehouse_name,
+                   sl.updated_at
+            FROM raw_materials rm
+            LEFT JOIN stock_levels sl ON sl.raw_material_id = rm.id
             LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
-            WHERE sl.raw_material_id IS NOT NULL
         """
         params = {}
         if warehouse_id:
-            sql += " AND sl.warehouse_id::text = :wh_id"
+            sql += " WHERE sl.warehouse_id::text = :wh_id"
             params['wh_id'] = str(warehouse_id)
+        
+        sql += " ORDER BY rm.name"
         
         result = await session.execute(text(sql), params)
         rows = result.fetchall()
@@ -250,7 +256,7 @@ async def get_raw_material_stock_levels(
                 continue
             
             stock_levels.append({
-                'stock_level_id': str(row.id),
+                'stock_level_id': str(row.stock_level_id),
                 'warehouse_id': str(row.warehouse_id or ''),
                 'warehouse_name': row.warehouse_name or 'Default',
                 'raw_material_id': str(row.raw_material_id),

@@ -69,7 +69,7 @@ function AppMain({ currentUser = null }) {
       lead_time_days: '', minimum_order_quantity: '1',
       pricing: [{ unit: '', cost_price: '', retail_price: '', wholesale_price: '' }]
     },
-    rawMaterial: { name: '', sku: '', manufacturer: '', unit: 'kg', reorder_level: '0', unit_cost: '', date_added: new Date().toISOString().split('T')[0] },
+    rawMaterial: { name: '', sku: '', manufacturer: '', unit: 'kg', reorder_level: '0', unit_cost: '', opening_stock: '0', date_added: new Date().toISOString().split('T')[0] },
     stockIntake: { product_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', notes: '' },
     rawMaterialIntake: { raw_material_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', notes: '' },
     damagedProduct: { warehouse_id: '', product_id: '', quantity: '', damage_type: '', damage_reason: '', notes: '' },
@@ -2796,6 +2796,9 @@ function AppMain({ currentUser = null }) {
                   <div className="form-row">
                     <div className="form-group"><label>Reorder Level *</label><input type="number" step="0.01" value={forms.rawMaterial.reorder_level} onChange={(e)=>handleFormChange('rawMaterial','reorder_level',e.target.value)} required placeholder="Minimum stock level"/></div>
                     <div className="form-group"><label>Cost Price (‚¦) *</label><input type="number" step="0.01" value={forms.rawMaterial.unit_cost} onChange={(e)=>handleFormChange('rawMaterial','unit_cost',e.target.value)} required placeholder="0.00"/></div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group"><label>Opening Stock</label><input type="number" step="0.01" value={forms.rawMaterial.opening_stock} onChange={(e)=>handleFormChange('rawMaterial','opening_stock',e.target.value)} placeholder="Initial quantity in stock"/></div>
                   </div>
                   <div className="form-group"><label>Date Added</label><input type="date" value={forms.rawMaterial.date_added} onChange={(e)=>handleFormChange('rawMaterial','date_added',e.target.value)} defaultValue={new Date().toISOString().split('T')[0]}/></div>
                   <div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setShowForm('')}>Cancel</button><button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Saving...':'Add Raw Material'}</button></div>

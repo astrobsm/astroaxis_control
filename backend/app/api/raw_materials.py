@@ -89,16 +89,18 @@ async def create_raw_material(
         if r.scalar_one() > 0:
             raise HTTPException(status_code=400, detail=f"Raw material with SKU '{data['sku']}' already exists")
     
+    opening_stock = float(data.get('opening_stock') or 0)
+
     # Insert using raw SQL (compatible with both UUID and integer ID schemas)
     result = await session.execute(
         text("""
             INSERT INTO raw_materials (
                 id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at,
-                category, source, uom, reorder_point
+                category, source, uom, reorder_point, opening_stock
             )
             VALUES (
                 gen_random_uuid(), :name, :sku, :manufacturer, :unit, :reorder_level, :unit_cost, NOW(),
-                :category, :source, :uom, :reorder_point
+                :category, :source, :uom, :reorder_point, :opening_stock
             )
             RETURNING id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at
         """),
@@ -113,10 +115,31 @@ async def create_raw_material(
             "source": data.get('source') or 'Local',
             "uom": data.get('unit') or 'kg',
             "reorder_point": int(data.get('reorder_level') or 0),
+            "opening_stock": opening_stock,
         }
     )
-    await session.commit()
     row = result.fetchone()
+    rm_id = str(row.id)
+
+    # Auto-create stock_levels entry in default (first) warehouse
+    if opening_stock > 0:
+        wh_result = await session.execute(text("SELECT id FROM warehouses ORDER BY name LIMIT 1"))
+        wh_row = wh_result.fetchone()
+        if wh_row:
+            await session.execute(
+                text("""
+                    INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock, min_stock, updated_at)
+                    VALUES (gen_random_uuid(), :wh_id, :rm_id::uuid, :stock, :min_stock, NOW())
+                """),
+                {
+                    "wh_id": str(wh_row.id),
+                    "rm_id": rm_id,
+                    "stock": opening_stock,
+                    "min_stock": float(data.get('reorder_level') or 0),
+                }
+            )
+
+    await session.commit()
     
     return {
         "message": f"Raw material '{row.name}' created successfully (SKU: {row.sku})",
