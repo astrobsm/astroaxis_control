@@ -57,7 +57,7 @@ async def get_next_sku(
 
 def _row_to_dict(row):
     """Convert a raw SQL row to dict for API response"""
-    return {
+    d = {
         "id": row.id,
         "sku": row.sku or '',
         "name": row.name or '',
@@ -67,6 +67,10 @@ def _row_to_dict(row):
         "unit_cost": float(row.unit_cost or 0),
         "created_at": row.created_at.isoformat() if getattr(row, 'created_at', None) else datetime.now().isoformat()
     }
+    # Include current_stock if present in the row (from LEFT JOIN with stock_levels)
+    if hasattr(row, 'current_stock'):
+        d["current_stock"] = float(row.current_stock or 0)
+    return d
 
 
 @router.post('/')
@@ -166,9 +170,12 @@ async def list_raw_materials(
         
         result = await session.execute(
             text("""
-                SELECT id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at
-                FROM raw_materials WHERE sku ILIKE :s OR name ILIKE :s
-                ORDER BY created_at DESC NULLS LAST
+                SELECT rm.id, rm.name, rm.sku, rm.manufacturer, rm.unit, rm.reorder_level, rm.unit_cost, rm.created_at,
+                       COALESCE(sl.current_stock, rm.opening_stock, 0) AS current_stock
+                FROM raw_materials rm
+                LEFT JOIN stock_levels sl ON sl.raw_material_id::text = rm.id::text
+                WHERE rm.sku ILIKE :s OR rm.name ILIKE :s
+                ORDER BY rm.created_at DESC NULLS LAST
                 LIMIT :limit OFFSET :offset
             """),
             {"s": f"%{search}%", "limit": size, "offset": offset}
@@ -179,9 +186,11 @@ async def list_raw_materials(
         
         result = await session.execute(
             text("""
-                SELECT id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at
-                FROM raw_materials
-                ORDER BY created_at DESC NULLS LAST
+                SELECT rm.id, rm.name, rm.sku, rm.manufacturer, rm.unit, rm.reorder_level, rm.unit_cost, rm.created_at,
+                       COALESCE(sl.current_stock, rm.opening_stock, 0) AS current_stock
+                FROM raw_materials rm
+                LEFT JOIN stock_levels sl ON sl.raw_material_id::text = rm.id::text
+                ORDER BY rm.created_at DESC NULLS LAST
                 LIMIT :limit OFFSET :offset
             """),
             {"limit": size, "offset": offset}
@@ -205,7 +214,13 @@ async def get_raw_material(
 ):
     """Get a specific raw material by ID"""
     result = await session.execute(
-        text("SELECT id, name, sku, manufacturer, unit, reorder_level, unit_cost, created_at FROM raw_materials WHERE id = :id"),
+        text("""
+            SELECT rm.id, rm.name, rm.sku, rm.manufacturer, rm.unit, rm.reorder_level, rm.unit_cost, rm.created_at,
+                   COALESCE(sl.current_stock, rm.opening_stock, 0) AS current_stock
+            FROM raw_materials rm
+            LEFT JOIN stock_levels sl ON sl.raw_material_id::text = rm.id::text
+            WHERE rm.id = :id
+        """),
         {"id": material_id}
     )
     row = result.fetchone()
