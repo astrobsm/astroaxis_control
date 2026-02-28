@@ -98,7 +98,15 @@ if frontend_build_path.exists():
     async def serve_frontend():
         index_path = frontend_build_path / "index.html"
         if index_path.exists():
-            return FileResponse(str(index_path), media_type="text/html")
+            return FileResponse(
+                str(index_path), 
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
         return {"error": "Frontend not found"}
     
     @app.get("/manifest.json")
@@ -148,9 +156,22 @@ if frontend_build_path.exists():
         if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi"):
             raise HTTPException(status_code=404, detail="Not Found")
         
+        # Serve static assets from build directory
+        static_path = frontend_build_path / full_path
+        if static_path.exists() and static_path.is_file():
+            return FileResponse(str(static_path))
+        
         index_path = frontend_build_path / "index.html"
         if index_path.exists():
-            return FileResponse(str(index_path), media_type="text/html")
+            return FileResponse(
+                str(index_path), 
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
         return {"error": "Frontend not found"}
 else:
     @app.get("/")

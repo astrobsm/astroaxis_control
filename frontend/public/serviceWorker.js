@@ -53,6 +53,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-first for navigation requests (HTML pages like index.html)
+  // This ensures users always get the latest version
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-cache' })
+        .then((response) => {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+          return response;
+        })
+        .catch(() => {
+          return caches.match(event.request) || caches.match('/index.html');
+        })
+    );
+    return;
+  }
+
   // Network-first strategy for API calls
   if (event.request.url.includes('/api/')) {
     event.respondWith(
