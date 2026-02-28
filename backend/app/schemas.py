@@ -410,6 +410,10 @@ class StaffUpdate(BaseModel):
     monthly_salary: Optional[Decimal] = Field(None, ge=0)
     hire_date: Optional[date] = None
     is_active: Optional[bool] = None
+    bank_name: Optional[str] = Field(None, max_length=128)
+    bank_account_number: Optional[str] = Field(None, max_length=64)
+    bank_account_name: Optional[str] = Field(None, max_length=128)
+    bank_currency: Optional[str] = Field(None, max_length=8)
 
 class StaffSchema(StaffBase):
     id: UUID
