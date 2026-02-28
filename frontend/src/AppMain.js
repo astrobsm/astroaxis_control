@@ -56,6 +56,45 @@ function AppMain({ currentUser = null }) {
   // Bulk Upload state
   const [showBulkUpload, setShowBulkUpload] = useState(null); // module name when modal open
 
+  // Production Completions state
+  const [prodCompletions, setProdCompletions] = useState([]);
+  const [prodCompletionForm, setProdCompletionForm] = useState({
+    product_id: '', production_date: new Date().toISOString().split('T')[0],
+    qty_produced: '', qty_damaged: '0', damage_notes: '',
+    staff_count: 0, total_hours_worked: 0, total_wages_paid: 0,
+    energy_cost: '', lunch_cost: '', warehouse_id: '', notes: '',
+    consumables: [], materials: []
+  });
+  const [prodStaffSummary, setProdStaffSummary] = useState(null);
+  const [prodBomMaterials, setProdBomMaterials] = useState([]);
+
+  // Production Consumables state
+  const [prodConsumables, setProdConsumables] = useState([]);
+  const [consumableForm, setConsumableForm] = useState({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' });
+  const [editingConsumable, setEditingConsumable] = useState(null);
+
+  // Machines & Equipment state
+  const [machines, setMachines] = useState([]);
+  const [machinesDashboard, setMachinesDashboard] = useState(null);
+  const [machineForm, setMachineForm] = useState({
+    name: '', equipment_type: '', serial_number: '', model: '', manufacturer: '',
+    purchase_date: '', purchase_cost: '', current_value: '', depreciation_rate: '10',
+    depreciation_method: 'straight_line', location: '', status: 'Operational', notes: ''
+  });
+  const [editingMachine, setEditingMachine] = useState(null);
+  const [selectedMachine, setSelectedMachine] = useState(null);
+  const [machineView, setMachineView] = useState('list'); // list, detail, maintenance, faults
+  const [maintenanceForm, setMaintenanceForm] = useState({
+    maintenance_type: 'routine', scheduled_date: '', description: '', cost: '', performed_by: '', notes: ''
+  });
+  const [faultForm, setFaultForm] = useState({
+    fault_date: new Date().toISOString().split('T')[0], description: '', severity: 'Medium',
+    status: 'Open', resolution: '', downtime_hours: '', repair_cost: '', reported_by: ''
+  });
+  const [machineMaintenanceRecords, setMachineMaintenanceRecords] = useState([]);
+  const [machineFaults, setMachineFaults] = useState([]);
+  const [machineDepreciation, setMachineDepreciation] = useState(null);
+
   // Form models
   const [forms, setForms] = useState({
     staff: {
@@ -119,6 +158,13 @@ function AppMain({ currentUser = null }) {
     fetchAllData();
     fetchUpcomingBirthdays();
   }, []);
+
+  // Fetch data when switching to new modules
+  useEffect(() => {
+    if (activeModule === 'consumables') fetchConsumables();
+    if (activeModule === 'productionCompletions') { fetchProdCompletions(); fetchConsumables(); }
+    if (activeModule === 'machinesEquipment') { fetchMachines(); fetchMachinesDashboard(); }
+  }, [activeModule]);
 
   useEffect(() => {
     if (showForm !== 'salesOrder') {
@@ -244,6 +290,219 @@ function AppMain({ currentUser = null }) {
 
   async function exportFinancialPDF() {
     window.open('/api/financial/company-status/export', '_blank');
+  }
+
+  // ===================== PRODUCTION CONSUMABLES =====================
+  async function fetchConsumables() {
+    try {
+      const res = await fetch('/api/production-consumables/');
+      const items = await extractItems(res);
+      setProdConsumables(Array.isArray(items) ? items : (items.items || []));
+    } catch (e) { console.error('Error fetching consumables:', e); }
+  }
+
+  async function saveConsumable(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const url = editingConsumable ? `/api/production-consumables/${editingConsumable.id}` : '/api/production-consumables/';
+      const method = editingConsumable ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(consumableForm) });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      notify(editingConsumable ? 'Consumable updated' : 'Consumable added', 'success');
+      setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' });
+      setEditingConsumable(null);
+      fetchConsumables();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function deleteConsumable(id) {
+    if (!window.confirm('Delete this consumable?')) return;
+    try {
+      const res = await fetch(`/api/production-consumables/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed');
+      notify('Consumable deleted', 'success');
+      fetchConsumables();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); }
+  }
+
+  // ===================== PRODUCTION COMPLETIONS =====================
+  async function fetchProdCompletions() {
+    try {
+      const res = await fetch('/api/production-completions/');
+      const result = await res.json();
+      setProdCompletions(result.items || []);
+    } catch (e) { console.error('Error fetching completions:', e); }
+  }
+
+  async function fetchDailyStaffSummary(dateStr) {
+    try {
+      const res = await fetch(`/api/production-completions/daily-staff-summary?production_date=${dateStr}`);
+      if (!res.ok) return;
+      const summary = await res.json();
+      setProdStaffSummary(summary);
+      setProdCompletionForm(prev => ({
+        ...prev,
+        staff_count: summary.staff_count,
+        total_hours_worked: summary.total_hours_worked,
+        total_wages_paid: summary.total_wages_paid
+      }));
+    } catch (e) { console.error('Error fetching staff summary:', e); }
+  }
+
+  async function fetchBomMaterials(productId, qty) {
+    try {
+      const res = await fetch(`/api/production-completions/product-bom-materials?product_id=${productId}&quantity=${qty || 1}`);
+      if (!res.ok) return;
+      const result = await res.json();
+      setProdBomMaterials(result.materials || []);
+      setProdCompletionForm(prev => ({
+        ...prev,
+        materials: (result.materials || []).map(m => ({
+          raw_material_id: m.raw_material_id,
+          quantity: m.total_qty
+        }))
+      }));
+    } catch (e) { console.error('Error fetching BOM materials:', e); }
+  }
+
+  async function submitProdCompletion(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const payload = { ...prodCompletionForm };
+      // Attach consumable line items
+      payload.consumables = (prodCompletionForm.consumables || []).filter(c => c.consumable_id && c.quantity > 0);
+      payload.materials = (prodCompletionForm.materials || []).filter(m => m.raw_material_id && m.quantity > 0);
+      const res = await fetch('/api/production-completions/', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      const result = await res.json();
+      notify(`Production recorded: ${result.data?.qty_produced || 0} units, Cost/Unit: ${formatCurrency(result.data?.cost_per_unit || 0)}`, 'success');
+      // Reset form
+      setProdCompletionForm({
+        product_id: '', production_date: new Date().toISOString().split('T')[0],
+        qty_produced: '', qty_damaged: '0', damage_notes: '',
+        staff_count: 0, total_hours_worked: 0, total_wages_paid: 0,
+        energy_cost: '', lunch_cost: '', warehouse_id: '', notes: '',
+        consumables: [], materials: []
+      });
+      setProdStaffSummary(null);
+      setProdBomMaterials([]);
+      fetchProdCompletions();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  function addCompletionConsumable() {
+    setProdCompletionForm(prev => ({
+      ...prev,
+      consumables: [...(prev.consumables || []), { consumable_id: '', quantity: '' }]
+    }));
+  }
+
+  function updateCompletionConsumable(idx, field, val) {
+    setProdCompletionForm(prev => {
+      const arr = [...(prev.consumables || [])];
+      arr[idx] = { ...arr[idx], [field]: val };
+      return { ...prev, consumables: arr };
+    });
+  }
+
+  function removeCompletionConsumable(idx) {
+    setProdCompletionForm(prev => ({
+      ...prev,
+      consumables: prev.consumables.filter((_, i) => i !== idx)
+    }));
+  }
+
+  // ===================== MACHINES & EQUIPMENT =====================
+  async function fetchMachines() {
+    try {
+      const res = await fetch('/api/machines-equipment/');
+      const items = await extractItems(res);
+      setMachines(Array.isArray(items) ? items : (items.items || []));
+    } catch (e) { console.error('Error fetching machines:', e); }
+  }
+
+  async function fetchMachinesDashboard() {
+    try {
+      const res = await fetch('/api/machines-equipment/dashboard/summary');
+      if (!res.ok) return;
+      const result = await res.json();
+      setMachinesDashboard(result);
+    } catch (e) { console.error('Error fetching machines dashboard:', e); }
+  }
+
+  async function saveMachine(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const url = editingMachine ? `/api/machines-equipment/${editingMachine.id}` : '/api/machines-equipment/';
+      const method = editingMachine ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(machineForm) });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      notify(editingMachine ? 'Machine updated' : 'Machine added', 'success');
+      setMachineForm({ name: '', equipment_type: '', serial_number: '', model: '', manufacturer: '', purchase_date: '', purchase_cost: '', current_value: '', depreciation_rate: '10', depreciation_method: 'straight_line', location: '', status: 'Operational', notes: '' });
+      setEditingMachine(null);
+      setShowForm('');
+      fetchMachines();
+      fetchMachinesDashboard();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function deleteMachine(id) {
+    if (!window.confirm('Delete this machine/equipment?')) return;
+    try {
+      const res = await fetch(`/api/machines-equipment/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed');
+      notify('Machine deleted', 'success');
+      fetchMachines();
+      fetchMachinesDashboard();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); }
+  }
+
+  async function fetchMachineDetail(machineId) {
+    try {
+      const [maintRes, faultRes, depRes] = await Promise.all([
+        fetch(`/api/machines-equipment/${machineId}/maintenance`),
+        fetch(`/api/machines-equipment/${machineId}/faults`),
+        fetch(`/api/machines-equipment/${machineId}/depreciation`)
+      ]);
+      if (maintRes.ok) { const d = await maintRes.json(); setMachineMaintenanceRecords(d.items || d || []); }
+      if (faultRes.ok) { const d = await faultRes.json(); setMachineFaults(d.items || d || []); }
+      if (depRes.ok) { const d = await depRes.json(); setMachineDepreciation(d); }
+    } catch (e) { console.error('Error fetching machine detail:', e); }
+  }
+
+  async function saveMaintenanceRecord(e) {
+    e.preventDefault();
+    if (!selectedMachine) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/machines-equipment/${selectedMachine.id}/maintenance`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(maintenanceForm)
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      notify('Maintenance record added', 'success');
+      setMaintenanceForm({ maintenance_type: 'routine', scheduled_date: '', description: '', cost: '', performed_by: '', notes: '' });
+      fetchMachineDetail(selectedMachine.id);
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function saveFault(e) {
+    e.preventDefault();
+    if (!selectedMachine) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/machines-equipment/${selectedMachine.id}/faults`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(faultForm)
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      notify('Fault recorded', 'success');
+      setFaultForm({ fault_date: new Date().toISOString().split('T')[0], description: '', severity: 'Medium', status: 'Open', resolution: '', downtime_hours: '', repair_cost: '', reported_by: '' });
+      fetchMachineDetail(selectedMachine.id);
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
 
   function openForm(formName, item = null) {
@@ -1450,9 +1709,9 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','sales','reports','financial','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','reports','financial','settings'].map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -2488,6 +2747,502 @@ function AppMain({ currentUser = null }) {
           </div>
         )}
 
+        {/* =================== PRODUCTION CONSUMABLES =================== */}
+        {activeModule === 'consumables' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Production Consumables</h2>
+              </div>
+              <button onClick={fetchConsumables} className="btn btn-secondary">Refresh</button>
+            </div>
+
+            {/* Add/Edit Consumable Form */}
+            <div className="card" style={{marginBottom: '20px', padding: '20px'}}>
+              <h3>{editingConsumable ? 'Edit Consumable' : 'Register New Consumable'}</h3>
+              <form onSubmit={saveConsumable}>
+                <div className="form-row">
+                  <div className="form-group"><label>Name *</label><input value={consumableForm.name} onChange={(e) => setConsumableForm(p => ({...p, name: e.target.value}))} required placeholder="e.g., Packaging Film"/></div>
+                  <div className="form-group"><label>Unit *</label>
+                    <select value={consumableForm.unit} onChange={(e) => setConsumableForm(p => ({...p, unit: e.target.value}))}>
+                      <option value="unit">Unit</option><option value="kg">kg</option><option value="L">Liter</option>
+                      <option value="roll">Roll</option><option value="pack">Pack</option><option value="piece">Piece</option>
+                      <option value="kWh">kWh</option><option value="meal">Meal</option><option value="hour">Hour</option>
+                    </select>
+                  </div>
+                  <div className="form-group"><label>Unit Cost (NGN) *</label><input type="number" step="0.01" value={consumableForm.unit_cost} onChange={(e) => setConsumableForm(p => ({...p, unit_cost: e.target.value}))} required placeholder="0.00"/></div>
+                  <div className="form-group"><label>Category</label>
+                    <select value={consumableForm.category} onChange={(e) => setConsumableForm(p => ({...p, category: e.target.value}))}>
+                      <option value="">Select</option><option value="Packaging">Packaging</option><option value="Energy">Energy</option>
+                      <option value="Catering">Catering</option><option value="Cleaning">Cleaning</option><option value="Labels">Labels</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group" style={{flex: 2}}><label>Description</label><input value={consumableForm.description} onChange={(e) => setConsumableForm(p => ({...p, description: e.target.value}))} placeholder="Optional description"/></div>
+                  <div className="form-group" style={{display: 'flex', gap: '8px', alignItems: 'flex-end'}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : (editingConsumable ? 'Update' : 'Add')} Consumable</button>
+                    {editingConsumable && <button type="button" className="btn btn-secondary" onClick={() => { setEditingConsumable(null); setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' }); }}>Cancel</button>}
+                  </div>
+                </div>
+              </form>
+            </div>
+
+            {/* Consumables Table */}
+            <div className="card" style={{padding: '20px'}}>
+              <h3>Registered Consumables ({prodConsumables.length})</h3>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Name</th><th>Category</th><th>Unit</th><th>Unit Cost</th><th>Description</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {prodConsumables.map(c => (
+                    <tr key={c.id}>
+                      <td><strong>{c.name}</strong></td>
+                      <td><span className="badge">{c.category || 'N/A'}</span></td>
+                      <td>{c.unit}</td>
+                      <td>{formatCurrency(c.unit_cost)}</td>
+                      <td>{c.description || '-'}</td>
+                      <td className="actions">
+                        <button onClick={() => { setEditingConsumable(c); setConsumableForm({ name: c.name, unit: c.unit, unit_cost: c.unit_cost, category: c.category || '', description: c.description || '' }); }} className="btn-edit">Edit</button>
+                        <button onClick={() => deleteConsumable(c.id)} className="btn-danger" style={{marginLeft: '5px'}}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {prodConsumables.length === 0 && <tr><td colSpan="6" style={{textAlign: 'center', padding: '20px'}}>No consumables registered. Add one above.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =================== PRODUCTION COMPLETIONS =================== */}
+        {activeModule === 'productionCompletions' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Production Completions</h2>
+              </div>
+              <button onClick={fetchProdCompletions} className="btn btn-secondary">Refresh</button>
+            </div>
+
+            {/* Production Completion Form */}
+            <div className="card" style={{marginBottom: '20px', padding: '20px'}}>
+              <h3>Record Production Completion</h3>
+              <form onSubmit={submitProdCompletion}>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Product *</label>
+                    <select value={prodCompletionForm.product_id} onChange={(e) => {
+                      const pid = e.target.value;
+                      setProdCompletionForm(p => ({...p, product_id: pid}));
+                      if (pid && prodCompletionForm.qty_produced) fetchBomMaterials(pid, prodCompletionForm.qty_produced);
+                    }} required>
+                      <option value="">Select product</option>
+                      {(data.products || []).map(p => <option key={p.id} value={p.id}>{p.name} - {p.sku}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Production Date *</label>
+                    <input type="date" value={prodCompletionForm.production_date} onChange={(e) => {
+                      const d = e.target.value;
+                      setProdCompletionForm(p => ({...p, production_date: d}));
+                      if (d) fetchDailyStaffSummary(d);
+                    }} required/>
+                  </div>
+                  <div className="form-group">
+                    <label>Qty Produced *</label>
+                    <input type="number" value={prodCompletionForm.qty_produced} onChange={(e) => {
+                      const q = e.target.value;
+                      setProdCompletionForm(p => ({...p, qty_produced: q}));
+                      if (prodCompletionForm.product_id && q) fetchBomMaterials(prodCompletionForm.product_id, q);
+                    }} required placeholder="0"/>
+                  </div>
+                  <div className="form-group">
+                    <label>Qty Damaged</label>
+                    <input type="number" value={prodCompletionForm.qty_damaged} onChange={(e) => setProdCompletionForm(p => ({...p, qty_damaged: e.target.value}))} placeholder="0"/>
+                  </div>
+                </div>
+
+                {prodCompletionForm.qty_damaged > 0 && (
+                  <div className="form-row">
+                    <div className="form-group" style={{flex: 1}}>
+                      <label>Damage Notes</label>
+                      <input value={prodCompletionForm.damage_notes} onChange={(e) => setProdCompletionForm(p => ({...p, damage_notes: e.target.value}))} placeholder="Describe damage reason"/>
+                    </div>
+                  </div>
+                )}
+
+                {/* Auto-fetched Staff Summary */}
+                <div className="card" style={{background: '#f0f4ff', padding: '15px', marginBottom: '15px'}}>
+                  <h4 style={{marginBottom: '10px'}}>Staff & Wages (Auto-fetched from Attendance)</h4>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Staff Count</label>
+                      <input type="number" value={prodCompletionForm.staff_count} readOnly style={{backgroundColor: '#e8e8e8'}}/>
+                    </div>
+                    <div className="form-group">
+                      <label>Total Hours Worked</label>
+                      <input type="number" step="0.01" value={prodCompletionForm.total_hours_worked} readOnly style={{backgroundColor: '#e8e8e8'}}/>
+                    </div>
+                    <div className="form-group">
+                      <label>Total Wages Paid (NGN)</label>
+                      <input type="number" step="0.01" value={prodCompletionForm.total_wages_paid} readOnly style={{backgroundColor: '#e8e8e8'}}/>
+                    </div>
+                    <div className="form-group" style={{alignSelf: 'flex-end'}}>
+                      <button type="button" className="btn btn-secondary" onClick={() => fetchDailyStaffSummary(prodCompletionForm.production_date)}>Fetch Staff Data</button>
+                    </div>
+                  </div>
+                  {prodStaffSummary && (
+                    <small style={{color: '#666'}}>Data for {prodStaffSummary.production_date}: {prodStaffSummary.staff_count} staff worked {prodStaffSummary.total_hours_worked} hrs total</small>
+                  )}
+                </div>
+
+                {/* BOM Raw Materials */}
+                {prodBomMaterials.length > 0 && (
+                  <div className="card" style={{background: '#f0fff4', padding: '15px', marginBottom: '15px'}}>
+                    <h4 style={{marginBottom: '10px'}}>Raw Materials (From BOM)</h4>
+                    <table className="data-table">
+                      <thead><tr><th>Material</th><th>Unit</th><th>Qty/Unit</th><th>Total Qty</th><th>Unit Cost</th><th>Total Cost</th></tr></thead>
+                      <tbody>
+                        {prodBomMaterials.map((m, i) => (
+                          <tr key={i}>
+                            <td>{m.name}</td><td>{m.unit}</td><td>{m.qty_per_unit}</td>
+                            <td>{m.total_qty}</td><td>{formatCurrency(m.unit_cost)}</td><td>{formatCurrency(m.total_cost)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{fontWeight: 'bold', background: '#d4edda'}}>
+                          <td colSpan="5">Total Raw Material Cost</td>
+                          <td>{formatCurrency(prodBomMaterials.reduce((s, m) => s + m.total_cost, 0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Consumables Used */}
+                <div className="card" style={{background: '#fff8f0', padding: '15px', marginBottom: '15px'}}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px'}}>
+                    <h4>Production Consumables Used</h4>
+                    <button type="button" className="btn btn-secondary" onClick={addCompletionConsumable}>Add Consumable</button>
+                  </div>
+                  {(prodCompletionForm.consumables || []).map((con, idx) => (
+                    <div key={idx} className="form-row" style={{marginBottom: '8px'}}>
+                      <div className="form-group">
+                        <select value={con.consumable_id} onChange={(e) => updateCompletionConsumable(idx, 'consumable_id', e.target.value)}>
+                          <option value="">Select consumable</option>
+                          {prodConsumables.map(c => <option key={c.id} value={c.id}>{c.name} ({formatCurrency(c.unit_cost)}/{c.unit})</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <input type="number" step="0.01" value={con.quantity} onChange={(e) => updateCompletionConsumable(idx, 'quantity', e.target.value)} placeholder="Quantity"/>
+                      </div>
+                      <div className="form-group" style={{flex: 0}}>
+                        <button type="button" className="btn btn-danger" onClick={() => removeCompletionConsumable(idx)}>X</button>
+                      </div>
+                    </div>
+                  ))}
+                  {(!prodCompletionForm.consumables || prodCompletionForm.consumables.length === 0) && (
+                    <small style={{color: '#999'}}>No consumables added. Click "Add Consumable" above.</small>
+                  )}
+                </div>
+
+                {/* Energy & Lunch Costs */}
+                <div className="form-row">
+                  <div className="form-group"><label>Energy Cost (NGN)</label><input type="number" step="0.01" value={prodCompletionForm.energy_cost} onChange={(e) => setProdCompletionForm(p => ({...p, energy_cost: e.target.value}))} placeholder="0.00"/></div>
+                  <div className="form-group"><label>Lunch Cost (NGN)</label><input type="number" step="0.01" value={prodCompletionForm.lunch_cost} onChange={(e) => setProdCompletionForm(p => ({...p, lunch_cost: e.target.value}))} placeholder="0.00"/></div>
+                  <div className="form-group"><label>Destination Warehouse</label>
+                    <select value={prodCompletionForm.warehouse_id} onChange={(e) => setProdCompletionForm(p => ({...p, warehouse_id: e.target.value}))}>
+                      <option value="">Select warehouse</option>
+                      {(data.warehouses || []).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group" style={{flex: 1}}><label>Notes</label><input value={prodCompletionForm.notes} onChange={(e) => setProdCompletionForm(p => ({...p, notes: e.target.value}))} placeholder="Optional notes"/></div>
+                </div>
+
+                <div style={{marginTop: '15px'}}>
+                  <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Recording...' : 'Record Production Completion'}</button>
+                </div>
+              </form>
+            </div>
+
+            {/* Completions History Table */}
+            <div className="card" style={{padding: '20px'}}>
+              <h3>Production Completion History ({prodCompletions.length})</h3>
+              <div className="table-container">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Date</th><th>Product</th><th>Qty Produced</th><th>Damaged</th><th>Staff</th><th>Hours</th><th>Wages</th><th>RM Cost</th><th>Consumables</th><th>Energy</th><th>Lunch</th><th>Total Cost</th><th>Cost/Unit</th></tr>
+                  </thead>
+                  <tbody>
+                    {prodCompletions.map(pc => (
+                      <tr key={pc.id}>
+                        <td>{pc.production_date}</td>
+                        <td><strong>{pc.product_name}</strong></td>
+                        <td>{pc.qty_produced}</td>
+                        <td style={{color: pc.qty_damaged > 0 ? 'red' : 'inherit'}}>{pc.qty_damaged}</td>
+                        <td>{pc.staff_count}</td>
+                        <td>{Number(pc.total_hours_worked).toFixed(1)}h</td>
+                        <td>{formatCurrency(pc.total_wages_paid)}</td>
+                        <td>{formatCurrency(pc.raw_material_cost)}</td>
+                        <td>{formatCurrency(pc.consumables_cost)}</td>
+                        <td>{formatCurrency(pc.energy_cost)}</td>
+                        <td>{formatCurrency(pc.lunch_cost)}</td>
+                        <td style={{fontWeight: 'bold'}}>{formatCurrency(pc.total_production_cost)}</td>
+                        <td style={{fontWeight: 'bold', color: '#2563eb'}}>{formatCurrency(pc.cost_per_unit)}</td>
+                      </tr>
+                    ))}
+                    {prodCompletions.length === 0 && <tr><td colSpan="13" style={{textAlign: 'center', padding: '20px'}}>No production completions recorded yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =================== MACHINES & EQUIPMENT =================== */}
+        {activeModule === 'machinesEquipment' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Machines & Equipment</h2>
+              </div>
+              <div style={{display: 'flex', gap: '8px'}}>
+                {machineView !== 'list' && <button onClick={() => { setMachineView('list'); setSelectedMachine(null); }} className="btn btn-secondary">Back to List</button>}
+                <button onClick={() => { setShowForm('machine'); setEditingMachine(null); setMachineForm({ name: '', equipment_type: '', serial_number: '', model: '', manufacturer: '', purchase_date: '', purchase_cost: '', current_value: '', depreciation_rate: '10', depreciation_method: 'straight_line', location: '', status: 'Operational', notes: '' }); }} className="btn btn-primary">Add Machine</button>
+                <button onClick={() => { fetchMachines(); fetchMachinesDashboard(); }} className="btn btn-secondary">Refresh</button>
+              </div>
+            </div>
+
+            {/* Dashboard Summary */}
+            {machineView === 'list' && machinesDashboard && (
+              <div className="stats-grid" style={{marginBottom: '20px'}}>
+                <div className="stat-card"><h3>{machinesDashboard.total_machines || 0}</h3><p>Total Machines</p></div>
+                <div className="stat-card" style={{borderColor: '#22c55e'}}><h3>{machinesDashboard.operational || 0}</h3><p>Operational</p></div>
+                <div className="stat-card" style={{borderColor: '#f59e0b'}}><h3>{machinesDashboard.under_maintenance || 0}</h3><p>Under Maintenance</p></div>
+                <div className="stat-card" style={{borderColor: '#ef4444'}}><h3>{machinesDashboard.out_of_service || 0}</h3><p>Out of Service</p></div>
+                <div className="stat-card" style={{borderColor: '#6366f1'}}><h3>{formatCurrency(machinesDashboard.total_asset_value || 0)}</h3><p>Total Asset Value</p></div>
+                <div className="stat-card" style={{borderColor: '#ec4899'}}><h3>{machinesDashboard.open_faults || 0}</h3><p>Open Faults</p></div>
+              </div>
+            )}
+
+            {/* Machine List View */}
+            {machineView === 'list' && (
+              <div className="card" style={{padding: '20px'}}>
+                <h3>Equipment Registry ({machines.length})</h3>
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Name</th><th>Type</th><th>Serial #</th><th>Model</th><th>Status</th><th>Location</th><th>Purchase Cost</th><th>Current Value</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    {machines.map(m => (
+                      <tr key={m.id}>
+                        <td><strong>{m.name}</strong></td>
+                        <td>{m.equipment_type || '-'}</td>
+                        <td>{m.serial_number || '-'}</td>
+                        <td>{m.model || '-'}</td>
+                        <td>
+                          <span className={`status-badge ${m.status === 'Operational' ? 'active' : m.status === 'Under Maintenance' ? 'pending' : 'locked'}`}>
+                            {m.status}
+                          </span>
+                        </td>
+                        <td>{m.location || '-'}</td>
+                        <td>{formatCurrency(m.purchase_cost)}</td>
+                        <td>{formatCurrency(m.current_value)}</td>
+                        <td className="actions" style={{display: 'flex', gap: '4px', flexWrap: 'wrap'}}>
+                          <button onClick={() => { setSelectedMachine(m); setMachineView('detail'); fetchMachineDetail(m.id); }} className="btn-edit">View</button>
+                          <button onClick={() => { setEditingMachine(m); setMachineForm({ name: m.name, equipment_type: m.equipment_type || '', serial_number: m.serial_number || '', model: m.model || '', manufacturer: m.manufacturer || '', purchase_date: m.purchase_date || '', purchase_cost: m.purchase_cost || '', current_value: m.current_value || '', depreciation_rate: m.depreciation_rate || '10', depreciation_method: m.depreciation_method || 'straight_line', location: m.location || '', status: m.status || 'Operational', notes: m.notes || '' }); setShowForm('machine'); }} className="btn-edit">Edit</button>
+                          <button onClick={() => deleteMachine(m.id)} className="btn-danger">Delete</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {machines.length === 0 && <tr><td colSpan="9" style={{textAlign: 'center', padding: '20px'}}>No machines registered. Click "Add Machine" to start.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Machine Detail View */}
+            {machineView === 'detail' && selectedMachine && (
+              <div>
+                <div className="card" style={{padding: '20px', marginBottom: '20px'}}>
+                  <h3>{selectedMachine.name}</h3>
+                  <div className="form-row">
+                    <div><strong>Type:</strong> {selectedMachine.equipment_type || 'N/A'}</div>
+                    <div><strong>Serial:</strong> {selectedMachine.serial_number || 'N/A'}</div>
+                    <div><strong>Model:</strong> {selectedMachine.model || 'N/A'}</div>
+                    <div><strong>Manufacturer:</strong> {selectedMachine.manufacturer || 'N/A'}</div>
+                    <div><strong>Status:</strong> <span className={`status-badge ${selectedMachine.status === 'Operational' ? 'active' : 'pending'}`}>{selectedMachine.status}</span></div>
+                    <div><strong>Location:</strong> {selectedMachine.location || 'N/A'}</div>
+                  </div>
+                </div>
+
+                {/* Depreciation Card */}
+                {machineDepreciation && (
+                  <div className="card" style={{padding: '20px', marginBottom: '20px', background: '#f0f4ff'}}>
+                    <h4>Depreciation</h4>
+                    <div className="form-row">
+                      <div><strong>Method:</strong> {machineDepreciation.method}</div>
+                      <div><strong>Purchase Cost:</strong> {formatCurrency(machineDepreciation.purchase_cost)}</div>
+                      <div><strong>Current Value:</strong> {formatCurrency(machineDepreciation.current_value)}</div>
+                      <div><strong>Annual Depreciation:</strong> {formatCurrency(machineDepreciation.annual_depreciation)}</div>
+                      <div><strong>Age (years):</strong> {machineDepreciation.age_years}</div>
+                      <div><strong>Total Depreciation:</strong> {formatCurrency(machineDepreciation.total_depreciation)}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tabs for Maintenance / Faults */}
+                <div style={{display: 'flex', gap: '10px', marginBottom: '15px'}}>
+                  <button className={`btn ${machineView === 'detail' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setMachineView('detail')}>Overview</button>
+                  <button className="btn btn-secondary" onClick={() => setMachineView('maintenance')}>Maintenance ({machineMaintenanceRecords.length})</button>
+                  <button className="btn btn-secondary" onClick={() => setMachineView('faults')}>Faults ({machineFaults.length})</button>
+                </div>
+
+                {/* Maintenance Records */}
+                <div className="card" style={{padding: '20px', marginBottom: '20px'}}>
+                  <h4>Maintenance Records</h4>
+                  <table className="data-table">
+                    <thead><tr><th>Type</th><th>Scheduled</th><th>Completed</th><th>Description</th><th>Cost</th><th>Performed By</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {machineMaintenanceRecords.map(mr => (
+                        <tr key={mr.id}>
+                          <td><span className="badge">{mr.maintenance_type}</span></td>
+                          <td>{mr.scheduled_date || '-'}</td>
+                          <td>{mr.completed_date || '-'}</td>
+                          <td>{mr.description}</td>
+                          <td>{formatCurrency(mr.cost)}</td>
+                          <td>{mr.performed_by || '-'}</td>
+                          <td><span className={`status-badge ${mr.status === 'Completed' ? 'active' : 'pending'}`}>{mr.status}</span></td>
+                        </tr>
+                      ))}
+                      {machineMaintenanceRecords.length === 0 && <tr><td colSpan="7" style={{textAlign: 'center'}}>No maintenance records</td></tr>}
+                    </tbody>
+                  </table>
+
+                  {/* Add Maintenance Form */}
+                  <div style={{marginTop: '15px', padding: '15px', background: '#f8f9fa', borderRadius: '8px'}}>
+                    <h5>Add Maintenance Record</h5>
+                    <form onSubmit={saveMaintenanceRecord}>
+                      <div className="form-row">
+                        <div className="form-group"><label>Type</label><select value={maintenanceForm.maintenance_type} onChange={(e) => setMaintenanceForm(p => ({...p, maintenance_type: e.target.value}))}><option value="routine">Routine</option><option value="restorative">Restorative</option><option value="preventive">Preventive</option><option value="emergency">Emergency</option></select></div>
+                        <div className="form-group"><label>Scheduled Date</label><input type="date" value={maintenanceForm.scheduled_date} onChange={(e) => setMaintenanceForm(p => ({...p, scheduled_date: e.target.value}))}/></div>
+                        <div className="form-group"><label>Cost (NGN)</label><input type="number" step="0.01" value={maintenanceForm.cost} onChange={(e) => setMaintenanceForm(p => ({...p, cost: e.target.value}))}/></div>
+                        <div className="form-group"><label>Performed By</label><input value={maintenanceForm.performed_by} onChange={(e) => setMaintenanceForm(p => ({...p, performed_by: e.target.value}))}/></div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group" style={{flex: 1}}><label>Description *</label><input value={maintenanceForm.description} onChange={(e) => setMaintenanceForm(p => ({...p, description: e.target.value}))} required placeholder="Describe maintenance work"/></div>
+                      </div>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : 'Add Maintenance Record'}</button>
+                    </form>
+                  </div>
+                </div>
+
+                {/* Faults Records */}
+                <div className="card" style={{padding: '20px'}}>
+                  <h4>Fault Reports</h4>
+                  <table className="data-table">
+                    <thead><tr><th>Date</th><th>Description</th><th>Severity</th><th>Status</th><th>Resolution</th><th>Downtime</th><th>Repair Cost</th><th>Reported By</th></tr></thead>
+                    <tbody>
+                      {machineFaults.map(f => (
+                        <tr key={f.id}>
+                          <td>{f.fault_date}</td>
+                          <td>{f.description}</td>
+                          <td><span className={`badge ${f.severity === 'Critical' ? 'badge-danger' : f.severity === 'High' ? 'badge-warning' : ''}`}>{f.severity}</span></td>
+                          <td><span className={`status-badge ${f.status === 'Resolved' ? 'active' : f.status === 'Open' ? 'locked' : 'pending'}`}>{f.status}</span></td>
+                          <td>{f.resolution || '-'}</td>
+                          <td>{f.downtime_hours ? `${f.downtime_hours}h` : '-'}</td>
+                          <td>{formatCurrency(f.repair_cost)}</td>
+                          <td>{f.reported_by || '-'}</td>
+                        </tr>
+                      ))}
+                      {machineFaults.length === 0 && <tr><td colSpan="8" style={{textAlign: 'center'}}>No fault reports</td></tr>}
+                    </tbody>
+                  </table>
+
+                  {/* Add Fault Form */}
+                  <div style={{marginTop: '15px', padding: '15px', background: '#fff5f5', borderRadius: '8px'}}>
+                    <h5>Report Fault</h5>
+                    <form onSubmit={saveFault}>
+                      <div className="form-row">
+                        <div className="form-group"><label>Fault Date</label><input type="date" value={faultForm.fault_date} onChange={(e) => setFaultForm(p => ({...p, fault_date: e.target.value}))}/></div>
+                        <div className="form-group"><label>Severity</label><select value={faultForm.severity} onChange={(e) => setFaultForm(p => ({...p, severity: e.target.value}))}><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Critical">Critical</option></select></div>
+                        <div className="form-group"><label>Status</label><select value={faultForm.status} onChange={(e) => setFaultForm(p => ({...p, status: e.target.value}))}><option value="Open">Open</option><option value="In Progress">In Progress</option><option value="Resolved">Resolved</option></select></div>
+                        <div className="form-group"><label>Reported By</label><input value={faultForm.reported_by} onChange={(e) => setFaultForm(p => ({...p, reported_by: e.target.value}))}/></div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group" style={{flex: 2}}><label>Description *</label><input value={faultForm.description} onChange={(e) => setFaultForm(p => ({...p, description: e.target.value}))} required placeholder="Describe the fault"/></div>
+                        <div className="form-group"><label>Downtime (hours)</label><input type="number" step="0.1" value={faultForm.downtime_hours} onChange={(e) => setFaultForm(p => ({...p, downtime_hours: e.target.value}))}/></div>
+                        <div className="form-group"><label>Repair Cost (NGN)</label><input type="number" step="0.01" value={faultForm.repair_cost} onChange={(e) => setFaultForm(p => ({...p, repair_cost: e.target.value}))}/></div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group" style={{flex: 1}}><label>Resolution</label><input value={faultForm.resolution} onChange={(e) => setFaultForm(p => ({...p, resolution: e.target.value}))} placeholder="How was it fixed? (if resolved)"/></div>
+                      </div>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : 'Report Fault'}</button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Machine Maintenance dedicated view */}
+            {machineView === 'maintenance' && selectedMachine && (
+              <div className="card" style={{padding: '20px'}}>
+                <h3>Maintenance Records - {selectedMachine.name}</h3>
+                <table className="data-table">
+                  <thead><tr><th>Type</th><th>Scheduled</th><th>Completed</th><th>Description</th><th>Cost</th><th>Performed By</th><th>Next Scheduled</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {machineMaintenanceRecords.map(mr => (
+                      <tr key={mr.id}>
+                        <td><span className="badge">{mr.maintenance_type}</span></td>
+                        <td>{mr.scheduled_date || '-'}</td>
+                        <td>{mr.completed_date || '-'}</td>
+                        <td>{mr.description}</td>
+                        <td>{formatCurrency(mr.cost)}</td>
+                        <td>{mr.performed_by || '-'}</td>
+                        <td>{mr.next_scheduled || '-'}</td>
+                        <td><span className={`status-badge ${mr.status === 'Completed' ? 'active' : 'pending'}`}>{mr.status}</span></td>
+                      </tr>
+                    ))}
+                    {machineMaintenanceRecords.length === 0 && <tr><td colSpan="8" style={{textAlign: 'center'}}>No maintenance records yet</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Machine Faults dedicated view */}
+            {machineView === 'faults' && selectedMachine && (
+              <div className="card" style={{padding: '20px'}}>
+                <h3>Fault History - {selectedMachine.name}</h3>
+                <table className="data-table">
+                  <thead><tr><th>Date</th><th>Description</th><th>Severity</th><th>Status</th><th>Resolution</th><th>Downtime</th><th>Repair Cost</th><th>Reported By</th></tr></thead>
+                  <tbody>
+                    {machineFaults.map(f => (
+                      <tr key={f.id}>
+                        <td>{f.fault_date}</td>
+                        <td>{f.description}</td>
+                        <td><span className={`badge ${f.severity === 'Critical' ? 'badge-danger' : f.severity === 'High' ? 'badge-warning' : ''}`}>{f.severity}</span></td>
+                        <td><span className={`status-badge ${f.status === 'Resolved' ? 'active' : f.status === 'Open' ? 'locked' : 'pending'}`}>{f.status}</span></td>
+                        <td>{f.resolution || '-'}</td>
+                        <td>{f.downtime_hours ? `${f.downtime_hours}h` : '-'}</td>
+                        <td>{formatCurrency(f.repair_cost)}</td>
+                        <td>{f.reported_by || '-'}</td>
+                      </tr>
+                    ))}
+                    {machineFaults.length === 0 && <tr><td colSpan="8" style={{textAlign: 'center'}}>No faults reported</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Settings */}
         {activeModule === 'settings' && (
           <div className="module-content">
@@ -3262,6 +4017,62 @@ function AppMain({ currentUser = null }) {
                   </div>
                   <div className="form-group"><label>Notes</label><textarea rows="2" value={forms.productionOrder.notes} onChange={(e)=>handleFormChange('productionOrder','notes',e.target.value)}/></div>
                   <div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setShowForm('')}>Cancel</button><button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Saving...':'Create Production Order'}</button></div>
+                </form>
+              )}
+
+              {/* Machine/Equipment Add/Edit Form */}
+              {showForm === 'machine' && (
+                <form onSubmit={saveMachine}>
+                  <div className="form-row">
+                    <div className="form-group"><label>Equipment Name *</label><input value={machineForm.name} onChange={(e) => setMachineForm(p => ({...p, name: e.target.value}))} required placeholder="e.g., Packaging Machine A"/></div>
+                    <div className="form-group"><label>Equipment Type</label>
+                      <select value={machineForm.equipment_type} onChange={(e) => setMachineForm(p => ({...p, equipment_type: e.target.value}))}>
+                        <option value="">Select type</option>
+                        <option value="Manufacturing">Manufacturing</option>
+                        <option value="Packaging">Packaging</option>
+                        <option value="Mixing">Mixing</option>
+                        <option value="Filling">Filling</option>
+                        <option value="Labeling">Labeling</option>
+                        <option value="Testing">Testing/QC</option>
+                        <option value="Storage">Storage</option>
+                        <option value="Transport">Transport</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                    <div className="form-group"><label>Serial Number</label><input value={machineForm.serial_number} onChange={(e) => setMachineForm(p => ({...p, serial_number: e.target.value}))} placeholder="Enter serial number"/></div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group"><label>Model</label><input value={machineForm.model} onChange={(e) => setMachineForm(p => ({...p, model: e.target.value}))}/></div>
+                    <div className="form-group"><label>Manufacturer</label><input value={machineForm.manufacturer} onChange={(e) => setMachineForm(p => ({...p, manufacturer: e.target.value}))}/></div>
+                    <div className="form-group"><label>Location</label><input value={machineForm.location} onChange={(e) => setMachineForm(p => ({...p, location: e.target.value}))} placeholder="e.g., Factory Floor A"/></div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group"><label>Purchase Date</label><input type="date" value={machineForm.purchase_date} onChange={(e) => setMachineForm(p => ({...p, purchase_date: e.target.value}))}/></div>
+                    <div className="form-group"><label>Purchase Cost (NGN)</label><input type="number" step="0.01" value={machineForm.purchase_cost} onChange={(e) => setMachineForm(p => ({...p, purchase_cost: e.target.value}))} placeholder="0.00"/></div>
+                    <div className="form-group"><label>Current Value (NGN)</label><input type="number" step="0.01" value={machineForm.current_value} onChange={(e) => setMachineForm(p => ({...p, current_value: e.target.value}))} placeholder="0.00"/></div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group"><label>Depreciation Rate (%)</label><input type="number" step="0.1" value={machineForm.depreciation_rate} onChange={(e) => setMachineForm(p => ({...p, depreciation_rate: e.target.value}))}/></div>
+                    <div className="form-group"><label>Depreciation Method</label>
+                      <select value={machineForm.depreciation_method} onChange={(e) => setMachineForm(p => ({...p, depreciation_method: e.target.value}))}>
+                        <option value="straight_line">Straight Line</option>
+                        <option value="declining_balance">Declining Balance</option>
+                      </select>
+                    </div>
+                    <div className="form-group"><label>Status</label>
+                      <select value={machineForm.status} onChange={(e) => setMachineForm(p => ({...p, status: e.target.value}))}>
+                        <option value="Operational">Operational</option>
+                        <option value="Under Maintenance">Under Maintenance</option>
+                        <option value="Out of Service">Out of Service</option>
+                        <option value="Decommissioned">Decommissioned</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-group"><label>Notes</label><textarea rows="2" value={machineForm.notes} onChange={(e) => setMachineForm(p => ({...p, notes: e.target.value}))}/></div>
+                  <div className="modal-actions">
+                    <button type="button" className="btn btn-secondary" onClick={() => setShowForm('')}>Cancel</button>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : (editingMachine ? 'Update' : 'Add')} Machine</button>
+                  </div>
                 </form>
               )}
             </div>
