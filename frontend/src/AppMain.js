@@ -419,7 +419,7 @@ function AppMain({ currentUser = null }) {
   // ===================== MACHINES & EQUIPMENT =====================
   async function fetchMachines() {
     try {
-      const res = await fetch('/api/machines-equipment/');
+      const res = await fetch('/api/machines/');
       const items = await extractItems(res);
       setMachines(Array.isArray(items) ? items : (items.items || []));
     } catch (e) { console.error('Error fetching machines:', e); }
@@ -427,7 +427,7 @@ function AppMain({ currentUser = null }) {
 
   async function fetchMachinesDashboard() {
     try {
-      const res = await fetch('/api/machines-equipment/dashboard/summary');
+      const res = await fetch('/api/machines/dashboard/summary');
       if (!res.ok) return;
       const result = await res.json();
       setMachinesDashboard(result);
@@ -438,7 +438,7 @@ function AppMain({ currentUser = null }) {
     e.preventDefault();
     try {
       setLoading(true);
-      const url = editingMachine ? `/api/machines-equipment/${editingMachine.id}` : '/api/machines-equipment/';
+      const url = editingMachine ? `/api/machines/${editingMachine.id}` : '/api/machines/';
       const method = editingMachine ? 'PUT' : 'POST';
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(machineForm) });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
@@ -454,7 +454,7 @@ function AppMain({ currentUser = null }) {
   async function deleteMachine(id) {
     if (!window.confirm('Delete this machine/equipment?')) return;
     try {
-      const res = await fetch(`/api/machines-equipment/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/machines/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed');
       notify('Machine deleted', 'success');
       fetchMachines();
@@ -465,9 +465,9 @@ function AppMain({ currentUser = null }) {
   async function fetchMachineDetail(machineId) {
     try {
       const [maintRes, faultRes, depRes] = await Promise.all([
-        fetch(`/api/machines-equipment/${machineId}/maintenance`),
-        fetch(`/api/machines-equipment/${machineId}/faults`),
-        fetch(`/api/machines-equipment/${machineId}/depreciation`)
+        fetch(`/api/machines/${machineId}/maintenance`),
+        fetch(`/api/machines/${machineId}/faults`),
+        fetch(`/api/machines/${machineId}/depreciation`)
       ]);
       if (maintRes.ok) { const d = await maintRes.json(); setMachineMaintenanceRecords(d.items || d || []); }
       if (faultRes.ok) { const d = await faultRes.json(); setMachineFaults(d.items || d || []); }
@@ -480,7 +480,7 @@ function AppMain({ currentUser = null }) {
     if (!selectedMachine) return;
     try {
       setLoading(true);
-      const res = await fetch(`/api/machines-equipment/${selectedMachine.id}/maintenance`, {
+      const res = await fetch(`/api/machines/${selectedMachine.id}/maintenance`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(maintenanceForm)
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
@@ -495,7 +495,7 @@ function AppMain({ currentUser = null }) {
     if (!selectedMachine) return;
     try {
       setLoading(true);
-      const res = await fetch(`/api/machines-equipment/${selectedMachine.id}/faults`, {
+      const res = await fetch(`/api/machines/${selectedMachine.id}/faults`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(faultForm)
       });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
