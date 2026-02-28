@@ -2897,7 +2897,7 @@ function AppMain({ currentUser = null }) {
                     </div>
                   </div>
                   {prodStaffSummary && (
-                    <small style={{color: '#666'}}>Data for {prodStaffSummary.production_date}: {prodStaffSummary.staff_count} staff worked {prodStaffSummary.total_hours_worked} hrs total</small>
+                    <small style={{color: '#666'}}>Data for {prodStaffSummary.production_date}: {prodStaffSummary.staff_count} staff worked {prodStaffSummary.total_hours_worked} hrs total{prodStaffSummary.overtime_hours > 0 ? ` (incl. ${prodStaffSummary.overtime_hours} hrs overtime)` : ''} | Wages: NGN {Number(prodStaffSummary.total_wages_paid).toLocaleString()}</small>
                   )}
                 </div>
 

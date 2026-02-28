@@ -14,27 +14,58 @@ async def get_daily_staff_summary(
     production_date: str = Query(..., description="Date in YYYY-MM-DD format"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Auto-fetch staff count, total hours worked, and total wages for a given date."""
+    """Auto-fetch staff count, total hours worked, and total wages for a given date.
+    Regular hours: 9AM-5PM WAT (UTC+1) at hourly_rate
+    Overtime: after 5PM WAT at overtime_rate (default 450)
+    """
     # Parse string to date object for asyncpg compatibility
     try:
         pdate = date.fromisoformat(production_date)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
+    # Calculate wages with regular/overtime split
+    # 5PM WAT = 4PM UTC (16:00 UTC). We use AT TIME ZONE to handle this.
     result = await session.execute(
         text("""
-            SELECT 
-                COUNT(DISTINCT a.staff_id) AS staff_count,
+            WITH shift_data AS (
+                SELECT
+                    a.staff_id,
+                    a.clock_in,
+                    a.clock_out,
+                    s.hourly_rate,
+                    COALESCE(s.overtime_rate, 450) AS overtime_rate,
+                    -- 5PM WAT cutoff for this attendance date
+                    (a.clock_in::date || ' 17:00:00')::timestamp AT TIME ZONE 'Africa/Lagos' AT TIME ZONE 'UTC' AS cutoff_utc,
+                    EXTRACT(EPOCH FROM (a.clock_out - a.clock_in)) / 3600.0 AS total_hrs
+                FROM attendance a
+                JOIN staff s ON s.id = a.staff_id
+                WHERE a.clock_in::date = :pdate
+                  AND a.clock_out IS NOT NULL
+            )
+            SELECT
+                COUNT(DISTINCT staff_id) AS staff_count,
+                COALESCE(SUM(total_hrs), 0) AS total_hours,
                 COALESCE(SUM(
-                    EXTRACT(EPOCH FROM (a.clock_out - a.clock_in)) / 3600.0
-                ), 0) AS total_hours,
+                    CASE
+                        WHEN clock_out <= cutoff_utc THEN
+                            -- Entirely regular hours
+                            total_hrs * hourly_rate
+                        WHEN clock_in >= cutoff_utc THEN
+                            -- Entirely overtime
+                            total_hrs * overtime_rate
+                        ELSE
+                            -- Split: regular up to cutoff, overtime after
+                            (EXTRACT(EPOCH FROM (cutoff_utc - clock_in)) / 3600.0) * hourly_rate
+                            + (EXTRACT(EPOCH FROM (clock_out - cutoff_utc)) / 3600.0) * overtime_rate
+                    END
+                ), 0) AS total_wages,
                 COALESCE(SUM(
-                    (EXTRACT(EPOCH FROM (a.clock_out - a.clock_in)) / 3600.0) * s.hourly_rate
-                ), 0) AS total_wages
-            FROM attendance a
-            JOIN staff s ON s.id = a.staff_id
-            WHERE a.clock_in::date = :pdate
-              AND a.clock_out IS NOT NULL
+                    CASE WHEN clock_out > cutoff_utc THEN
+                        GREATEST(EXTRACT(EPOCH FROM (clock_out - GREATEST(clock_in, cutoff_utc))) / 3600.0, 0)
+                    ELSE 0 END
+                ), 0) AS overtime_hours
+            FROM shift_data
         """),
         {"pdate": pdate}
     )
@@ -43,6 +74,7 @@ async def get_daily_staff_summary(
         "production_date": production_date,
         "staff_count": int(row.staff_count),
         "total_hours_worked": round(float(row.total_hours), 2),
+        "overtime_hours": round(float(row.overtime_hours), 2),
         "total_wages_paid": round(float(row.total_wages), 2)
     }
 
