@@ -15,6 +15,12 @@ async def get_daily_staff_summary(
     session: AsyncSession = Depends(get_session)
 ):
     """Auto-fetch staff count, total hours worked, and total wages for a given date."""
+    # Parse string to date object for asyncpg compatibility
+    try:
+        pdate = date.fromisoformat(production_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
     result = await session.execute(
         text("""
             SELECT 
@@ -30,7 +36,7 @@ async def get_daily_staff_summary(
             WHERE a.clock_in::date = :pdate
               AND a.clock_out IS NOT NULL
         """),
-        {"pdate": production_date}
+        {"pdate": pdate}
     )
     row = result.fetchone()
     return {
@@ -82,7 +88,11 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
     """Record a production completion with full cost breakdown."""
     try:
         product_id = data['product_id']
-        production_date = data.get('production_date', str(date.today()))
+        production_date_str = data.get('production_date', str(date.today()))
+        try:
+            production_date_val = date.fromisoformat(production_date_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
         qty_produced = int(data.get('qty_produced', 0))
         qty_damaged = int(data.get('qty_damaged', 0))
         damage_notes = data.get('damage_notes', '')
@@ -142,7 +152,7 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
             """),
             {
                 "product_id": product_id,
-                "production_date": production_date,
+                "production_date": production_date_val,
                 "qty_produced": qty_produced,
                 "qty_damaged": qty_damaged,
                 "damage_notes": damage_notes,
