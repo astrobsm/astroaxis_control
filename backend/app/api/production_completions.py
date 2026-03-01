@@ -203,7 +203,7 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
         )
         completion_id = str(result.fetchone().id)
 
-        # Insert consumable line items
+        # Insert consumable line items and deduct stock
         for con in consumables_list:
             con_r = await session.execute(
                 text("SELECT unit_cost FROM production_consumables WHERE id = :id"),
@@ -219,6 +219,16 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
                 """),
                 {"cid": completion_id, "con_id": con['consumable_id'], "qty": qty, "uc": uc, "tc": round(uc * qty, 2)}
             )
+            # Auto-deduct consumable stock
+            if qty > 0:
+                await session.execute(
+                    text("""
+                        UPDATE production_consumables
+                        SET current_stock = GREATEST(current_stock - :qty, 0)
+                        WHERE id = :id
+                    """),
+                    {"id": con['consumable_id'], "qty": qty}
+                )
 
         # Insert raw material line items
         for mat in materials_list:

@@ -70,8 +70,11 @@ function AppMain({ currentUser = null }) {
 
   // Production Consumables state
   const [prodConsumables, setProdConsumables] = useState([]);
-  const [consumableForm, setConsumableForm] = useState({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' });
+  const [consumableForm, setConsumableForm] = useState({ name: '', unit: 'unit', unit_cost: '', category: '', description: '', current_stock: '', reorder_level: '' });
   const [editingConsumable, setEditingConsumable] = useState(null);
+  const [lowStockConsumables, setLowStockConsumables] = useState([]);
+  const [restockModal, setRestockModal] = useState(null);
+  const [restockQty, setRestockQty] = useState('');
 
   // Machines & Equipment state
   const [machines, setMachines] = useState([]);
@@ -161,7 +164,7 @@ function AppMain({ currentUser = null }) {
 
   // Fetch data when switching to new modules
   useEffect(() => {
-    if (activeModule === 'consumables') fetchConsumables();
+    if (activeModule === 'consumables') { fetchConsumables(); fetchLowStockConsumables(); }
     if (activeModule === 'productionCompletions') { fetchProdCompletions(); fetchConsumables(); }
     if (activeModule === 'machinesEquipment') { fetchMachines(); fetchMachinesDashboard(); }
   }, [activeModule]);
@@ -310,9 +313,10 @@ function AppMain({ currentUser = null }) {
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(consumableForm) });
       if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
       notify(editingConsumable ? 'Consumable updated' : 'Consumable added', 'success');
-      setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' });
+      setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '', current_stock: '', reorder_level: '' });
       setEditingConsumable(null);
       fetchConsumables();
+      fetchLowStockConsumables();
     } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
 
@@ -323,7 +327,34 @@ function AppMain({ currentUser = null }) {
       if (!res.ok) throw new Error('Failed');
       notify('Consumable deleted', 'success');
       fetchConsumables();
+      fetchLowStockConsumables();
     } catch (e) { notify(`Error: ${e.message}`, 'error'); }
+  }
+
+  async function fetchLowStockConsumables() {
+    try {
+      const res = await fetch('/api/production-consumables/low-stock');
+      const data = await res.json();
+      setLowStockConsumables(data.items || []);
+    } catch (e) { console.error('Error fetching low stock:', e); }
+  }
+
+  async function restockConsumable() {
+    if (!restockModal || !restockQty || parseFloat(restockQty) <= 0) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/production-consumables/${restockModal.id}/restock`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity: parseFloat(restockQty) })
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      const result = await res.json();
+      notify(result.message, 'success');
+      setRestockModal(null);
+      setRestockQty('');
+      fetchConsumables();
+      fetchLowStockConsumables();
+    } catch (e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
 
   // ===================== PRODUCTION COMPLETIONS =====================
@@ -2755,8 +2786,26 @@ function AppMain({ currentUser = null }) {
                 <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
                 <h2>Production Consumables</h2>
               </div>
-              <button onClick={fetchConsumables} className="btn btn-secondary">Refresh</button>
+              <button onClick={() => { fetchConsumables(); fetchLowStockConsumables(); }} className="btn btn-secondary">Refresh</button>
             </div>
+
+            {/* Low Stock Alert Banner */}
+            {lowStockConsumables.length > 0 && (
+              <div style={{background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '8px', padding: '15px', marginBottom: '20px'}}>
+                <h4 style={{color: '#856404', marginBottom: '10px'}}>LOW STOCK ALERT - {lowStockConsumables.length} item(s) need restocking</h4>
+                <div style={{display: 'flex', flexWrap: 'wrap', gap: '10px'}}>
+                  {lowStockConsumables.map(c => (
+                    <div key={c.id} style={{background: c.current_stock === 0 ? '#f8d7da' : '#fff', border: c.current_stock === 0 ? '2px solid #dc3545' : '1px solid #ffc107', borderRadius: '6px', padding: '10px 15px', minWidth: '200px'}}>
+                      <strong>{c.name}</strong><br/>
+                      <span style={{color: c.current_stock === 0 ? '#dc3545' : '#856404'}}>
+                        Stock: {c.current_stock} {c.unit} {c.current_stock === 0 ? '(OUT OF STOCK)' : `(Reorder at: ${c.reorder_level})`}
+                      </span><br/>
+                      <button onClick={() => { setRestockModal(c); setRestockQty(''); }} className="btn btn-primary" style={{marginTop: '5px', padding: '3px 10px', fontSize: '12px'}}>Restock Now</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Add/Edit Consumable Form */}
             <div className="card" style={{marginBottom: '20px', padding: '20px'}}>
@@ -2781,10 +2830,12 @@ function AppMain({ currentUser = null }) {
                   </div>
                 </div>
                 <div className="form-row">
+                  <div className="form-group"><label>Current Stock</label><input type="number" step="0.01" value={consumableForm.current_stock} onChange={(e) => setConsumableForm(p => ({...p, current_stock: e.target.value}))} placeholder="0" /></div>
+                  <div className="form-group"><label>Reorder Level</label><input type="number" step="0.01" value={consumableForm.reorder_level} onChange={(e) => setConsumableForm(p => ({...p, reorder_level: e.target.value}))} placeholder="Minimum before alert" /></div>
                   <div className="form-group" style={{flex: 2}}><label>Description</label><input value={consumableForm.description} onChange={(e) => setConsumableForm(p => ({...p, description: e.target.value}))} placeholder="Optional description"/></div>
                   <div className="form-group" style={{display: 'flex', gap: '8px', alignItems: 'flex-end'}}>
                     <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Saving...' : (editingConsumable ? 'Update' : 'Add')} Consumable</button>
-                    {editingConsumable && <button type="button" className="btn btn-secondary" onClick={() => { setEditingConsumable(null); setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '' }); }}>Cancel</button>}
+                    {editingConsumable && <button type="button" className="btn btn-secondary" onClick={() => { setEditingConsumable(null); setConsumableForm({ name: '', unit: 'unit', unit_cost: '', category: '', description: '', current_stock: '', reorder_level: '' }); }}>Cancel</button>}
                   </div>
                 </div>
               </form>
@@ -2795,26 +2846,62 @@ function AppMain({ currentUser = null }) {
               <h3>Registered Consumables ({prodConsumables.length})</h3>
               <table className="data-table">
                 <thead>
-                  <tr><th>Name</th><th>Category</th><th>Unit</th><th>Unit Cost</th><th>Description</th><th>Actions</th></tr>
+                  <tr><th>Name</th><th>Category</th><th>Unit</th><th>Unit Cost</th><th>Current Stock</th><th>Reorder Level</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
-                  {prodConsumables.map(c => (
-                    <tr key={c.id}>
-                      <td><strong>{c.name}</strong></td>
-                      <td><span className="badge">{c.category || 'N/A'}</span></td>
-                      <td>{c.unit}</td>
-                      <td>{formatCurrency(c.unit_cost)}</td>
-                      <td>{c.description || '-'}</td>
-                      <td className="actions">
-                        <button onClick={() => { setEditingConsumable(c); setConsumableForm({ name: c.name, unit: c.unit, unit_cost: c.unit_cost, category: c.category || '', description: c.description || '' }); }} className="btn-edit">Edit</button>
-                        <button onClick={() => deleteConsumable(c.id)} className="btn-danger" style={{marginLeft: '5px'}}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                  {prodConsumables.length === 0 && <tr><td colSpan="6" style={{textAlign: 'center', padding: '20px'}}>No consumables registered. Add one above.</td></tr>}
+                  {prodConsumables.map(c => {
+                    const isLow = c.reorder_level > 0 && c.current_stock <= c.reorder_level;
+                    const isOut = c.current_stock === 0 && c.reorder_level > 0;
+                    return (
+                      <tr key={c.id} style={{background: isOut ? '#f8d7da' : isLow ? '#fff3cd' : 'transparent'}}>
+                        <td><strong>{c.name}</strong></td>
+                        <td><span className="badge">{c.category || 'N/A'}</span></td>
+                        <td>{c.unit}</td>
+                        <td>{formatCurrency(c.unit_cost)}</td>
+                        <td style={{fontWeight: 'bold', color: isOut ? '#dc3545' : isLow ? '#856404' : '#28a745'}}>{c.current_stock} {c.unit}</td>
+                        <td>{c.reorder_level > 0 ? `${c.reorder_level} ${c.unit}` : '-'}</td>
+                        <td>
+                          {isOut ? <span style={{color: '#dc3545', fontWeight: 'bold'}}>OUT OF STOCK</span>
+                           : isLow ? <span style={{color: '#856404', fontWeight: 'bold'}}>LOW STOCK</span>
+                           : <span style={{color: '#28a745'}}>OK</span>}
+                        </td>
+                        <td className="actions">
+                          <button onClick={() => { setRestockModal(c); setRestockQty(''); }} className="btn btn-primary" style={{padding: '3px 8px', fontSize: '12px', marginRight: '4px'}}>Restock</button>
+                          <button onClick={() => { setEditingConsumable(c); setConsumableForm({ name: c.name, unit: c.unit, unit_cost: c.unit_cost, category: c.category || '', description: c.description || '', current_stock: c.current_stock || 0, reorder_level: c.reorder_level || 0 }); }} className="btn-edit">Edit</button>
+                          <button onClick={() => deleteConsumable(c.id)} className="btn-danger" style={{marginLeft: '4px'}}>Delete</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {prodConsumables.length === 0 && <tr><td colSpan="8" style={{textAlign: 'center', padding: '20px'}}>No consumables registered. Add one above.</td></tr>}
                 </tbody>
               </table>
             </div>
+
+            {/* Restock Modal */}
+            {restockModal && (
+              <div className="modal-overlay" onClick={() => setRestockModal(null)}>
+                <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{maxWidth: '400px'}}>
+                  <div className="modal-header">
+                    <h3>Restock: {restockModal.name}</h3>
+                    <button className="modal-close" onClick={() => setRestockModal(null)}>x</button>
+                  </div>
+                  <div style={{padding: '20px'}}>
+                    <p>Current Stock: <strong>{restockModal.current_stock} {restockModal.unit}</strong></p>
+                    <p>Reorder Level: <strong>{restockModal.reorder_level} {restockModal.unit}</strong></p>
+                    <div className="form-group" style={{marginTop: '15px'}}>
+                      <label>Quantity to Add ({restockModal.unit}) *</label>
+                      <input type="number" step="0.01" min="0.01" value={restockQty} onChange={(e) => setRestockQty(e.target.value)} placeholder="Enter quantity" autoFocus />
+                    </div>
+                    {restockQty > 0 && <p style={{color: '#28a745'}}>New stock will be: <strong>{(parseFloat(restockModal.current_stock || 0) + parseFloat(restockQty || 0)).toFixed(2)} {restockModal.unit}</strong></p>}
+                    <div style={{display: 'flex', gap: '10px', marginTop: '15px'}}>
+                      <button onClick={restockConsumable} className="btn btn-primary" disabled={loading || !restockQty || parseFloat(restockQty) <= 0}>{loading ? 'Restocking...' : 'Confirm Restock'}</button>
+                      <button onClick={() => setRestockModal(null)} className="btn btn-secondary">Cancel</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
