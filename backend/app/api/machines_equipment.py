@@ -15,6 +15,14 @@ router = APIRouter(prefix='/api/machines', tags=['Machines & Equipment'])
 async def create_machine(data: dict, session: AsyncSession = Depends(get_session)):
     """Register a new machine or equipment."""
     try:
+        # Safely parse optional fields - empty strings become None/0
+        pd = data.get('purchase_date', '') or None
+        if pd:
+            pd = date.fromisoformat(str(pd))
+        pc = data.get('purchase_cost', '') or 0
+        cv = data.get('current_value', '') or data.get('purchase_cost', '') or 0
+        dr = data.get('depreciation_rate', '') or 0
+
         result = await session.execute(
             text("""
                 INSERT INTO machines_equipment (
@@ -34,10 +42,10 @@ async def create_machine(data: dict, session: AsyncSession = Depends(get_session
                 "serial_number": data.get('serial_number', ''),
                 "model": data.get('model', ''),
                 "manufacturer": data.get('manufacturer', ''),
-                "purchase_date": data.get('purchase_date'),
-                "purchase_cost": float(data.get('purchase_cost', 0)),
-                "current_value": float(data.get('current_value', data.get('purchase_cost', 0))),
-                "depreciation_rate": float(data.get('depreciation_rate', 0)),
+                "purchase_date": pd,
+                "purchase_cost": float(pc),
+                "current_value": float(cv),
+                "depreciation_rate": float(dr),
                 "depreciation_method": data.get('depreciation_method', 'Straight-Line'),
                 "location": data.get('location', ''),
                 "status": data.get('status', 'Operational'),
@@ -118,10 +126,19 @@ async def update_machine(machine_id: str, data: dict, session: AsyncSession = De
     updatable = ['name', 'equipment_type', 'serial_number', 'model', 'manufacturer',
                  'purchase_date', 'purchase_cost', 'current_value', 'depreciation_rate',
                  'depreciation_method', 'location', 'status', 'notes']
+    date_fields = {'purchase_date'}
+    numeric_fields = {'purchase_cost', 'current_value', 'depreciation_rate'}
     for f in updatable:
         if f in data:
+            val = data[f]
+            if f in date_fields:
+                val = val or None
+                if val:
+                    val = date.fromisoformat(str(val))
+            elif f in numeric_fields:
+                val = float(val) if val not in ('', None) else 0
             fields.append(f"{f} = :{f}")
-            params[f] = data[f]
+            params[f] = val
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
