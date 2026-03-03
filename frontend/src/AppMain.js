@@ -98,6 +98,31 @@ function AppMain({ currentUser = null }) {
   const [machineFaults, setMachineFaults] = useState([]);
   const [machineDepreciation, setMachineDepreciation] = useState(null);
 
+  // Marketing Module state
+  const [mktDashboard, setMktDashboard] = useState(null);
+  const [mktPlans, setMktPlans] = useState([]);
+  const [mktLogs, setMktLogs] = useState([]);
+  const [mktProposals, setMktProposals] = useState([]);
+  const [mktProductsCatalog, setMktProductsCatalog] = useState([]);
+  const [mktView, setMktView] = useState('dashboard');
+  const [mktPlanForm, setMktPlanForm] = useState({ marketer_staff_id: '', week_start: '', week_end: '', title: '', objectives: '', target_areas: '', target_customers: '', planned_visits: '', planned_calls: '', budget_requested: '', status: 'submitted' });
+  const [mktLogForm, setMktLogForm] = useState({ marketer_staff_id: '', log_date: new Date().toISOString().split('T')[0], start_time: '', end_time: '', location_visited: '', customer_contacted: '', contact_type: 'visit', objective: '', activities_performed: '', outcome: '', products_discussed: '', samples_distributed: '0', orders_generated: '0', order_value: '0', challenges: '', follow_up_required: false, follow_up_date: '', follow_up_notes: '', mood_rating: '3' });
+  const [mktProposalForm, setMktProposalForm] = useState({ marketer_staff_id: '', title: '', proposal_type: 'campaign', target_audience: '', description: '', strategy: '', expected_outcome: '', budget_estimate: '', timeline_start: '', timeline_end: '', products_involved: '', channels: '', kpi_metrics: '', status: 'draft' });
+  const [editingMktPlan, setEditingMktPlan] = useState(null);
+  const [editingMktLog, setEditingMktLog] = useState(null);
+  const [editingMktProposal, setEditingMktProposal] = useState(null);
+
+  // HR / Customer Care Module state
+  const [hrDashboard, setHrDashboard] = useState(null);
+  const [hrStaffList, setHrStaffList] = useState([]);
+  const [hrPerformance, setHrPerformance] = useState([]);
+  const [hrAttendanceLog, setHrAttendanceLog] = useState([]);
+  const [hrProductsCatalog, setHrProductsCatalog] = useState([]);
+  const [hrSalesOrders, setHrSalesOrders] = useState([]);
+  const [hrCustomers, setHrCustomers] = useState([]);
+  const [hrView, setHrView] = useState('dashboard');
+  const [hrPerfDays, setHrPerfDays] = useState(30);
+
   // Form models
   const [forms, setForms] = useState({
     staff: {
@@ -167,6 +192,8 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'consumables') { fetchConsumables(); fetchLowStockConsumables(); }
     if (activeModule === 'productionCompletions') { fetchProdCompletions(); fetchConsumables(); }
     if (activeModule === 'machinesEquipment') { fetchMachines(); fetchMachinesDashboard(); }
+    if (activeModule === 'marketing') { fetchMktDashboard(); fetchMktPlans(); fetchMktLogs(); fetchMktProposals(); fetchMktProducts(); }
+    if (activeModule === 'hrCustomerCare') { fetchHrDashboard(); fetchHrStaff(); fetchHrPerformance(); fetchHrProducts(); fetchHrSalesOrders(); fetchHrCustomers(); fetchHrAttendance(); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -276,6 +303,67 @@ function AppMain({ currentUser = null }) {
       setLoading(false);
     }
   }
+
+  // ===== MARKETING FETCHERS =====
+  async function fetchMktDashboard() { try { const r = await fetch('/api/marketing/dashboard'); setMktDashboard(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchMktPlans() { try { const r = await fetch('/api/marketing/plans'); const d = await r.json(); setMktPlans(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchMktLogs() { try { const r = await fetch('/api/marketing/logs'); const d = await r.json(); setMktLogs(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchMktProposals() { try { const r = await fetch('/api/marketing/proposals'); const d = await r.json(); setMktProposals(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchMktProducts() { try { const r = await fetch('/api/marketing/products-catalog'); const d = await r.json(); setMktProductsCatalog(d.items||[]); } catch(e) { console.error(e); }}
+
+  async function saveMktPlan(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const url = editingMktPlan ? `/api/marketing/plans/${editingMktPlan.id}` : '/api/marketing/plans';
+      const method = editingMktPlan ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(mktPlanForm) });
+      if (!res.ok) throw new Error((await res.json()).detail||'Failed');
+      notify(editingMktPlan ? 'Plan updated' : 'Weekly plan submitted', 'success');
+      setMktPlanForm({ marketer_staff_id:'', week_start:'', week_end:'', title:'', objectives:'', target_areas:'', target_customers:'', planned_visits:'', planned_calls:'', budget_requested:'', status:'submitted' });
+      setEditingMktPlan(null); fetchMktPlans(); fetchMktDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deleteMktPlan(id) { if (!window.confirm('Delete this plan?')) return; try { await fetch(`/api/marketing/plans/${id}`,{method:'DELETE'}); notify('Plan deleted','success'); fetchMktPlans(); } catch(e) { notify(`Error: ${e.message}`,'error'); }}
+
+  async function saveMktLog(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const url = editingMktLog ? `/api/marketing/logs/${editingMktLog.id}` : '/api/marketing/logs';
+      const method = editingMktLog ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(mktLogForm) });
+      if (!res.ok) throw new Error((await res.json()).detail||'Failed');
+      notify(editingMktLog ? 'Log updated' : 'Daily log submitted', 'success');
+      setMktLogForm({ marketer_staff_id:'', log_date:new Date().toISOString().split('T')[0], start_time:'', end_time:'', location_visited:'', customer_contacted:'', contact_type:'visit', objective:'', activities_performed:'', outcome:'', products_discussed:'', samples_distributed:'0', orders_generated:'0', order_value:'0', challenges:'', follow_up_required:false, follow_up_date:'', follow_up_notes:'', mood_rating:'3' });
+      setEditingMktLog(null); fetchMktLogs(); fetchMktDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deleteMktLog(id) { if (!window.confirm('Delete this log?')) return; try { await fetch(`/api/marketing/logs/${id}`,{method:'DELETE'}); notify('Log deleted','success'); fetchMktLogs(); } catch(e) { notify(`Error: ${e.message}`,'error'); }}
+
+  async function saveMktProposal(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const url = editingMktProposal ? `/api/marketing/proposals/${editingMktProposal.id}` : '/api/marketing/proposals';
+      const method = editingMktProposal ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(mktProposalForm) });
+      if (!res.ok) throw new Error((await res.json()).detail||'Failed');
+      notify(editingMktProposal ? 'Proposal updated' : 'Proposal submitted', 'success');
+      setMktProposalForm({ marketer_staff_id:'', title:'', proposal_type:'campaign', target_audience:'', description:'', strategy:'', expected_outcome:'', budget_estimate:'', timeline_start:'', timeline_end:'', products_involved:'', channels:'', kpi_metrics:'', status:'draft' });
+      setEditingMktProposal(null); fetchMktProposals(); fetchMktDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deleteMktProposal(id) { if (!window.confirm('Delete this proposal?')) return; try { await fetch(`/api/marketing/proposals/${id}`,{method:'DELETE'}); notify('Proposal deleted','success'); fetchMktProposals(); } catch(e) { notify(`Error: ${e.message}`,'error'); }}
+
+  // ===== HR / CUSTOMER CARE FETCHERS =====
+  async function fetchHrDashboard() { try { const r = await fetch('/api/hr-customercare/dashboard'); setHrDashboard(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchHrStaff() { try { const r = await fetch('/api/hr-customercare/staff'); const d = await r.json(); setHrStaffList(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchHrPerformance(days) { try { const r = await fetch(`/api/hr-customercare/staff-performance?days=${days||hrPerfDays}`); const d = await r.json(); setHrPerformance(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchHrAttendance() { try { const r = await fetch('/api/hr-customercare/attendance-log?days=7'); const d = await r.json(); setHrAttendanceLog(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchHrProducts() { try { const r = await fetch('/api/hr-customercare/products-catalog'); const d = await r.json(); setHrProductsCatalog(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchHrSalesOrders() { try { const r = await fetch('/api/hr-customercare/sales-orders'); const d = await r.json(); setHrSalesOrders(d.items||[]); } catch(e) { console.error(e); }}
+  async function fetchHrCustomers() { try { const r = await fetch('/api/hr-customercare/customers'); const d = await r.json(); setHrCustomers(d.items||[]); } catch(e) { console.error(e); }}
 
   async function fetchFinancialData() {
     try {
@@ -1740,9 +1828,9 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','reports','financial','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -3325,6 +3413,414 @@ function AppMain({ currentUser = null }) {
                     {machineFaults.length === 0 && <tr><td colSpan="8" style={{textAlign: 'center'}}>No faults reported</td></tr>}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==================== MARKETER MODULE ==================== */}
+        {activeModule === 'marketing' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Marketer Dashboard</h2>
+              </div>
+              <div className="module-actions">
+                {['dashboard','plans','logs','proposals','products'].map(v => (
+                  <button key={v} className={`btn ${mktView===v?'btn-primary':'btn-secondary'}`} onClick={() => setMktView(v)} style={{marginRight:6}}>
+                    {v === 'plans' ? 'Weekly Plans' : v === 'logs' ? 'Daily Logs' : v === 'proposals' ? 'Proposals' : v === 'products' ? 'Products Catalog' : 'Dashboard'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Marketing Dashboard View */}
+            {mktView === 'dashboard' && mktDashboard && (
+              <div>
+                <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:16,marginBottom:24}}>
+                  <div className="stat-card primary"><h4>Active Plans</h4><p className="stat-number">{mktDashboard.active_plans||0}</p></div>
+                  <div className="stat-card success"><h4>Today's Logs</h4><p className="stat-number">{mktDashboard.today_logs||0}</p></div>
+                  <div className="stat-card info"><h4>Active Proposals</h4><p className="stat-number">{mktDashboard.active_proposals||0}</p></div>
+                  <div className="stat-card warning"><h4>Pending Follow-ups</h4><p className="stat-number">{mktDashboard.pending_followups||0}</p></div>
+                </div>
+                {mktDashboard.week_stats && (
+                  <div style={{background:'#f8f9fa',borderRadius:8,padding:16,marginBottom:24}}>
+                    <h3 style={{marginBottom:12}}>This Week's Activity Summary</h3>
+                    <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12}}>
+                      <div className="stat-card"><h4>Total Logs</h4><p className="stat-number">{mktDashboard.week_stats.total_logs||0}</p></div>
+                      <div className="stat-card"><h4>Total Orders</h4><p className="stat-number">{mktDashboard.week_stats.total_orders||0}</p></div>
+                      <div className="stat-card"><h4>Order Value</h4><p className="stat-number">&#8358;{Number(mktDashboard.week_stats.total_order_value||0).toLocaleString()}</p></div>
+                      <div className="stat-card"><h4>Customers Contacted</h4><p className="stat-number">{mktDashboard.week_stats.customers_contacted||0}</p></div>
+                      <div className="stat-card"><h4>Samples Given</h4><p className="stat-number">{mktDashboard.week_stats.samples_given||0}</p></div>
+                    </div>
+                  </div>
+                )}
+                {mktDashboard.recent_logs && mktDashboard.recent_logs.length > 0 && (
+                  <div style={{marginBottom:24}}>
+                    <h3 style={{marginBottom:12}}>Recent Activity</h3>
+                    <div className="table-responsive"><table className="data-table"><thead><tr><th>Date</th><th>Marketer</th><th>Location</th><th>Customer</th><th>Outcome</th><th>Orders</th></tr></thead><tbody>
+                      {mktDashboard.recent_logs.map((l,i) => (
+                        <tr key={i}><td>{l.log_date}</td><td>{l.marketer_name||'-'}</td><td>{l.location_visited}</td><td>{l.customer_contacted}</td><td>{l.outcome}</td><td>{l.orders_generated}</td></tr>
+                      ))}
+                    </tbody></table></div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Weekly Plans View */}
+            {mktView === 'plans' && (
+              <div>
+                <div style={{background:'#fff',borderRadius:8,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:24}}>
+                  <h3 style={{marginBottom:16}}>{editingMktPlan ? 'Edit Weekly Plan' : 'Submit Weekly Plan'}</h3>
+                  <form onSubmit={saveMktPlan}>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12}}>
+                      <div className="form-group"><label>Marketer (Staff ID)</label>
+                        <select value={mktPlanForm.marketer_staff_id} onChange={e => setMktPlanForm({...mktPlanForm, marketer_staff_id: e.target.value})} required>
+                          <option value="">Select Staff</option>
+                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group"><label>Week Start</label><input type="date" value={mktPlanForm.week_start} onChange={e => setMktPlanForm({...mktPlanForm, week_start: e.target.value})} required /></div>
+                      <div className="form-group"><label>Week End</label><input type="date" value={mktPlanForm.week_end} onChange={e => setMktPlanForm({...mktPlanForm, week_end: e.target.value})} required /></div>
+                      <div className="form-group"><label>Title</label><input value={mktPlanForm.title} onChange={e => setMktPlanForm({...mktPlanForm, title: e.target.value})} required /></div>
+                      <div className="form-group"><label>Planned Visits</label><input type="number" value={mktPlanForm.planned_visits} onChange={e => setMktPlanForm({...mktPlanForm, planned_visits: e.target.value})} /></div>
+                      <div className="form-group"><label>Planned Calls</label><input type="number" value={mktPlanForm.planned_calls} onChange={e => setMktPlanForm({...mktPlanForm, planned_calls: e.target.value})} /></div>
+                      <div className="form-group"><label>Budget Requested (NGN)</label><input type="number" step="0.01" value={mktPlanForm.budget_requested} onChange={e => setMktPlanForm({...mktPlanForm, budget_requested: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group" style={{marginTop:12}}><label>Objectives</label><textarea rows={3} value={mktPlanForm.objectives} onChange={e => setMktPlanForm({...mktPlanForm, objectives: e.target.value})} required /></div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                      <div className="form-group"><label>Target Areas</label><textarea rows={2} value={mktPlanForm.target_areas} onChange={e => setMktPlanForm({...mktPlanForm, target_areas: e.target.value})} /></div>
+                      <div className="form-group"><label>Target Customers</label><textarea rows={2} value={mktPlanForm.target_customers} onChange={e => setMktPlanForm({...mktPlanForm, target_customers: e.target.value})} /></div>
+                    </div>
+                    <div style={{display:'flex',gap:8,marginTop:12}}>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>{editingMktPlan ? 'Update Plan' : 'Submit Plan'}</button>
+                      {editingMktPlan && <button type="button" className="btn btn-secondary" onClick={() => { setEditingMktPlan(null); setMktPlanForm({marketer_staff_id:'',week_start:'',week_end:'',title:'',objectives:'',target_areas:'',target_customers:'',planned_visits:'',planned_calls:'',budget_requested:'',status:'submitted'}); }}>Cancel</button>}
+                    </div>
+                  </form>
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Week</th><th>Title</th><th>Marketer</th><th>Objectives</th><th>Visits</th><th>Calls</th><th>Budget</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+                  {mktPlans.map(p => (
+                    <tr key={p.id}>
+                      <td>{p.week_start} - {p.week_end}</td><td>{p.title}</td><td>{p.marketer_name||'-'}</td>
+                      <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.objectives}</td>
+                      <td>{p.planned_visits}</td><td>{p.planned_calls}</td><td>&#8358;{Number(p.budget_requested||0).toLocaleString()}</td>
+                      <td><span style={{padding:'2px 8px',borderRadius:12,fontSize:12,fontWeight:600,background: p.status==='approved'?'#d4edda':p.status==='submitted'?'#fff3cd':p.status==='rejected'?'#f8d7da':'#e2e3e5',color: p.status==='approved'?'#155724':p.status==='submitted'?'#856404':p.status==='rejected'?'#721c24':'#383d41'}}>{(p.status||'').toUpperCase()}</span></td>
+                      <td>
+                        <button className="btn btn-sm btn-secondary" style={{marginRight:4}} onClick={() => { setEditingMktPlan(p); setMktPlanForm({marketer_staff_id:p.marketer_staff_id,week_start:p.week_start,week_end:p.week_end,title:p.title,objectives:p.objectives,target_areas:p.target_areas||'',target_customers:p.target_customers||'',planned_visits:p.planned_visits||'',planned_calls:p.planned_calls||'',budget_requested:p.budget_requested||'',status:p.status||'submitted'}); }}>Edit</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => deleteMktPlan(p.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {mktPlans.length === 0 && <tr><td colSpan={9} style={{textAlign:'center',padding:20}}>No weekly plans found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Daily Logs View */}
+            {mktView === 'logs' && (
+              <div>
+                <div style={{background:'#fff',borderRadius:8,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:24}}>
+                  <h3 style={{marginBottom:16}}>{editingMktLog ? 'Edit Daily Log' : 'Submit Daily Activity Log'}</h3>
+                  <form onSubmit={saveMktLog}>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:12}}>
+                      <div className="form-group"><label>Marketer (Staff)</label>
+                        <select value={mktLogForm.marketer_staff_id} onChange={e => setMktLogForm({...mktLogForm, marketer_staff_id: e.target.value})} required>
+                          <option value="">Select Staff</option>
+                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group"><label>Date</label><input type="date" value={mktLogForm.log_date} onChange={e => setMktLogForm({...mktLogForm, log_date: e.target.value})} required /></div>
+                      <div className="form-group"><label>Start Time</label><input type="time" value={mktLogForm.start_time} onChange={e => setMktLogForm({...mktLogForm, start_time: e.target.value})} /></div>
+                      <div className="form-group"><label>End Time</label><input type="time" value={mktLogForm.end_time} onChange={e => setMktLogForm({...mktLogForm, end_time: e.target.value})} /></div>
+                      <div className="form-group"><label>Location Visited</label><input value={mktLogForm.location_visited} onChange={e => setMktLogForm({...mktLogForm, location_visited: e.target.value})} required /></div>
+                      <div className="form-group"><label>Customer Contacted</label><input value={mktLogForm.customer_contacted} onChange={e => setMktLogForm({...mktLogForm, customer_contacted: e.target.value})} /></div>
+                      <div className="form-group"><label>Contact Type</label>
+                        <select value={mktLogForm.contact_type} onChange={e => setMktLogForm({...mktLogForm, contact_type: e.target.value})}>
+                          <option value="visit">Visit</option><option value="call">Phone Call</option><option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="meeting">Meeting</option><option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div className="form-group"><label>Products Discussed</label><input value={mktLogForm.products_discussed} onChange={e => setMktLogForm({...mktLogForm, products_discussed: e.target.value})} /></div>
+                      <div className="form-group"><label>Samples Distributed</label><input type="number" value={mktLogForm.samples_distributed} onChange={e => setMktLogForm({...mktLogForm, samples_distributed: e.target.value})} /></div>
+                      <div className="form-group"><label>Orders Generated</label><input type="number" value={mktLogForm.orders_generated} onChange={e => setMktLogForm({...mktLogForm, orders_generated: e.target.value})} /></div>
+                      <div className="form-group"><label>Order Value (NGN)</label><input type="number" step="0.01" value={mktLogForm.order_value} onChange={e => setMktLogForm({...mktLogForm, order_value: e.target.value})} /></div>
+                      <div className="form-group"><label>Mood Rating (1-5)</label><input type="number" min="1" max="5" value={mktLogForm.mood_rating} onChange={e => setMktLogForm({...mktLogForm, mood_rating: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group" style={{marginTop:12}}><label>Objective</label><textarea rows={2} value={mktLogForm.objective} onChange={e => setMktLogForm({...mktLogForm, objective: e.target.value})} required /></div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                      <div className="form-group"><label>Activities Performed</label><textarea rows={3} value={mktLogForm.activities_performed} onChange={e => setMktLogForm({...mktLogForm, activities_performed: e.target.value})} required /></div>
+                      <div className="form-group"><label>Outcome</label><textarea rows={3} value={mktLogForm.outcome} onChange={e => setMktLogForm({...mktLogForm, outcome: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group"><label>Challenges</label><textarea rows={2} value={mktLogForm.challenges} onChange={e => setMktLogForm({...mktLogForm, challenges: e.target.value})} /></div>
+                    <div style={{display:'grid',gridTemplateColumns:'auto 1fr 1fr',gap:12,alignItems:'end'}}>
+                      <div className="form-group"><label><input type="checkbox" checked={mktLogForm.follow_up_required} onChange={e => setMktLogForm({...mktLogForm, follow_up_required: e.target.checked})} style={{marginRight:6}} />Follow-up Required</label></div>
+                      {mktLogForm.follow_up_required && <>
+                        <div className="form-group"><label>Follow-up Date</label><input type="date" value={mktLogForm.follow_up_date} onChange={e => setMktLogForm({...mktLogForm, follow_up_date: e.target.value})} /></div>
+                        <div className="form-group"><label>Follow-up Notes</label><input value={mktLogForm.follow_up_notes} onChange={e => setMktLogForm({...mktLogForm, follow_up_notes: e.target.value})} /></div>
+                      </>}
+                    </div>
+                    <div style={{display:'flex',gap:8,marginTop:12}}>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>{editingMktLog ? 'Update Log' : 'Submit Log'}</button>
+                      {editingMktLog && <button type="button" className="btn btn-secondary" onClick={() => { setEditingMktLog(null); setMktLogForm({marketer_staff_id:'',log_date:new Date().toISOString().split('T')[0],start_time:'',end_time:'',location_visited:'',customer_contacted:'',contact_type:'visit',objective:'',activities_performed:'',outcome:'',products_discussed:'',samples_distributed:'0',orders_generated:'0',order_value:'0',challenges:'',follow_up_required:false,follow_up_date:'',follow_up_notes:'',mood_rating:'3'}); }}>Cancel</button>}
+                    </div>
+                  </form>
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Date</th><th>Marketer</th><th>Location</th><th>Customer</th><th>Type</th><th>Outcome</th><th>Orders</th><th>Value</th><th>Follow-up</th><th>Actions</th></tr></thead><tbody>
+                  {mktLogs.map(l => (
+                    <tr key={l.id}>
+                      <td>{l.log_date}</td><td>{l.marketer_name||'-'}</td><td>{l.location_visited}</td><td>{l.customer_contacted}</td>
+                      <td>{l.contact_type}</td><td style={{maxWidth:150,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.outcome}</td>
+                      <td>{l.orders_generated}</td><td>&#8358;{Number(l.order_value||0).toLocaleString()}</td>
+                      <td>{l.follow_up_required ? <span style={{color:'#e67e22',fontWeight:600}}>Yes - {l.follow_up_date}</span> : 'No'}</td>
+                      <td>
+                        <button className="btn btn-sm btn-secondary" style={{marginRight:4}} onClick={() => { setEditingMktLog(l); setMktLogForm({marketer_staff_id:l.marketer_staff_id,log_date:l.log_date,start_time:l.start_time||'',end_time:l.end_time||'',location_visited:l.location_visited,customer_contacted:l.customer_contacted||'',contact_type:l.contact_type||'visit',objective:l.objective||'',activities_performed:l.activities_performed||'',outcome:l.outcome||'',products_discussed:l.products_discussed||'',samples_distributed:l.samples_distributed||'0',orders_generated:l.orders_generated||'0',order_value:l.order_value||'0',challenges:l.challenges||'',follow_up_required:l.follow_up_required||false,follow_up_date:l.follow_up_date||'',follow_up_notes:l.follow_up_notes||'',mood_rating:l.mood_rating||'3'}); }}>Edit</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => deleteMktLog(l.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {mktLogs.length === 0 && <tr><td colSpan={10} style={{textAlign:'center',padding:20}}>No daily logs found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Proposals View */}
+            {mktView === 'proposals' && (
+              <div>
+                <div style={{background:'#fff',borderRadius:8,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:24}}>
+                  <h3 style={{marginBottom:16}}>{editingMktProposal ? 'Edit Proposal' : 'Submit Marketing Proposal'}</h3>
+                  <form onSubmit={saveMktProposal}>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12}}>
+                      <div className="form-group"><label>Marketer (Staff)</label>
+                        <select value={mktProposalForm.marketer_staff_id} onChange={e => setMktProposalForm({...mktProposalForm, marketer_staff_id: e.target.value})} required>
+                          <option value="">Select Staff</option>
+                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group"><label>Title</label><input value={mktProposalForm.title} onChange={e => setMktProposalForm({...mktProposalForm, title: e.target.value})} required /></div>
+                      <div className="form-group"><label>Proposal Type</label>
+                        <select value={mktProposalForm.proposal_type} onChange={e => setMktProposalForm({...mktProposalForm, proposal_type: e.target.value})}>
+                          <option value="campaign">Campaign</option><option value="promotion">Promotion</option><option value="event">Event</option><option value="partnership">Partnership</option><option value="digital">Digital Marketing</option><option value="branding">Branding</option><option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div className="form-group"><label>Target Audience</label><input value={mktProposalForm.target_audience} onChange={e => setMktProposalForm({...mktProposalForm, target_audience: e.target.value})} /></div>
+                      <div className="form-group"><label>Budget Estimate (NGN)</label><input type="number" step="0.01" value={mktProposalForm.budget_estimate} onChange={e => setMktProposalForm({...mktProposalForm, budget_estimate: e.target.value})} /></div>
+                      <div className="form-group"><label>Timeline Start</label><input type="date" value={mktProposalForm.timeline_start} onChange={e => setMktProposalForm({...mktProposalForm, timeline_start: e.target.value})} /></div>
+                      <div className="form-group"><label>Timeline End</label><input type="date" value={mktProposalForm.timeline_end} onChange={e => setMktProposalForm({...mktProposalForm, timeline_end: e.target.value})} /></div>
+                      <div className="form-group"><label>Channels</label><input value={mktProposalForm.channels} onChange={e => setMktProposalForm({...mktProposalForm, channels: e.target.value})} placeholder="e.g. social media, print, radio" /></div>
+                      <div className="form-group"><label>Products Involved</label><input value={mktProposalForm.products_involved} onChange={e => setMktProposalForm({...mktProposalForm, products_involved: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group" style={{marginTop:12}}><label>Description</label><textarea rows={3} value={mktProposalForm.description} onChange={e => setMktProposalForm({...mktProposalForm, description: e.target.value})} required /></div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                      <div className="form-group"><label>Strategy</label><textarea rows={3} value={mktProposalForm.strategy} onChange={e => setMktProposalForm({...mktProposalForm, strategy: e.target.value})} /></div>
+                      <div className="form-group"><label>Expected Outcome</label><textarea rows={3} value={mktProposalForm.expected_outcome} onChange={e => setMktProposalForm({...mktProposalForm, expected_outcome: e.target.value})} /></div>
+                    </div>
+                    <div className="form-group"><label>KPI Metrics</label><textarea rows={2} value={mktProposalForm.kpi_metrics} onChange={e => setMktProposalForm({...mktProposalForm, kpi_metrics: e.target.value})} placeholder="How success will be measured" /></div>
+                    <div style={{display:'flex',gap:8,marginTop:12}}>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>{editingMktProposal ? 'Update Proposal' : 'Submit Proposal'}</button>
+                      {editingMktProposal && <button type="button" className="btn btn-secondary" onClick={() => { setEditingMktProposal(null); setMktProposalForm({marketer_staff_id:'',title:'',proposal_type:'campaign',target_audience:'',description:'',strategy:'',expected_outcome:'',budget_estimate:'',timeline_start:'',timeline_end:'',products_involved:'',channels:'',kpi_metrics:'',status:'draft'}); }}>Cancel</button>}
+                    </div>
+                  </form>
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Title</th><th>Type</th><th>Marketer</th><th>Budget</th><th>Timeline</th><th>Progress</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+                  {mktProposals.map(p => (
+                    <tr key={p.id}>
+                      <td>{p.title}</td><td>{(p.proposal_type||'').toUpperCase()}</td><td>{p.marketer_name||'-'}</td>
+                      <td>&#8358;{Number(p.budget_estimate||0).toLocaleString()}</td>
+                      <td>{p.timeline_start} - {p.timeline_end}</td>
+                      <td><div style={{background:'#e9ecef',borderRadius:8,overflow:'hidden',height:20,minWidth:80}}><div style={{background: p.execution_progress>=100?'#28a745':p.execution_progress>=50?'#007bff':'#ffc107',height:'100%',width:`${p.execution_progress||0}%`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,fontWeight:600}}>{p.execution_progress||0}%</div></div></td>
+                      <td><span style={{padding:'2px 8px',borderRadius:12,fontSize:12,fontWeight:600,background: p.status==='approved'?'#d4edda':p.status==='in_progress'?'#cce5ff':p.status==='completed'?'#d1ecf1':p.status==='rejected'?'#f8d7da':'#fff3cd',color: p.status==='approved'?'#155724':p.status==='in_progress'?'#004085':p.status==='completed'?'#0c5460':p.status==='rejected'?'#721c24':'#856404'}}>{(p.status||'draft').replace('_',' ').toUpperCase()}</span></td>
+                      <td>
+                        <button className="btn btn-sm btn-secondary" style={{marginRight:4}} onClick={() => { setEditingMktProposal(p); setMktProposalForm({marketer_staff_id:p.marketer_staff_id,title:p.title,proposal_type:p.proposal_type||'campaign',target_audience:p.target_audience||'',description:p.description||'',strategy:p.strategy||'',expected_outcome:p.expected_outcome||'',budget_estimate:p.budget_estimate||'',timeline_start:p.timeline_start||'',timeline_end:p.timeline_end||'',products_involved:p.products_involved||'',channels:p.channels||'',kpi_metrics:p.kpi_metrics||'',status:p.status||'draft'}); }}>Edit</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => deleteMktProposal(p.id)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {mktProposals.length === 0 && <tr><td colSpan={8} style={{textAlign:'center',padding:20}}>No proposals found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Products Catalog View (Read-Only) */}
+            {mktView === 'products' && (
+              <div>
+                <div style={{background:'#fff3cd',borderRadius:8,padding:12,marginBottom:16,color:'#856404'}}>
+                  <strong>Read-Only:</strong> Product prices are view-only. Contact management to request price changes.
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Category</th><th>Units</th><th>Selling Price</th><th>Stock</th><th>Reorder Level</th></tr></thead><tbody>
+                  {mktProductsCatalog.map(p => (
+                    <tr key={p.id}>
+                      <td>{p.product_name}</td><td>{p.category||'-'}</td><td>{p.unit_of_measure||'-'}</td>
+                      <td>&#8358;{Number(p.selling_price||0).toLocaleString()}</td>
+                      <td style={{color: Number(p.current_stock||0) <= Number(p.reorder_level||0) ? '#dc3545' : '#28a745', fontWeight:600}}>{p.current_stock||0}</td>
+                      <td>{p.reorder_level||0}</td>
+                    </tr>
+                  ))}
+                  {mktProductsCatalog.length === 0 && <tr><td colSpan={6} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==================== HR / CUSTOMER CARE MODULE ==================== */}
+        {activeModule === 'hrCustomerCare' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>HR / Customer Care</h2>
+              </div>
+              <div className="module-actions">
+                {['dashboard','staff','performance','attendance','products','sales','customers'].map(v => (
+                  <button key={v} className={`btn ${hrView===v?'btn-primary':'btn-secondary'}`} onClick={() => setHrView(v)} style={{marginRight:6}}>
+                    {v === 'staff' ? 'All Staff' : v === 'performance' ? 'Performance' : v === 'attendance' ? 'Attendance' : v === 'products' ? 'Products' : v === 'sales' ? 'Sales Orders' : v === 'customers' ? 'Customers' : 'Dashboard'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* HR Dashboard View */}
+            {hrView === 'dashboard' && hrDashboard && (
+              <div>
+                <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:16,marginBottom:24}}>
+                  <div className="stat-card primary"><h4>Total Staff</h4><p className="stat-number">{hrDashboard.total_staff||0}</p></div>
+                  <div className="stat-card success"><h4>Active Today</h4><p className="stat-number">{hrDashboard.active_today||0}</p></div>
+                  <div className="stat-card info"><h4>Total Products</h4><p className="stat-number">{hrDashboard.total_products||0}</p></div>
+                  <div className="stat-card warning"><h4>Total Customers</h4><p className="stat-number">{hrDashboard.total_customers||0}</p></div>
+                  <div className="stat-card success"><h4>Monthly Orders</h4><p className="stat-number">{hrDashboard.month_orders||0}</p></div>
+                  <div className="stat-card primary"><h4>Monthly Revenue</h4><p className="stat-number">&#8358;{Number(hrDashboard.month_revenue||0).toLocaleString()}</p></div>
+                  <div className="stat-card danger"><h4>Pending Orders</h4><p className="stat-number">{hrDashboard.pending_orders||0}</p></div>
+                </div>
+                {hrDashboard.upcoming_birthdays && hrDashboard.upcoming_birthdays.length > 0 && (
+                  <div style={{background:'#fff3cd',borderRadius:8,padding:16,marginBottom:24}}>
+                    <h3 style={{marginBottom:12,color:'#856404'}}>Upcoming Birthdays (Next 14 Days)</h3>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:12}}>
+                      {hrDashboard.upcoming_birthdays.map((b,i) => (
+                        <div key={i} style={{background:'#fff',borderRadius:8,padding:'8px 16px',boxShadow:'0 1px 3px rgba(0,0,0,.1)'}}>
+                          <strong>{b.first_name} {b.last_name}</strong><br /><small>{b.date_of_birth} - {b.position||'Staff'}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Staff List View */}
+            {hrView === 'staff' && (
+              <div>
+                <div style={{background:'#d1ecf1',borderRadius:8,padding:12,marginBottom:16,color:'#0c5460'}}>
+                  <strong>HR View:</strong> Staff records are read-only. Contact admin for modifications.
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Employee ID</th><th>Name</th><th>Position</th><th>Phone</th><th>Hourly Rate</th><th>Bank</th><th>Account</th></tr></thead><tbody>
+                  {hrStaffList.map(s => (
+                    <tr key={s.id}>
+                      <td><strong>{s.employee_id}</strong></td><td>{s.first_name} {s.last_name}</td><td>{s.position||'-'}</td>
+                      <td>{s.phone||'-'}</td><td>&#8358;{Number(s.hourly_rate||0).toLocaleString()}</td>
+                      <td>{s.bank_name||'-'}</td><td>{s.account_number||'-'}</td>
+                    </tr>
+                  ))}
+                  {hrStaffList.length === 0 && <tr><td colSpan={7} style={{textAlign:'center',padding:20}}>No staff records</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Performance View */}
+            {hrView === 'performance' && (
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+                  <label style={{fontWeight:600}}>Period (days):</label>
+                  <select value={hrPerfDays} onChange={e => { setHrPerfDays(Number(e.target.value)); fetchHrPerformance(Number(e.target.value)); }} style={{padding:'6px 12px',borderRadius:6,border:'1px solid #ddd'}}>
+                    <option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option><option value={60}>Last 60 days</option><option value={90}>Last 90 days</option>
+                  </select>
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>#</th><th>Employee</th><th>Position</th><th>Days Present</th><th>Total Hours</th><th>Avg Hours/Day</th><th>Production Tasks</th><th>Rating</th></tr></thead><tbody>
+                  {hrPerformance.map((p,i) => (
+                    <tr key={p.staff_id}>
+                      <td>{i+1}</td><td><strong>{p.employee_id}</strong> - {p.first_name} {p.last_name}</td><td>{p.position||'-'}</td>
+                      <td>{p.days_present||0}</td><td>{Number(p.total_hours||0).toFixed(1)}</td><td>{Number(p.avg_hours_per_day||0).toFixed(1)}</td>
+                      <td>{p.production_tasks||0}</td>
+                      <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:12,fontWeight:700,background: (p.avg_hours_per_day||0)>=7?'#d4edda':(p.avg_hours_per_day||0)>=5?'#fff3cd':'#f8d7da',color: (p.avg_hours_per_day||0)>=7?'#155724':(p.avg_hours_per_day||0)>=5?'#856404':'#721c24'}}>{(p.avg_hours_per_day||0)>=7?'Excellent':(p.avg_hours_per_day||0)>=5?'Good':'Needs Improvement'}</span></td>
+                    </tr>
+                  ))}
+                  {hrPerformance.length === 0 && <tr><td colSpan={8} style={{textAlign:'center',padding:20}}>No performance data for this period</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Attendance Log View */}
+            {hrView === 'attendance' && (
+              <div>
+                <h3 style={{marginBottom:16}}>Recent Attendance Log (Last 7 Days)</h3>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Date</th><th>Employee</th><th>Clock In</th><th>Clock Out</th><th>Hours</th></tr></thead><tbody>
+                  {hrAttendanceLog.map((a,i) => (
+                    <tr key={i}>
+                      <td>{a.date||'-'}</td><td><strong>{a.employee_id}</strong> - {a.first_name} {a.last_name}</td>
+                      <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString() : '-'}</td>
+                      <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString() : '-'}</td>
+                      <td>{a.hours_worked ? Number(a.hours_worked).toFixed(1) : '-'}</td>
+                    </tr>
+                  ))}
+                  {hrAttendanceLog.length === 0 && <tr><td colSpan={5} style={{textAlign:'center',padding:20}}>No attendance records</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Products Catalog View (Read-Only) */}
+            {hrView === 'products' && (
+              <div>
+                <div style={{background:'#fff3cd',borderRadius:8,padding:12,marginBottom:16,color:'#856404'}}>
+                  <strong>Read-Only:</strong> Product prices are view-only. Contact admin to request changes.
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Category</th><th>Units</th><th>Cost Price</th><th>Selling Price</th><th>Stock</th><th>Reorder Level</th></tr></thead><tbody>
+                  {hrProductsCatalog.map(p => (
+                    <tr key={p.id}>
+                      <td>{p.product_name}</td><td>{p.category||'-'}</td><td>{p.unit_of_measure||'-'}</td>
+                      <td>&#8358;{Number(p.cost_price||0).toLocaleString()}</td>
+                      <td>&#8358;{Number(p.selling_price||0).toLocaleString()}</td>
+                      <td style={{color: Number(p.current_stock||0) <= Number(p.reorder_level||0) ? '#dc3545' : '#28a745', fontWeight:600}}>{p.current_stock||0}</td>
+                      <td>{p.reorder_level||0}</td>
+                    </tr>
+                  ))}
+                  {hrProductsCatalog.length === 0 && <tr><td colSpan={7} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Sales Orders View */}
+            {hrView === 'sales' && (
+              <div>
+                <h3 style={{marginBottom:16}}>Sales Orders</h3>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Order ID</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>Items</th></tr></thead><tbody>
+                  {hrSalesOrders.map(o => (
+                    <tr key={o.id}>
+                      <td><strong>{(o.id||'').substring(0,8)}...</strong></td>
+                      <td>{o.customer_name||'-'}</td>
+                      <td>{o.order_date||'-'}</td>
+                      <td>&#8358;{Number(o.total_amount||0).toLocaleString()}</td>
+                      <td><span style={{padding:'2px 8px',borderRadius:12,fontSize:12,fontWeight:600,background: o.status==='completed'?'#d4edda':o.status==='pending'?'#fff3cd':o.status==='cancelled'?'#f8d7da':'#cce5ff',color: o.status==='completed'?'#155724':o.status==='pending'?'#856404':o.status==='cancelled'?'#721c24':'#004085'}}>{(o.status||'pending').toUpperCase()}</span></td>
+                      <td>{o.item_count||0}</td>
+                    </tr>
+                  ))}
+                  {hrSalesOrders.length === 0 && <tr><td colSpan={6} style={{textAlign:'center',padding:20}}>No sales orders found</td></tr>}
+                </tbody></table></div>
+              </div>
+            )}
+
+            {/* Customers View */}
+            {hrView === 'customers' && (
+              <div>
+                <h3 style={{marginBottom:16}}>Customers</h3>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Address</th><th>Total Orders</th></tr></thead><tbody>
+                  {hrCustomers.map(c => (
+                    <tr key={c.id}>
+                      <td>{c.name||c.customer_name||'-'}</td><td>{c.email||'-'}</td><td>{c.phone||'-'}</td>
+                      <td>{c.address||'-'}</td><td>{c.total_orders||0}</td>
+                    </tr>
+                  ))}
+                  {hrCustomers.length === 0 && <tr><td colSpan={5} style={{textAlign:'center',padding:20}}>No customers found</td></tr>}
+                </tbody></table></div>
               </div>
             )}
           </div>
