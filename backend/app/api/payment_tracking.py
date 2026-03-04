@@ -6,7 +6,7 @@ Tracks partial payments, balances, debt reminders, WhatsApp messages
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func
-from app.database import get_session
+from app.db import get_session
 from app.models import Invoice, InvoiceLine, Payment, SalesOrder, SalesOrderLine, Customer, Product
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
