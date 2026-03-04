@@ -484,7 +484,15 @@ function AppMain({ currentUser = null }) {
   async function fetchPtDebtors() { try { const r = await fetch('/api/payment-tracking/debtors'); if(r.ok) { const d = await r.json(); setPtDebtors(d.debtors||[]); } } catch(e) { console.error(e); }}
   async function fetchPtReminders() { try { const r = await fetch('/api/payment-tracking/reminders'); if(r.ok) { const d = await r.json(); setPtReminders(d.reminders||[]); } } catch(e) { console.error(e); }}
   async function fetchPtInvoiceDetail(invoiceId) {
-    try { const r = await fetch(`/api/payment-tracking/invoices/${invoiceId}`); if(r.ok) setPtSelectedInvoice(await r.json()); } catch(e) { console.error(e); }
+    try {
+      const r = await fetch(`/api/payment-tracking/invoices/${invoiceId}`);
+      if(r.ok) {
+        const data = await r.json();
+        // Flatten: spread invoice fields to top level so ptSelectedInvoice.id, .status, etc. work
+        const flat = { ...(data.invoice || {}), customer: data.customer, order: data.order, lines: data.lines || [], payments: data.payments || [] };
+        setPtSelectedInvoice(flat);
+      }
+    } catch(e) { console.error(e); }
   }
   async function fetchPtDebtorDetail(customerId) {
     try { const r = await fetch(`/api/payment-tracking/debtors/${customerId}`); if(r.ok) setPtSelectedDebtor(await r.json()); } catch(e) { console.error(e); }
@@ -4305,8 +4313,8 @@ function AppMain({ currentUser = null }) {
                   <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)'}}>
                     <h3 style={{marginTop:0}}>Invoice {ptSelectedInvoice.invoice_number}</h3>
                     <table style={{width:'100%',fontSize:14}}><tbody>
-                      <tr><td style={{padding:6,color:'#888'}}>Customer</td><td style={{padding:6,fontWeight:600}}>{ptSelectedInvoice.customer_name}</td></tr>
-                      <tr><td style={{padding:6,color:'#888'}}>Order #</td><td style={{padding:6}}>{ptSelectedInvoice.order_number || '-'}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Customer</td><td style={{padding:6,fontWeight:600}}>{ptSelectedInvoice.customer?.name || ptSelectedInvoice.customer_name || '-'}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Order #</td><td style={{padding:6}}>{ptSelectedInvoice.order?.order_number || ptSelectedInvoice.order_number || '-'}</td></tr>
                       <tr><td style={{padding:6,color:'#888'}}>Invoice Date</td><td style={{padding:6}}>{ptSelectedInvoice.invoice_date}</td></tr>
                       <tr><td style={{padding:6,color:'#888'}}>Due Date</td><td style={{padding:6,color: ptSelectedInvoice.is_overdue ? '#e74c3c' : 'inherit',fontWeight: ptSelectedInvoice.is_overdue ? 700 : 400}}>{ptSelectedInvoice.due_date} {ptSelectedInvoice.is_overdue && `(${ptSelectedInvoice.days_overdue}d overdue)`}</td></tr>
                       <tr><td style={{padding:6,color:'#888'}}>Status</td><td style={{padding:6}}><span style={{background: ptSelectedInvoice.status==='paid'?'#27ae60':ptSelectedInvoice.status==='partial'?'#f39c12':'#3498db',color:'#fff',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:600,textTransform:'uppercase'}}>{ptSelectedInvoice.is_overdue && ptSelectedInvoice.status!=='paid' ? 'OVERDUE' : ptSelectedInvoice.status}</span></td></tr>
