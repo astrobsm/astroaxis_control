@@ -3647,16 +3647,18 @@ function AppMain({ currentUser = null }) {
                 <div style={{background:'#fff3cd',borderRadius:8,padding:12,marginBottom:16,color:'#856404'}}>
                   <strong>Read-Only:</strong> Product prices are view-only. Contact management to request price changes.
                 </div>
-                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Category</th><th>Units</th><th>Selling Price</th><th>Stock</th><th>Reorder Level</th></tr></thead><tbody>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Manufacturer</th><th>Unit</th><th>Pricing</th></tr></thead><tbody>
                   {mktProductsCatalog.map(p => (
                     <tr key={p.id}>
-                      <td>{p.product_name}</td><td>{p.category||'-'}</td><td>{p.unit_of_measure||'-'}</td>
-                      <td>&#8358;{Number(p.selling_price||0).toLocaleString()}</td>
-                      <td style={{color: Number(p.current_stock||0) <= Number(p.reorder_level||0) ? '#dc3545' : '#28a745', fontWeight:600}}>{p.current_stock||0}</td>
-                      <td>{p.reorder_level||0}</td>
+                      <td><strong>{p.product_name}</strong><br/><small style={{color:'#888'}}>{p.sku}</small></td>
+                      <td>{p.category||'-'}</td>
+                      <td>{p.unit_of_measure||'-'}</td>
+                      <td>{p.pricing && p.pricing.length > 0 ? p.pricing.map((pr,i) => (
+                        <div key={i} style={{marginBottom:4}}><strong>{pr.unit}:</strong> Retail &#8358;{Number(pr.retail_price||0).toLocaleString()} | Wholesale &#8358;{Number(pr.wholesale_price||0).toLocaleString()}</div>
+                      )) : <span>&#8358;{Number(p.selling_price||0).toLocaleString()}</span>}</td>
                     </tr>
                   ))}
-                  {mktProductsCatalog.length === 0 && <tr><td colSpan={6} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
+                  {mktProductsCatalog.length === 0 && <tr><td colSpan={4} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
                 </tbody></table></div>
               </div>
             )}
@@ -3773,17 +3775,18 @@ function AppMain({ currentUser = null }) {
                 <div style={{background:'#fff3cd',borderRadius:8,padding:12,marginBottom:16,color:'#856404'}}>
                   <strong>Read-Only:</strong> Product prices are view-only. Contact admin to request changes.
                 </div>
-                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Category</th><th>Units</th><th>Cost Price</th><th>Selling Price</th><th>Stock</th><th>Reorder Level</th></tr></thead><tbody>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Product Name</th><th>Manufacturer</th><th>Cost Price</th><th>Pricing Details</th></tr></thead><tbody>
                   {hrProductsCatalog.map(p => (
                     <tr key={p.id}>
-                      <td>{p.product_name}</td><td>{p.category||'-'}</td><td>{p.unit_of_measure||'-'}</td>
+                      <td><strong>{p.name}</strong><br/><small style={{color:'#888'}}>{p.sku}</small></td>
+                      <td>{p.category||'-'}</td>
                       <td>&#8358;{Number(p.cost_price||0).toLocaleString()}</td>
-                      <td>&#8358;{Number(p.selling_price||0).toLocaleString()}</td>
-                      <td style={{color: Number(p.current_stock||0) <= Number(p.reorder_level||0) ? '#dc3545' : '#28a745', fontWeight:600}}>{p.current_stock||0}</td>
-                      <td>{p.reorder_level||0}</td>
+                      <td>{p.pricing && p.pricing.length > 0 ? p.pricing.map((pr,i) => (
+                        <div key={i} style={{marginBottom:4}}><strong>{pr.unit}:</strong> Cost &#8358;{Number(pr.cost_price||0).toLocaleString()} | Retail &#8358;{Number(pr.retail_price||0).toLocaleString()} | Wholesale &#8358;{Number(pr.wholesale_price||0).toLocaleString()}</div>
+                      )) : <span>Retail &#8358;{Number(p.selling_price||0).toLocaleString()} | Wholesale &#8358;{Number(p.wholesale_price||0).toLocaleString()}</span>}</td>
                     </tr>
                   ))}
-                  {hrProductsCatalog.length === 0 && <tr><td colSpan={7} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
+                  {hrProductsCatalog.length === 0 && <tr><td colSpan={4} style={{textAlign:'center',padding:20}}>No products found</td></tr>}
                 </tbody></table></div>
               </div>
             )}
