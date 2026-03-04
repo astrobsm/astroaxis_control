@@ -4538,30 +4538,58 @@ function AppMain({ currentUser = null }) {
                 <button className="btn btn-secondary" onClick={() => setPtView('debtors')} style={{marginBottom:16}}>Back to Debtors</button>
 
                 <div style={{background:'#fff',padding:24,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',maxWidth:700}}>
-                  <h3 style={{marginTop:0}}>WhatsApp Reminder for {ptReminderMsg.customer_name}</h3>
-                  <div style={{background:'#e8f5e9',padding:16,borderRadius:8,marginBottom:16,fontFamily:'monospace',whiteSpace:'pre-wrap',fontSize:13,lineHeight:1.6,border:'1px solid #c8e6c9'}}>
-                    {ptReminderMsg.message}
-                  </div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                    {ptReminderMsg.whatsapp_url && (
-                      <a href={ptReminderMsg.whatsapp_url} target="_blank" rel="noopener noreferrer" className="btn" style={{background:'#25D366',color:'#fff',border:'none',padding:'10px 24px',textDecoration:'none',borderRadius:6,fontWeight:600}}>
-                        Open WhatsApp
-                      </a>
-                    )}
-                    <button className="btn btn-secondary" onClick={() => { navigator.clipboard.writeText(ptReminderMsg.message); notify('Message copied to clipboard!', 'success'); }}>
-                      Copy Message
-                    </button>
-                  </div>
+                  <h3 style={{marginTop:0,display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:22}}>WhatsApp Reminder for {ptReminderMsg.customer_name}</span>
+                    {ptReminderMsg.customer_phone && <span style={{fontSize:13,color:'#888',fontWeight:400}}>({ptReminderMsg.customer_phone})</span>}
+                  </h3>
+
                   {ptReminderMsg.summary && (
-                    <div style={{marginTop:20,padding:16,background:'#f8f9fa',borderRadius:8}}>
-                      <h4 style={{marginTop:0}}>Debt Summary</h4>
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,textAlign:'center'}}>
-                        <div><strong style={{color:'#3498db'}}>{formatCurrency(ptReminderMsg.summary.total_invoiced)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Total Owed</span></div>
-                        <div><strong style={{color:'#27ae60'}}>{formatCurrency(ptReminderMsg.summary.total_paid)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Total Paid</span></div>
-                        <div><strong style={{color:'#e74c3c'}}>{formatCurrency(ptReminderMsg.summary.outstanding_balance)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Balance</span></div>
+                    <div style={{marginBottom:20,padding:16,background:'linear-gradient(135deg,#f8f9fa,#e8f5e9)',borderRadius:10,border:'1px solid #e0e0e0'}}>
+                      <h4 style={{marginTop:0,marginBottom:12,fontSize:14,color:'#555'}}>Account Summary</h4>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:12,textAlign:'center'}}>
+                        <div style={{padding:8,background:'#fff',borderRadius:8}}>
+                          <strong style={{color:'#3498db',fontSize:16}}>{formatCurrency(ptReminderMsg.summary.total_invoiced)}</strong>
+                          <br /><span style={{fontSize:11,color:'#888'}}>Total Invoiced</span>
+                        </div>
+                        <div style={{padding:8,background:'#fff',borderRadius:8}}>
+                          <strong style={{color:'#27ae60',fontSize:16}}>{formatCurrency(ptReminderMsg.summary.total_paid)}</strong>
+                          <br /><span style={{fontSize:11,color:'#888'}}>Total Paid</span>
+                        </div>
+                        <div style={{padding:8,background:'#fff',borderRadius:8}}>
+                          <strong style={{color:'#e74c3c',fontSize:16}}>{formatCurrency(ptReminderMsg.summary.outstanding_balance)}</strong>
+                          <br /><span style={{fontSize:11,color:'#888'}}>Outstanding</span>
+                        </div>
+                        <div style={{padding:8,background:'#fff',borderRadius:8}}>
+                          <strong style={{color:'#f39c12',fontSize:16}}>{ptReminderMsg.summary.total_invoices}</strong>
+                          <br /><span style={{fontSize:11,color:'#888'}}>Invoices</span>
+                        </div>
+                        {ptReminderMsg.summary.overdue_invoices > 0 && (
+                          <div style={{padding:8,background:'#fff3e0',borderRadius:8,border:'1px solid #ffcc80'}}>
+                            <strong style={{color:'#e65100',fontSize:16}}>{ptReminderMsg.summary.overdue_invoices}</strong>
+                            <br /><span style={{fontSize:11,color:'#e65100'}}>Overdue</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
+
+                  <div style={{background:'#e8f5e9',padding:16,borderRadius:8,marginBottom:16,fontFamily:'monospace',whiteSpace:'pre-wrap',fontSize:13,lineHeight:1.6,border:'1px solid #c8e6c9',maxHeight:500,overflowY:'auto'}}>
+                    {ptReminderMsg.message || ptReminderMsg.whatsapp_message || 'No message generated.'}
+                  </div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                    {ptReminderMsg.whatsapp_url && (
+                      <a href={ptReminderMsg.whatsapp_url} target="_blank" rel="noopener noreferrer" className="btn" style={{background:'#25D366',color:'#fff',border:'none',padding:'10px 24px',textDecoration:'none',borderRadius:6,fontWeight:600,display:'flex',alignItems:'center',gap:6}}>
+                        Open WhatsApp
+                      </a>
+                    )}
+                    <button className="btn btn-secondary" onClick={() => {
+                      const msg = ptReminderMsg.message || ptReminderMsg.whatsapp_message || '';
+                      navigator.clipboard.writeText(msg);
+                      notify('Message copied to clipboard!', 'success');
+                    }}>
+                      Copy Message
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

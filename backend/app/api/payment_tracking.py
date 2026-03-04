@@ -619,8 +619,11 @@ async def generate_reminder_message(
     customer_id: UUID,
     session: AsyncSession = Depends(get_session)
 ):
-    """Generate a WhatsApp debt reminder message with full breakdown"""
+    """Generate a WhatsApp debt reminder message with full breakdown and item details"""
     try:
+        import urllib.parse
+        from datetime import datetime as dt_now
+
         # Customer
         cust_result = await session.execute(select(Customer).where(Customer.id == customer_id))
         cust = cust_result.scalars().first()
@@ -646,22 +649,46 @@ async def generate_reminder_message(
 
         if not rows:
             return {
-                "message": "No outstanding debt for this customer",
+                "message": "No outstanding debt for this customer.",
                 "whatsapp_message": None,
                 "whatsapp_url": None,
+                "summary": None,
             }
 
-        # Build message
+        # Fetch line items for each unpaid invoice (product names + quantities)
+        invoice_ids = [str(r.id) for r in rows]
+        items_by_invoice = {}
+        if invoice_ids:
+            items_sql = text("""
+                SELECT il.invoice_id, p.name as product_name, il.quantity, il.unit_price, il.line_total
+                FROM invoice_lines il
+                JOIN products p ON p.id = il.product_id
+                WHERE il.invoice_id = ANY(:ids)
+                ORDER BY il.invoice_id, p.name
+            """)
+            items_result = await session.execute(items_sql, {"ids": invoice_ids})
+            for item in items_result.fetchall():
+                inv_id = str(item.invoice_id)
+                if inv_id not in items_by_invoice:
+                    items_by_invoice[inv_id] = []
+                items_by_invoice[inv_id].append(item)
+
+        # ── Build a warm, professional, polite WhatsApp message ──
         lines = []
-        lines.append(f"Dear {cust.name},")
+        lines.append(f"Good day {cust.name},")
         lines.append("")
-        lines.append("This is a friendly reminder regarding your outstanding balance with *Bonnesante Medicals*.")
+        lines.append("We hope you are doing well! We truly value your partnership with *Bonnesante Medicals* and appreciate your continued patronage.")
         lines.append("")
-        lines.append("*OUTSTANDING INVOICES:*")
-        lines.append("─────────────────────")
+        lines.append("We are writing to kindly bring to your attention the following outstanding invoice(s) on your account. We understand that oversights happen, so this is just a gentle reminder to help keep your records up to date.")
+        lines.append("")
+        lines.append("*ACCOUNT STATEMENT - OUTSTANDING INVOICES*")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         grand_total = 0
         grand_paid = 0
+        overdue_count = 0
+        today = dt_now.utcnow().date()
+
         for r in rows:
             total = float(r.total_amount or 0)
             paid = float(r.total_paid or 0)
@@ -669,26 +696,50 @@ async def generate_reminder_message(
             grand_total += total
             grand_paid += paid
 
-            inv_date = r.invoice_date.strftime('%d/%m/%Y') if r.invoice_date else 'N/A'
-            due_date = r.due_date.strftime('%d/%m/%Y') if r.due_date else 'N/A'
+            inv_date = r.invoice_date.strftime('%d %b %Y') if r.invoice_date else 'N/A'
+            due_date = r.due_date.strftime('%d %b %Y') if r.due_date else 'N/A'
+            is_overdue = r.due_date and r.due_date.date() < today if hasattr(r.due_date, 'date') else (r.due_date and r.due_date < today)
+            if is_overdue:
+                overdue_count += 1
+                days_overdue = (today - (r.due_date.date() if hasattr(r.due_date, 'date') else r.due_date)).days
 
-            lines.append(f"")
+            lines.append("")
             lines.append(f"Invoice: *{r.invoice_number}*")
             if r.order_number:
-                lines.append(f"Order: {r.order_number}")
-            lines.append(f"Date: {inv_date}")
+                lines.append(f"Order Ref: {r.order_number}")
+            lines.append(f"Invoice Date: {inv_date}")
             lines.append(f"Due Date: {due_date}")
-            lines.append(f"Total Amount: NGN {total:,.2f}")
+            if is_overdue:
+                lines.append(f"Status: Overdue by {days_overdue} day(s)")
+
+            # Add item details if available
+            inv_items = items_by_invoice.get(str(r.id), [])
+            if inv_items:
+                lines.append("Items supplied:")
+                for item in inv_items:
+                    qty = int(item.quantity) if float(item.quantity) == int(float(item.quantity)) else float(item.quantity)
+                    lines.append(f"  - {item.product_name} x{qty} @ NGN {float(item.unit_price):,.2f} = NGN {float(item.line_total):,.2f}")
+
+            lines.append(f"Invoice Total: NGN {total:,.2f}")
             if paid > 0:
-                lines.append(f"Amount Paid: NGN {paid:,.2f}")
-            lines.append(f"*Balance Due: NGN {balance:,.2f}*")
-            lines.append("─────────────────────")
+                lines.append(f"Amount Paid (Thank you!): NGN {paid:,.2f}")
+            lines.append(f"*Outstanding Balance: NGN {balance:,.2f}*")
+            lines.append("───────────────────────────")
 
         grand_balance = grand_total - grand_paid
         lines.append("")
-        lines.append(f"*TOTAL BALANCE DUE: NGN {grand_balance:,.2f}*")
+        lines.append(f"*TOTAL OUTSTANDING BALANCE: NGN {grand_balance:,.2f}*")
+        if grand_paid > 0:
+            lines.append(f"(We acknowledge your previous payments totalling NGN {grand_paid:,.2f} - thank you!)")
         lines.append("")
-        lines.append("Please make payment to:")
+
+        # Payment urgency note (friendly)
+        if overdue_count > 0:
+            lines.append(f"We noticed {overdue_count} invoice(s) {'is' if overdue_count == 1 else 'are'} past the due date. We would be grateful if you could kindly arrange payment at your earliest convenience to keep your account in good standing.")
+            lines.append("")
+
+        lines.append("For your convenience, payment can be made to any of the following accounts:")
+        lines.append("")
         lines.append("*Moniepoint Microfinance Bank*")
         lines.append("Account Name: Bonnesante Medicals")
         lines.append("Account Number: 8259518195")
@@ -697,11 +748,17 @@ async def generate_reminder_message(
         lines.append("Account Name: Bonnesante Medicals")
         lines.append("Account Number: 1379643548")
         lines.append("")
-        lines.append("Please reference the invoice number in your payment description.")
+        lines.append("Please kindly include the invoice number as your payment reference so we can update your account promptly.")
         lines.append("")
-        lines.append("Thank you for your patronage.")
-        lines.append("Bonnesante Medicals")
-        lines.append("Tel: +234 707 679 3866, +234 901 283 5413")
+        lines.append("If you have already made this payment, please disregard this message and accept our sincere apologies for any inconvenience. We would also appreciate it if you could share the payment receipt so we can reconcile your account.")
+        lines.append("")
+        lines.append("Should you have any questions or need to discuss a payment arrangement, please do not hesitate to reach out. We are always happy to assist!")
+        lines.append("")
+        lines.append("Thank you so much for your continued trust and patronage. We look forward to serving you again soon!")
+        lines.append("")
+        lines.append("Warm regards,")
+        lines.append("*Bonnesante Medicals*")
+        lines.append("Tel: +234 707 679 3866 | +234 901 283 5413")
 
         message_text = "\n".join(lines)
 
@@ -709,15 +766,12 @@ async def generate_reminder_message(
         phone = cust.phone
         whatsapp_url = None
         if phone:
-            # Clean phone number
             clean_phone = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
             if clean_phone.startswith("0"):
                 clean_phone = "234" + clean_phone[1:]
             elif not clean_phone.startswith("+") and not clean_phone.startswith("234"):
                 clean_phone = "234" + clean_phone
             clean_phone = clean_phone.replace("+", "")
-            
-            import urllib.parse
             encoded_msg = urllib.parse.quote(message_text)
             whatsapp_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
 
@@ -726,8 +780,16 @@ async def generate_reminder_message(
             "customer_phone": cust.phone,
             "total_balance": grand_balance,
             "invoice_count": len(rows),
+            "message": message_text,
             "whatsapp_message": message_text,
             "whatsapp_url": whatsapp_url,
+            "summary": {
+                "total_invoiced": grand_total,
+                "total_paid": grand_paid,
+                "outstanding_balance": grand_balance,
+                "overdue_invoices": overdue_count,
+                "total_invoices": len(rows),
+            },
         }
     except HTTPException:
         raise
