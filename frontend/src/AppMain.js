@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import './styles.css';
 import BulkUpload from './BulkUpload';
+import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 
 // Build stamp to verify fresh bundle after rebuilds
-const BUILD_TAG = 'v2025.11.23-stockmaster';
+const BUILD_TAG = 'v2026.03.04-offline-first';
 
 function AppMain({ currentUser = null }) {
   // Navigation and UI state
@@ -13,6 +14,10 @@ function AppMain({ currentUser = null }) {
   const [loading, setLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [sidebarVisible, setSidebarVisible] = useState(true); // sidebar toggle state
+
+  // Offline-first sync status
+  const [offlineStatus, setOfflineStatus] = useState({ online: navigator.onLine, pendingCount: 0, lastFullSync: null, syncing: false });
+  const [pullProgress, setPullProgress] = useState(null); // { done, total, current }
 
   // Backend data cache
   const [data, setData] = useState({
@@ -234,6 +239,57 @@ function AppMain({ currentUser = null }) {
     if (Array.isArray(j)) return j;
     return j;
   };
+
+  // Initialize offline-first engine on mount
+  useEffect(() => {
+    initOfflineEngine().then(() => {
+      console.log('[App] Offline engine ready');
+    }).catch(err => console.warn('[App] Offline engine init:', err));
+    const unsub = subscribeOffline(setOfflineStatus);
+    return unsub;
+  }, []);
+
+  // Pull from Cloud handler
+  const handlePullFromCloud = useCallback(async () => {
+    if (!offlineStatus.online) { notify('Cannot pull while offline', 'error'); return; }
+    try {
+      setPullProgress({ done: 0, total: 0, current: '' });
+      const result = await pullFromCloud((progress) => setPullProgress(progress));
+      notify(`Synced ${result.cached} of ${result.total} data sources for offline use` + (result.errors ? ` (${result.errors} failed)` : ''), result.errors ? 'warning' : 'success');
+      // Refresh the in-memory data
+      fetchAllData();
+    } catch (e) {
+      notify(`Pull failed: ${e.message}`, 'error');
+    } finally {
+      setPullProgress(null);
+    }
+  }, [offlineStatus.online]);
+
+  // Sync queued mutations handler
+  const handleSyncNow = useCallback(async () => {
+    if (!offlineStatus.online) { notify('Cannot sync while offline', 'error'); return; }
+    const result = await processMutationQueue();
+    if (result.success > 0) {
+      notify(`Synced ${result.success} queued changes to cloud`, 'success');
+      fetchAllData();
+    } else if (result.failed > 0) {
+      notify(`${result.failed} changes failed to sync`, 'error');
+    } else {
+      notify('No pending changes to sync', 'info');
+    }
+  }, [offlineStatus.online]);
+
+  // Listen for service worker sync-complete messages
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.data?.type === 'SYNC_COMPLETE') {
+        fetchAllData();
+        notify('Background sync completed', 'success');
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handler);
+    return () => navigator.serviceWorker?.removeEventListener('message', handler);
+  }, []);
 
   // Fetch all data on load
   useEffect(() => {
@@ -2040,6 +2096,45 @@ function AppMain({ currentUser = null }) {
         />
       )}
 
+      {/* Offline Sync Status Bar */}
+      <div style={{
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+        background: offlineStatus.online ? (offlineStatus.pendingCount > 0 ? '#f59e0b' : '#10b981') : '#ef4444',
+        color: 'white', padding: '6px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        fontSize: '12px', fontWeight: 600, gap: '12px', minHeight: '32px',
+        transition: 'background 0.3s'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: offlineStatus.online ? '#fff' : '#fca5a5', display: 'inline-block', animation: offlineStatus.syncing ? 'pulse 1s infinite' : 'none' }} />
+          <span>{offlineStatus.online ? (offlineStatus.syncing ? 'SYNCING...' : 'ONLINE') : 'OFFLINE MODE'}</span>
+          {offlineStatus.pendingCount > 0 && (
+            <span style={{ background: 'rgba(0,0,0,0.2)', padding: '2px 8px', borderRadius: 10 }}>
+              {offlineStatus.pendingCount} pending change{offlineStatus.pendingCount !== 1 ? 's' : ''}
+            </span>
+          )}
+          {offlineStatus.lastFullSync && (
+            <span style={{ opacity: 0.8 }}>Last sync: {new Date(offlineStatus.lastFullSync).toLocaleString()}</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {offlineStatus.online && offlineStatus.pendingCount > 0 && (
+            <button onClick={handleSyncNow} disabled={offlineStatus.syncing} style={{
+              padding: '3px 12px', background: 'rgba(255,255,255,0.25)', color: '#fff',
+              border: '1px solid rgba(255,255,255,0.4)', borderRadius: 4, cursor: 'pointer', fontSize: '11px', fontWeight: 700
+            }}>SYNC NOW</button>
+          )}
+          {offlineStatus.online && (
+            <button onClick={handlePullFromCloud} disabled={offlineStatus.syncing || pullProgress !== null} style={{
+              padding: '3px 12px', background: 'rgba(255,255,255,0.25)', color: '#fff',
+              border: '1px solid rgba(255,255,255,0.4)', borderRadius: 4, cursor: 'pointer', fontSize: '11px', fontWeight: 700
+            }}>{pullProgress ? `PULLING ${pullProgress.done}/${pullProgress.total}...` : 'PULL FROM CLOUD'}</button>
+          )}
+        </div>
+      </div>
+
+      {/* Spacer for fixed sync bar */}
+      <div style={{ height: '32px', flexShrink: 0 }} />
+
       {/* Vertical Sidebar Navigation */}
       <aside className={`sidebar ${sidebarVisible ? 'visible' : 'hidden'}`}>
         <div className="sidebar-brand">
@@ -2060,7 +2155,10 @@ function AppMain({ currentUser = null }) {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <button className="btn btn-refresh" onClick={fetchAllData}>Refresh</button>
+          <button className="btn btn-refresh" onClick={fetchAllData}>Refresh Data</button>
+          <button className="btn btn-refresh" onClick={handlePullFromCloud} disabled={!offlineStatus.online || offlineStatus.syncing} style={{ marginTop: 4, background: offlineStatus.online ? '#2563eb' : '#94a3b8', fontSize: '11px' }}>
+            {pullProgress ? `Syncing ${pullProgress.done}/${pullProgress.total}...` : 'Pull All Data for Offline'}
+          </button>
         </div>
       </aside>
 
