@@ -500,6 +500,7 @@ function AppMain({ currentUser = null }) {
     } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
   async function recordPtPayment(invoiceId) {
+    if(!invoiceId) { notify('No invoice selected. Please select an invoice first.', 'error'); return; }
     try {
       setLoading(true);
       const payload = { ...ptPaymentForm, amount: parseFloat(ptPaymentForm.amount) };

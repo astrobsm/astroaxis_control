@@ -50,11 +50,11 @@ const CRITICAL_ENDPOINTS = [
   '/api/payment-tracking/reconciliation',
   '/api/payment-tracking/invoices',
   '/api/payment-tracking/debtors',
-  '/api/consumables/',
-  '/api/consumables/low-stock',
+  '/api/production-consumables/',
+  '/api/production-consumables/low-stock',
   '/api/machines/',
-  '/api/machines/dashboard',
-  '/api/production/completions',
+  '/api/machines/dashboard/summary',
+  '/api/production-completions/',
 ];
 
 // ─── State ──────────────────────────────────────────────────────────────────
