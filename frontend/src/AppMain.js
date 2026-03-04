@@ -134,6 +134,49 @@ function AppMain({ currentUser = null }) {
   const [ptReminderMsg, setPtReminderMsg] = useState(null);
   const [ptPaymentForm, setPtPaymentForm] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
 
+  // Procurement Module state
+  const [procView, setProcView] = useState('dashboard');
+  const [procDashboard, setProcDashboard] = useState(null);
+  const [procRequests, setProcRequests] = useState([]);
+  const [procOrders, setProcOrders] = useState([]);
+  const [procInvoices, setProcInvoices] = useState([]);
+  const [procExpenses, setProcExpenses] = useState([]);
+  const [procSelectedRequest, setProcSelectedRequest] = useState(null);
+  const [procSelectedOrder, setProcSelectedOrder] = useState(null);
+  const [procRequestForm, setProcRequestForm] = useState({
+    requested_by: '', department: '', category: 'general', priority: 'normal',
+    title: '', description: '', justification: '', vendor_name: '', vendor_contact: '',
+    vendor_phone: '', vendor_email: '', expected_delivery_date: '', notes: '',
+    items: [{ item_type: 'general', item_name: '', quantity: '1', unit: 'each', estimated_unit_cost: '', specification: '' }]
+  });
+  const [procOrderForm, setProcOrderForm] = useState({
+    vendor_name: '', vendor_contact: '', vendor_phone: '', vendor_email: '', vendor_address: '',
+    expected_delivery: '', tax_amount: '0', shipping_cost: '0', notes: '', created_by: '', request_id: '',
+    items: [{ item_type: 'general', item_name: '', quantity: '1', unit: 'each', unit_cost: '', specification: '' }]
+  });
+  const [procExpenseForm, setProcExpenseForm] = useState({
+    category: 'general', subcategory: '', description: '', amount: '',
+    payment_method: '', payment_reference: '', payment_date: new Date().toISOString().split('T')[0],
+    recipient: '', approved_by: '', notes: ''
+  });
+  const [procPoPayForm, setProcPoPayForm] = useState({ amount: '', payment_method: '', payment_reference: '' });
+
+  // Logistics Module state
+  const [logView, setLogView] = useState('dashboard');
+  const [logDashboard, setLogDashboard] = useState(null);
+  const [logDeliveries, setLogDeliveries] = useState([]);
+  const [logAnalytics, setLogAnalytics] = useState(null);
+  const [logSelectedDelivery, setLogSelectedDelivery] = useState(null);
+  const [logDeliveryForm, setLogDeliveryForm] = useState({
+    sales_officer: '', customer_name: '', customer_phone: '', delivery_address: '',
+    city: '', state: '', landmark: '', delivery_date: new Date().toISOString().split('T')[0],
+    departure_time: '', arrival_time: '', transport_mode: 'vehicle',
+    vehicle_details: '', driver_name: '', driver_phone: '',
+    transport_cost: '', additional_charges: '0', payment_method: '', payment_reference: '',
+    notes: '', sales_order_id: '',
+    items: [{ product_name: '', sku: '', quantity: '1', unit: 'each', weight_kg: '' }]
+  });
+
   // Form models
   const [forms, setForms] = useState({
     staff: {
@@ -206,6 +249,8 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'marketing') { fetchMktDashboard(); fetchMktPlans(); fetchMktLogs(); fetchMktProposals(); fetchMktProducts(); }
     if (activeModule === 'hrCustomerCare') { fetchHrDashboard(); fetchHrStaff(); fetchHrPerformance(); fetchHrProducts(); fetchHrSalesOrders(); fetchHrCustomers(); fetchHrAttendance(); }
     if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); }
+    if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
+    if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogDeliveries(); fetchLogAnalytics(); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -426,6 +471,123 @@ function AppMain({ currentUser = null }) {
   }
   async function fetchPtReminderMsg(customerId) {
     try { const r = await fetch(`/api/payment-tracking/debtors/${customerId}/reminder`); if(r.ok) setPtReminderMsg(await r.json()); } catch(e) { console.error(e); }
+  }
+
+  // ===================== PROCUREMENT MODULE =====================
+  async function fetchProcDashboard() { try { const r = await fetch('/api/procurement/dashboard'); if(r.ok) setProcDashboard(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchProcRequests(status) { try { const url = status ? `/api/procurement/requests?status=${status}` : '/api/procurement/requests'; const r = await fetch(url); if(r.ok) { const d = await r.json(); setProcRequests(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchProcOrders(status) { try { const url = status ? `/api/procurement/orders?status=${status}` : '/api/procurement/orders'; const r = await fetch(url); if(r.ok) { const d = await r.json(); setProcOrders(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchProcInvoices() { try { const r = await fetch('/api/procurement/invoices'); if(r.ok) { const d = await r.json(); setProcInvoices(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchProcExpenses(cat) { try { const url = cat ? `/api/procurement/expenses?category=${cat}` : '/api/procurement/expenses'; const r = await fetch(url); if(r.ok) { const d = await r.json(); setProcExpenses(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchProcRequestDetail(id) { try { const r = await fetch(`/api/procurement/requests/${id}`); if(r.ok) setProcSelectedRequest(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchProcOrderDetail(id) { try { const r = await fetch(`/api/procurement/orders/${id}`); if(r.ok) setProcSelectedOrder(await r.json()); } catch(e) { console.error(e); }}
+
+  async function submitProcRequest(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const payload = { ...procRequestForm, items: procRequestForm.items.filter(i => i.item_name) };
+      const r = await fetch('/api/procurement/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Purchase request ${d.request_number} created!`, 'success');
+      setProcRequestForm({ requested_by: '', department: '', category: 'general', priority: 'normal', title: '', description: '', justification: '', vendor_name: '', vendor_contact: '', vendor_phone: '', vendor_email: '', expected_delivery_date: '', notes: '', items: [{ item_type: 'general', item_name: '', quantity: '1', unit: 'each', estimated_unit_cost: '', specification: '' }] });
+      setProcView('requests');
+      fetchProcRequests(); fetchProcDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function approveProcRequest(id) {
+    try { setLoading(true);
+      const r = await fetch(`/api/procurement/requests/${id}/approve`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved_by: 'Admin' }) });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('Request approved!', 'success');
+      fetchProcRequests(); fetchProcDashboard(); if(procSelectedRequest) fetchProcRequestDetail(id);
+    } catch(e) { notify(e.message, 'error'); } finally { setLoading(false); }
+  }
+
+  async function rejectProcRequest(id) {
+    const reason = window.prompt('Rejection reason:');
+    if(reason === null) return;
+    try { setLoading(true);
+      const r = await fetch(`/api/procurement/requests/${id}/reject`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rejected_by: 'Admin', reason }) });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('Request rejected', 'success');
+      fetchProcRequests(); fetchProcDashboard(); if(procSelectedRequest) fetchProcRequestDetail(id);
+    } catch(e) { notify(e.message, 'error'); } finally { setLoading(false); }
+  }
+
+  async function submitProcOrder(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const payload = { ...procOrderForm, items: procOrderForm.items.filter(i => i.item_name) };
+      const r = await fetch('/api/procurement/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Purchase order ${d.po_number} created! Total: ${formatCurrency(d.total_amount)}`, 'success');
+      setProcOrderForm({ vendor_name: '', vendor_contact: '', vendor_phone: '', vendor_email: '', vendor_address: '', expected_delivery: '', tax_amount: '0', shipping_cost: '0', notes: '', created_by: '', request_id: '', items: [{ item_type: 'general', item_name: '', quantity: '1', unit: 'each', unit_cost: '', specification: '' }] });
+      setProcView('orders');
+      fetchProcOrders(); fetchProcDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function receiveProcOrder(id) {
+    if(!window.confirm('Mark this PO as received?')) return;
+    try { setLoading(true);
+      const r = await fetch(`/api/procurement/orders/${id}/receive`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('PO marked as received!', 'success');
+      fetchProcOrders(); fetchProcDashboard(); if(procSelectedOrder) fetchProcOrderDetail(id);
+    } catch(e) { notify(e.message, 'error'); } finally { setLoading(false); }
+  }
+
+  async function payProcOrder(id) {
+    try { setLoading(true);
+      const payload = { ...procPoPayForm, amount: parseFloat(procPoPayForm.amount) };
+      if(!payload.amount || payload.amount <= 0) { notify('Enter a valid amount', 'error'); return; }
+      const r = await fetch(`/api/procurement/orders/${id}/pay`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(d.message, 'success');
+      setProcPoPayForm({ amount: '', payment_method: '', payment_reference: '' });
+      fetchProcOrders(); fetchProcDashboard(); if(procSelectedOrder) fetchProcOrderDetail(id);
+    } catch(e) { notify(e.message, 'error'); } finally { setLoading(false); }
+  }
+
+  async function submitProcExpense(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const payload = { ...procExpenseForm, amount: parseFloat(procExpenseForm.amount) };
+      const r = await fetch('/api/procurement/expenses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Expense ${d.expense_number} recorded!`, 'success');
+      setProcExpenseForm({ category: 'general', subcategory: '', description: '', amount: '', payment_method: '', payment_reference: '', payment_date: new Date().toISOString().split('T')[0], recipient: '', approved_by: '', notes: '' });
+      fetchProcExpenses(); fetchProcDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  // ===================== LOGISTICS MODULE =====================
+  async function fetchLogDashboard() { try { const r = await fetch('/api/logistics/dashboard'); if(r.ok) setLogDashboard(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchLogDeliveries(officer) { try { const url = officer ? `/api/logistics/deliveries?sales_officer=${encodeURIComponent(officer)}` : '/api/logistics/deliveries'; const r = await fetch(url); if(r.ok) { const d = await r.json(); setLogDeliveries(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchLogAnalytics() { try { const r = await fetch('/api/logistics/analytics'); if(r.ok) setLogAnalytics(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchLogDeliveryDetail(id) { try { const r = await fetch(`/api/logistics/deliveries/${id}`); if(r.ok) setLogSelectedDelivery(await r.json()); } catch(e) { console.error(e); }}
+
+  async function submitLogDelivery(e) {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      const payload = { ...logDeliveryForm, items: logDeliveryForm.items.filter(i => i.product_name), transport_cost: parseFloat(logDeliveryForm.transport_cost || 0), additional_charges: parseFloat(logDeliveryForm.additional_charges || 0) };
+      const r = await fetch('/api/logistics/deliveries', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Delivery ${d.delivery_number} logged! Cost: ${formatCurrency(d.total_cost)}`, 'success');
+      setLogDeliveryForm({ sales_officer: '', customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '', landmark: '', delivery_date: new Date().toISOString().split('T')[0], departure_time: '', arrival_time: '', transport_mode: 'vehicle', vehicle_details: '', driver_name: '', driver_phone: '', transport_cost: '', additional_charges: '0', payment_method: '', payment_reference: '', notes: '', sales_order_id: '', items: [{ product_name: '', sku: '', quantity: '1', unit: 'each', weight_kg: '' }] });
+      setLogView('deliveries');
+      fetchLogDeliveries(); fetchLogDashboard(); fetchLogAnalytics();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
 
   async function fetchFinancialData() {
@@ -1891,9 +2053,9 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -4306,6 +4468,636 @@ function AppMain({ currentUser = null }) {
               </div>
             )}
 
+          </div>
+        )}
+
+        {/* ===================== PROCUREMENT MODULE ===================== */}
+        {activeModule === 'procurement' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Procurement & Requests</h2>
+              </div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {['dashboard','newRequest','requests','approved','newOrder','orders','invoices','expenses','newExpense'].map(v => (
+                  <button key={v} className={`btn ${procView===v?'btn-primary':'btn-secondary'}`} style={{fontSize:12,padding:'6px 12px'}} onClick={()=>setProcView(v)}>
+                    {v==='dashboard'?'Dashboard':v==='newRequest'?'New Request':v==='requests'?'All Requests':v==='approved'?'Approved':v==='newOrder'?'New PO':v==='orders'?'Purchase Orders':v==='invoices'?'Invoices':v==='expenses'?'Expenses':v==='newExpense'?'Record Expense':v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Procurement Dashboard */}
+            {procView === 'dashboard' && procDashboard && (
+              <div>
+                <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16,marginBottom:24}}>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Pending Requests</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#f39c12'}}>{procDashboard.requests?.pending || 0}</div>
+                  </div>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Approved Requests</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#27ae60'}}>{procDashboard.requests?.approved || 0}</div>
+                  </div>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total POs</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#3498db'}}>{procDashboard.orders?.total || 0}</div>
+                  </div>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Ordered</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(procDashboard.orders?.total_ordered || 0)}</div>
+                  </div>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Paid</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#27ae60'}}>{formatCurrency(procDashboard.orders?.total_paid || 0)}</div>
+                  </div>
+                  <div className="stat-card" style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Outstanding</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#e74c3c'}}>{formatCurrency(procDashboard.orders?.total_outstanding || 0)}</div>
+                  </div>
+                </div>
+
+                {/* Expense categories */}
+                {procDashboard.expenses?.categories?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)',marginBottom:20}}>
+                    <h3 style={{marginTop:0}}>Expense Breakdown</h3>
+                    <table className="data-table"><thead><tr><th>Category</th><th>Count</th><th>Total</th></tr></thead>
+                    <tbody>{procDashboard.expenses.categories.map((c,i) => (
+                      <tr key={i}><td style={{textTransform:'capitalize'}}>{c.category}</td><td>{c.count}</td><td style={{fontWeight:600}}>{formatCurrency(c.total)}</td></tr>
+                    ))}</tbody></table>
+                    <div style={{marginTop:12,fontWeight:700,fontSize:16}}>Total Expenses: {formatCurrency(procDashboard.expenses.total_expenses)}</div>
+                  </div>
+                )}
+
+                {/* Recent requests */}
+                {procDashboard.recent_requests?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h3 style={{marginTop:0}}>Recent Requests</h3>
+                    <table className="data-table"><thead><tr><th>Request #</th><th>Title</th><th>Category</th><th>Status</th><th>Est. Cost</th></tr></thead>
+                    <tbody>{procDashboard.recent_requests.map((r,i) => (
+                      <tr key={i}><td>{r.request_number}</td><td>{r.title}</td><td style={{textTransform:'capitalize'}}>{r.category}</td>
+                      <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:r.status==='submitted'?'#f39c12':r.status==='approved'?'#27ae60':r.status==='rejected'?'#e74c3c':'#3498db',color:'#fff'}}>{r.status.toUpperCase()}</span></td>
+                      <td>{formatCurrency(r.total_estimated_cost)}</td></tr>
+                    ))}</tbody></table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* New Purchase Request Form */}
+            {procView === 'newRequest' && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>New Purchase Request</h3>
+                <form onSubmit={submitProcRequest}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                    <div><label className="form-label">Requested By *</label><input className="form-input" required value={procRequestForm.requested_by} onChange={e=>setProcRequestForm(p=>({...p,requested_by:e.target.value}))}/></div>
+                    <div><label className="form-label">Department</label><input className="form-input" value={procRequestForm.department} onChange={e=>setProcRequestForm(p=>({...p,department:e.target.value}))}/></div>
+                    <div><label className="form-label">Category *</label>
+                      <select className="form-input" value={procRequestForm.category} onChange={e=>setProcRequestForm(p=>({...p,category:e.target.value}))}>
+                        <option value="general">General</option><option value="raw_material">Raw Material</option><option value="consumable">Consumable</option>
+                        <option value="machine">Machine</option><option value="tool">Tool</option><option value="office_supply">Office Supply</option>
+                      </select>
+                    </div>
+                    <div><label className="form-label">Priority</label>
+                      <select className="form-input" value={procRequestForm.priority} onChange={e=>setProcRequestForm(p=>({...p,priority:e.target.value}))}>
+                        <option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option>
+                      </select>
+                    </div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Title *</label><input className="form-input" required value={procRequestForm.title} onChange={e=>setProcRequestForm(p=>({...p,title:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Description</label><textarea className="form-input" rows={2} value={procRequestForm.description} onChange={e=>setProcRequestForm(p=>({...p,description:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Justification</label><textarea className="form-input" rows={2} value={procRequestForm.justification} onChange={e=>setProcRequestForm(p=>({...p,justification:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Name</label><input className="form-input" value={procRequestForm.vendor_name} onChange={e=>setProcRequestForm(p=>({...p,vendor_name:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Phone</label><input className="form-input" value={procRequestForm.vendor_phone} onChange={e=>setProcRequestForm(p=>({...p,vendor_phone:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Email</label><input className="form-input" value={procRequestForm.vendor_email} onChange={e=>setProcRequestForm(p=>({...p,vendor_email:e.target.value}))}/></div>
+                    <div><label className="form-label">Expected Delivery</label><input className="form-input" type="date" value={procRequestForm.expected_delivery_date} onChange={e=>setProcRequestForm(p=>({...p,expected_delivery_date:e.target.value}))}/></div>
+                  </div>
+
+                  <h4 style={{marginTop:20}}>Items</h4>
+                  {procRequestForm.items.map((item, idx) => (
+                    <div key={idx} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 60px',gap:8,marginBottom:8,alignItems:'end'}}>
+                      <div><label className="form-label" style={{fontSize:11}}>Item Name *</label><input className="form-input" required value={item.item_name} onChange={e=>{const items=[...procRequestForm.items];items[idx].item_name=e.target.value;setProcRequestForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Qty</label><input className="form-input" type="number" min="1" value={item.quantity} onChange={e=>{const items=[...procRequestForm.items];items[idx].quantity=e.target.value;setProcRequestForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Unit</label><input className="form-input" value={item.unit} onChange={e=>{const items=[...procRequestForm.items];items[idx].unit=e.target.value;setProcRequestForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Est. Unit Cost</label><input className="form-input" type="number" step="0.01" value={item.estimated_unit_cost} onChange={e=>{const items=[...procRequestForm.items];items[idx].estimated_unit_cost=e.target.value;setProcRequestForm(p=>({...p,items}));}}/></div>
+                      <button type="button" className="btn btn-danger" style={{padding:'6px 10px',fontSize:12}} onClick={()=>{const items=procRequestForm.items.filter((_,i)=>i!==idx);setProcRequestForm(p=>({...p,items:items.length?items:[{item_type:'general',item_name:'',quantity:'1',unit:'each',estimated_unit_cost:'',specification:''}]}));}}>X</button>
+                    </div>
+                  ))}
+                  <button type="button" className="btn btn-secondary" style={{fontSize:12,marginBottom:16}} onClick={()=>setProcRequestForm(p=>({...p,items:[...p.items,{item_type:p.category==='raw_material'?'raw_material':p.category==='consumable'?'consumable':p.category==='machine'?'machine':'general',item_name:'',quantity:'1',unit:'each',estimated_unit_cost:'',specification:''}]}))}>+ Add Item</button>
+
+                  <div><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={procRequestForm.notes} onChange={e=>setProcRequestForm(p=>({...p,notes:e.target.value}))}/></div>
+                  <div style={{marginTop:16,display:'flex',gap:8}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Submitting...':'Submit Request'}</button>
+                    <button type="button" className="btn btn-secondary" onClick={()=>setProcView('dashboard')}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* All Requests List */}
+            {(procView === 'requests' || procView === 'approved') && !procSelectedRequest && (
+              <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>{procView==='approved'?'Approved Requests':'All Purchase Requests'}</h3>
+                <table className="data-table">
+                  <thead><tr><th>Request #</th><th>Title</th><th>Requested By</th><th>Category</th><th>Priority</th><th>Status</th><th>Est. Cost</th><th>Date</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {(procView==='approved'?procRequests.filter(r=>r.status==='approved'):procRequests).map(r => (
+                      <tr key={r.id}>
+                        <td><button className="btn-link" onClick={()=>fetchProcRequestDetail(r.id)}>{r.request_number}</button></td>
+                        <td>{r.title}</td><td>{r.requested_by}</td>
+                        <td style={{textTransform:'capitalize'}}>{r.category.replace('_',' ')}</td>
+                        <td><span style={{padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600,background:r.priority==='urgent'?'#e74c3c':r.priority==='high'?'#f39c12':r.priority==='low'?'#95a5a6':'#3498db',color:'#fff'}}>{r.priority.toUpperCase()}</span></td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:r.status==='submitted'?'#f39c12':r.status==='approved'?'#27ae60':r.status==='rejected'?'#e74c3c':r.status==='ordered'?'#3498db':r.status==='received'?'#2ecc71':'#95a5a6',color:'#fff'}}>{r.status.toUpperCase()}</span></td>
+                        <td>{formatCurrency(r.total_estimated_cost)}</td>
+                        <td>{r.created_at?new Date(r.created_at).toLocaleDateString():''}</td>
+                        <td style={{display:'flex',gap:4}}>
+                          {r.status==='submitted' && <><button className="btn btn-primary" style={{fontSize:11,padding:'4px 8px'}} onClick={()=>approveProcRequest(r.id)}>Approve</button><button className="btn btn-danger" style={{fontSize:11,padding:'4px 8px'}} onClick={()=>rejectProcRequest(r.id)}>Reject</button></>}
+                          {r.status==='approved' && <button className="btn btn-secondary" style={{fontSize:11,padding:'4px 8px'}} onClick={()=>{setProcOrderForm(p=>({...p,vendor_name:r.vendor_name||'',request_id:r.id}));setProcView('newOrder');}}>Create PO</button>}
+                        </td>
+                      </tr>
+                    ))}
+                    {procRequests.length===0 && <tr><td colSpan="9" style={{textAlign:'center',padding:32,color:'#888'}}>No purchase requests found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Request Detail */}
+            {(procView==='requests'||procView==='approved') && procSelectedRequest && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <button className="btn btn-secondary" style={{marginBottom:16}} onClick={()=>setProcSelectedRequest(null)}>Back to List</button>
+                <h3 style={{marginTop:0}}>Request: {procSelectedRequest.request_number}</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:20}}>
+                  <div><strong>Title:</strong> {procSelectedRequest.title}</div>
+                  <div><strong>Requested By:</strong> {procSelectedRequest.requested_by}</div>
+                  <div><strong>Department:</strong> {procSelectedRequest.department}</div>
+                  <div><strong>Category:</strong> <span style={{textTransform:'capitalize'}}>{procSelectedRequest.category.replace('_',' ')}</span></div>
+                  <div><strong>Priority:</strong> {procSelectedRequest.priority}</div>
+                  <div><strong>Status:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:procSelectedRequest.status==='submitted'?'#f39c12':procSelectedRequest.status==='approved'?'#27ae60':procSelectedRequest.status==='rejected'?'#e74c3c':'#3498db',color:'#fff'}}>{procSelectedRequest.status.toUpperCase()}</span></div>
+                  <div><strong>Est. Cost:</strong> {formatCurrency(procSelectedRequest.total_estimated_cost)}</div>
+                  <div><strong>Vendor:</strong> {procSelectedRequest.vendor_name||'N/A'}</div>
+                  <div><strong>Expected Delivery:</strong> {procSelectedRequest.expected_delivery_date||'N/A'}</div>
+                </div>
+                {procSelectedRequest.description && <div style={{marginBottom:12}}><strong>Description:</strong> {procSelectedRequest.description}</div>}
+                {procSelectedRequest.justification && <div style={{marginBottom:12}}><strong>Justification:</strong> {procSelectedRequest.justification}</div>}
+                {procSelectedRequest.rejection_reason && <div style={{marginBottom:12,color:'#e74c3c'}}><strong>Rejection Reason:</strong> {procSelectedRequest.rejection_reason}</div>}
+
+                <h4>Items ({procSelectedRequest.items?.length || 0})</h4>
+                <table className="data-table"><thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Unit</th><th>Est. Unit Cost</th><th>Est. Total</th></tr></thead>
+                <tbody>{(procSelectedRequest.items||[]).map((it,i)=>(
+                  <tr key={i}><td>{it.item_name}</td><td style={{textTransform:'capitalize'}}>{it.item_type}</td><td>{it.quantity}</td><td>{it.unit}</td><td>{formatCurrency(it.estimated_unit_cost)}</td><td>{formatCurrency(it.estimated_total)}</td></tr>
+                ))}</tbody></table>
+
+                {procSelectedRequest.status==='submitted' && (
+                  <div style={{marginTop:16,display:'flex',gap:8}}>
+                    <button className="btn btn-primary" onClick={()=>approveProcRequest(procSelectedRequest.id)}>Approve</button>
+                    <button className="btn btn-danger" onClick={()=>rejectProcRequest(procSelectedRequest.id)}>Reject</button>
+                  </div>
+                )}
+                {procSelectedRequest.status==='approved' && (
+                  <button className="btn btn-primary" style={{marginTop:16}} onClick={()=>{setProcOrderForm(p=>({...p,vendor_name:procSelectedRequest.vendor_name||'',request_id:procSelectedRequest.id}));setProcView('newOrder');}}>Create Purchase Order</button>
+                )}
+              </div>
+            )}
+
+            {/* New Purchase Order Form */}
+            {procView === 'newOrder' && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>New Purchase Order {procOrderForm.request_id && <span style={{fontSize:14,color:'#888'}}>(from approved request)</span>}</h3>
+                <form onSubmit={submitProcOrder}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                    <div><label className="form-label">Vendor Name *</label><input className="form-input" required value={procOrderForm.vendor_name} onChange={e=>setProcOrderForm(p=>({...p,vendor_name:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Contact</label><input className="form-input" value={procOrderForm.vendor_contact} onChange={e=>setProcOrderForm(p=>({...p,vendor_contact:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Phone</label><input className="form-input" value={procOrderForm.vendor_phone} onChange={e=>setProcOrderForm(p=>({...p,vendor_phone:e.target.value}))}/></div>
+                    <div><label className="form-label">Vendor Email</label><input className="form-input" value={procOrderForm.vendor_email} onChange={e=>setProcOrderForm(p=>({...p,vendor_email:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Vendor Address</label><textarea className="form-input" rows={2} value={procOrderForm.vendor_address} onChange={e=>setProcOrderForm(p=>({...p,vendor_address:e.target.value}))}/></div>
+                    <div><label className="form-label">Expected Delivery</label><input className="form-input" type="date" value={procOrderForm.expected_delivery} onChange={e=>setProcOrderForm(p=>({...p,expected_delivery:e.target.value}))}/></div>
+                    <div><label className="form-label">Created By</label><input className="form-input" value={procOrderForm.created_by} onChange={e=>setProcOrderForm(p=>({...p,created_by:e.target.value}))}/></div>
+                    <div><label className="form-label">Tax Amount (NGN)</label><input className="form-input" type="number" step="0.01" value={procOrderForm.tax_amount} onChange={e=>setProcOrderForm(p=>({...p,tax_amount:e.target.value}))}/></div>
+                    <div><label className="form-label">Shipping Cost (NGN)</label><input className="form-input" type="number" step="0.01" value={procOrderForm.shipping_cost} onChange={e=>setProcOrderForm(p=>({...p,shipping_cost:e.target.value}))}/></div>
+                  </div>
+
+                  <h4 style={{marginTop:20}}>Order Items</h4>
+                  {procOrderForm.items.map((item, idx) => (
+                    <div key={idx} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 60px',gap:8,marginBottom:8,alignItems:'end'}}>
+                      <div><label className="form-label" style={{fontSize:11}}>Item Name *</label><input className="form-input" required value={item.item_name} onChange={e=>{const items=[...procOrderForm.items];items[idx].item_name=e.target.value;setProcOrderForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Qty</label><input className="form-input" type="number" min="1" value={item.quantity} onChange={e=>{const items=[...procOrderForm.items];items[idx].quantity=e.target.value;setProcOrderForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Unit</label><input className="form-input" value={item.unit} onChange={e=>{const items=[...procOrderForm.items];items[idx].unit=e.target.value;setProcOrderForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Unit Cost (NGN)</label><input className="form-input" type="number" step="0.01" value={item.unit_cost} onChange={e=>{const items=[...procOrderForm.items];items[idx].unit_cost=e.target.value;setProcOrderForm(p=>({...p,items}));}}/></div>
+                      <button type="button" className="btn btn-danger" style={{padding:'6px 10px',fontSize:12}} onClick={()=>{const items=procOrderForm.items.filter((_,i)=>i!==idx);setProcOrderForm(p=>({...p,items:items.length?items:[{item_type:'general',item_name:'',quantity:'1',unit:'each',unit_cost:'',specification:''}]}));}}>X</button>
+                    </div>
+                  ))}
+                  <button type="button" className="btn btn-secondary" style={{fontSize:12,marginBottom:16}} onClick={()=>setProcOrderForm(p=>({...p,items:[...p.items,{item_type:'general',item_name:'',quantity:'1',unit:'each',unit_cost:'',specification:''}]}))}>+ Add Item</button>
+
+                  <div style={{marginTop:8,padding:12,background:'#f8f9fa',borderRadius:8}}>
+                    <strong>Subtotal: </strong>{formatCurrency(procOrderForm.items.reduce((s,i)=>s+(parseFloat(i.quantity||0)*parseFloat(i.unit_cost||0)),0))}
+                    <strong style={{marginLeft:20}}>+ Tax: </strong>{formatCurrency(procOrderForm.tax_amount||0)}
+                    <strong style={{marginLeft:20}}>+ Shipping: </strong>{formatCurrency(procOrderForm.shipping_cost||0)}
+                    <strong style={{marginLeft:20}}>= Total: </strong>{formatCurrency(procOrderForm.items.reduce((s,i)=>s+(parseFloat(i.quantity||0)*parseFloat(i.unit_cost||0)),0)+parseFloat(procOrderForm.tax_amount||0)+parseFloat(procOrderForm.shipping_cost||0))}
+                  </div>
+
+                  <div><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={procOrderForm.notes} onChange={e=>setProcOrderForm(p=>({...p,notes:e.target.value}))}/></div>
+                  <div style={{marginTop:16,display:'flex',gap:8}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Creating...':'Create Purchase Order'}</button>
+                    <button type="button" className="btn btn-secondary" onClick={()=>setProcView('dashboard')}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Purchase Orders List */}
+            {procView === 'orders' && !procSelectedOrder && (
+              <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>Purchase Orders</h3>
+                <table className="data-table">
+                  <thead><tr><th>PO #</th><th>Vendor</th><th>Status</th><th>Total</th><th>Paid</th><th>Payment</th><th>Order Date</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {procOrders.map(o => (
+                      <tr key={o.id}>
+                        <td><button className="btn-link" onClick={()=>fetchProcOrderDetail(o.id)}>{o.po_number}</button></td>
+                        <td>{o.vendor_name}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:o.status==='ordered'?'#3498db':o.status==='received'?'#27ae60':o.status==='draft'?'#95a5a6':'#f39c12',color:'#fff'}}>{o.status.toUpperCase()}</span></td>
+                        <td>{formatCurrency(o.total_amount)}</td>
+                        <td>{formatCurrency(o.paid_amount)}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:o.payment_status==='paid'?'#27ae60':o.payment_status==='partial'?'#f39c12':'#e74c3c',color:'#fff'}}>{(o.payment_status||'unpaid').toUpperCase()}</span></td>
+                        <td>{o.order_date?new Date(o.order_date).toLocaleDateString():''}</td>
+                        <td style={{display:'flex',gap:4}}>
+                          {o.status==='ordered' && <button className="btn btn-primary" style={{fontSize:11,padding:'4px 8px'}} onClick={()=>receiveProcOrder(o.id)}>Receive</button>}
+                        </td>
+                      </tr>
+                    ))}
+                    {procOrders.length===0 && <tr><td colSpan="8" style={{textAlign:'center',padding:32,color:'#888'}}>No purchase orders found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* PO Detail */}
+            {procView==='orders' && procSelectedOrder && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <button className="btn btn-secondary" style={{marginBottom:16}} onClick={()=>setProcSelectedOrder(null)}>Back to List</button>
+                <h3 style={{marginTop:0}}>PO: {procSelectedOrder.po_number}</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:20}}>
+                  <div><strong>Vendor:</strong> {procSelectedOrder.vendor_name}</div>
+                  <div><strong>Contact:</strong> {procSelectedOrder.vendor_contact||'N/A'}</div>
+                  <div><strong>Phone:</strong> {procSelectedOrder.vendor_phone||'N/A'}</div>
+                  <div><strong>Status:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:procSelectedOrder.status==='ordered'?'#3498db':procSelectedOrder.status==='received'?'#27ae60':'#95a5a6',color:'#fff'}}>{procSelectedOrder.status.toUpperCase()}</span></div>
+                  <div><strong>Payment:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:procSelectedOrder.payment_status==='paid'?'#27ae60':procSelectedOrder.payment_status==='partial'?'#f39c12':'#e74c3c',color:'#fff'}}>{(procSelectedOrder.payment_status||'unpaid').toUpperCase()}</span></div>
+                  <div><strong>Expected Delivery:</strong> {procSelectedOrder.expected_delivery||'N/A'}</div>
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20,textAlign:'center'}}>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Subtotal</div><div style={{fontSize:18,fontWeight:700}}>{formatCurrency(procSelectedOrder.subtotal)}</div></div>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Tax</div><div style={{fontSize:18,fontWeight:700}}>{formatCurrency(procSelectedOrder.tax_amount)}</div></div>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Shipping</div><div style={{fontSize:18,fontWeight:700}}>{formatCurrency(procSelectedOrder.shipping_cost)}</div></div>
+                  <div style={{padding:16,background:'#e8f5e9',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Total</div><div style={{fontSize:18,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(procSelectedOrder.total_amount)}</div></div>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20,textAlign:'center'}}>
+                  <div style={{padding:16,background:'#e8f5e9',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Paid</div><div style={{fontSize:20,fontWeight:700,color:'#27ae60'}}>{formatCurrency(procSelectedOrder.paid_amount)}</div></div>
+                  <div style={{padding:16,background:'#fbe9e7',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Balance</div><div style={{fontSize:20,fontWeight:700,color:'#e74c3c'}}>{formatCurrency((procSelectedOrder.total_amount||0)-(procSelectedOrder.paid_amount||0))}</div></div>
+                </div>
+
+                <h4>Items ({procSelectedOrder.items?.length || 0})</h4>
+                <table className="data-table"><thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Unit</th><th>Unit Cost</th><th>Line Total</th></tr></thead>
+                <tbody>{(procSelectedOrder.items||[]).map((it,i)=>(
+                  <tr key={i}><td>{it.item_name}</td><td style={{textTransform:'capitalize'}}>{it.item_type}</td><td>{it.quantity}</td><td>{it.unit}</td><td>{formatCurrency(it.unit_cost)}</td><td>{formatCurrency(it.line_total)}</td></tr>
+                ))}</tbody></table>
+
+                {/* Payment form */}
+                {procSelectedOrder.payment_status !== 'paid' && (
+                  <div style={{marginTop:20,padding:16,background:'#f8f9fa',borderRadius:8}}>
+                    <h4 style={{marginTop:0}}>Record Payment</h4>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 80px',gap:8,alignItems:'end'}}>
+                      <div><label className="form-label" style={{fontSize:11}}>Amount (NGN)</label><input className="form-input" type="number" step="0.01" value={procPoPayForm.amount} onChange={e=>setProcPoPayForm(p=>({...p,amount:e.target.value}))}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Method</label><select className="form-input" value={procPoPayForm.payment_method} onChange={e=>setProcPoPayForm(p=>({...p,payment_method:e.target.value}))}>
+                        <option value="">Select...</option><option value="bank_transfer">Bank Transfer</option><option value="cash">Cash</option><option value="cheque">Cheque</option><option value="pos">POS</option>
+                      </select></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Reference</label><input className="form-input" value={procPoPayForm.payment_reference} onChange={e=>setProcPoPayForm(p=>({...p,payment_reference:e.target.value}))}/></div>
+                      <button className="btn btn-primary" style={{padding:'8px 12px'}} disabled={loading} onClick={()=>payProcOrder(procSelectedOrder.id)}>{loading?'...':'Pay'}</button>
+                    </div>
+                  </div>
+                )}
+
+                {procSelectedOrder.status==='ordered' && (
+                  <button className="btn btn-primary" style={{marginTop:16}} onClick={()=>receiveProcOrder(procSelectedOrder.id)}>Mark as Received</button>
+                )}
+              </div>
+            )}
+
+            {/* Purchase Invoices */}
+            {procView === 'invoices' && (
+              <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>Purchase Invoices</h3>
+                <table className="data-table">
+                  <thead><tr><th>Invoice #</th><th>PO #</th><th>Vendor</th><th>Category</th><th>Total</th><th>Paid</th><th>Status</th><th>Date</th></tr></thead>
+                  <tbody>
+                    {procInvoices.map(inv => (
+                      <tr key={inv.id}>
+                        <td>{inv.invoice_number}</td><td>{inv.po_number||'N/A'}</td><td>{inv.vendor_name}</td>
+                        <td style={{textTransform:'capitalize'}}>{inv.category}</td>
+                        <td>{formatCurrency(inv.total_amount)}</td><td>{formatCurrency(inv.paid_amount)}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:inv.payment_status==='paid'?'#27ae60':inv.payment_status==='partial'?'#f39c12':'#e74c3c',color:'#fff'}}>{(inv.payment_status||'unpaid').toUpperCase()}</span></td>
+                        <td>{inv.invoice_date}</td>
+                      </tr>
+                    ))}
+                    {procInvoices.length===0 && <tr><td colSpan="8" style={{textAlign:'center',padding:32,color:'#888'}}>No purchase invoices found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Expenses List */}
+            {procView === 'expenses' && (
+              <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>Expense Records</h3>
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                  {['all','procurement','salary','wages','logistics','operational','general'].map(c => (
+                    <button key={c} className={`btn btn-secondary`} style={{fontSize:11,padding:'4px 10px'}} onClick={()=>c==='all'?fetchProcExpenses():fetchProcExpenses(c)}>{c.toUpperCase()}</button>
+                  ))}
+                </div>
+                <table className="data-table">
+                  <thead><tr><th>Expense #</th><th>Category</th><th>Description</th><th>Amount</th><th>Recipient</th><th>Method</th><th>Date</th></tr></thead>
+                  <tbody>
+                    {procExpenses.map(exp => (
+                      <tr key={exp.id}>
+                        <td>{exp.expense_number}</td>
+                        <td style={{textTransform:'capitalize'}}>{exp.category}</td>
+                        <td>{exp.description}</td>
+                        <td style={{fontWeight:600}}>{formatCurrency(exp.amount)}</td>
+                        <td>{exp.recipient||'N/A'}</td>
+                        <td style={{textTransform:'capitalize'}}>{(exp.payment_method||'').replace('_',' ')}</td>
+                        <td>{exp.payment_date}</td>
+                      </tr>
+                    ))}
+                    {procExpenses.length===0 && <tr><td colSpan="7" style={{textAlign:'center',padding:32,color:'#888'}}>No expense records found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Record Expense Form */}
+            {procView === 'newExpense' && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>Record Expense</h3>
+                <form onSubmit={submitProcExpense}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                    <div><label className="form-label">Category *</label>
+                      <select className="form-input" required value={procExpenseForm.category} onChange={e=>setProcExpenseForm(p=>({...p,category:e.target.value}))}>
+                        <option value="general">General</option><option value="procurement">Procurement</option><option value="salary">Salary</option>
+                        <option value="wages">Wages</option><option value="logistics">Logistics</option><option value="operational">Operational</option>
+                        <option value="utilities">Utilities</option><option value="maintenance">Maintenance</option>
+                      </select>
+                    </div>
+                    <div><label className="form-label">Subcategory</label><input className="form-input" value={procExpenseForm.subcategory} onChange={e=>setProcExpenseForm(p=>({...p,subcategory:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Description *</label><textarea className="form-input" rows={2} required value={procExpenseForm.description} onChange={e=>setProcExpenseForm(p=>({...p,description:e.target.value}))}/></div>
+                    <div><label className="form-label">Amount (NGN) *</label><input className="form-input" type="number" step="0.01" required value={procExpenseForm.amount} onChange={e=>setProcExpenseForm(p=>({...p,amount:e.target.value}))}/></div>
+                    <div><label className="form-label">Payment Method</label>
+                      <select className="form-input" value={procExpenseForm.payment_method} onChange={e=>setProcExpenseForm(p=>({...p,payment_method:e.target.value}))}>
+                        <option value="">Select...</option><option value="bank_transfer">Bank Transfer</option><option value="cash">Cash</option><option value="cheque">Cheque</option><option value="pos">POS</option>
+                      </select>
+                    </div>
+                    <div><label className="form-label">Payment Reference</label><input className="form-input" value={procExpenseForm.payment_reference} onChange={e=>setProcExpenseForm(p=>({...p,payment_reference:e.target.value}))}/></div>
+                    <div><label className="form-label">Payment Date</label><input className="form-input" type="date" value={procExpenseForm.payment_date} onChange={e=>setProcExpenseForm(p=>({...p,payment_date:e.target.value}))}/></div>
+                    <div><label className="form-label">Recipient</label><input className="form-input" value={procExpenseForm.recipient} onChange={e=>setProcExpenseForm(p=>({...p,recipient:e.target.value}))}/></div>
+                    <div><label className="form-label">Approved By</label><input className="form-input" value={procExpenseForm.approved_by} onChange={e=>setProcExpenseForm(p=>({...p,approved_by:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={procExpenseForm.notes} onChange={e=>setProcExpenseForm(p=>({...p,notes:e.target.value}))}/></div>
+                  </div>
+                  <div style={{marginTop:16,display:'flex',gap:8}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Recording...':'Record Expense'}</button>
+                    <button type="button" className="btn btn-secondary" onClick={()=>setProcView('expenses')}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ===================== LOGISTICS MODULE ===================== */}
+        {activeModule === 'logistics' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Logistics & Delivery</h2>
+              </div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {['dashboard','newDelivery','deliveries','analytics'].map(v => (
+                  <button key={v} className={`btn ${logView===v?'btn-primary':'btn-secondary'}`} style={{fontSize:12,padding:'6px 12px'}} onClick={()=>setLogView(v)}>
+                    {v==='dashboard'?'Dashboard':v==='newDelivery'?'Log Delivery':v==='deliveries'?'All Deliveries':v==='analytics'?'Analytics':v}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Logistics Dashboard */}
+            {logView === 'dashboard' && logDashboard && (
+              <div>
+                <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:24}}>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Deliveries</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#3498db'}}>{logDashboard.summary?.total_deliveries || 0}</div>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Completed</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#27ae60'}}>{logDashboard.summary?.completed || 0}</div>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Pending / In Transit</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#f39c12'}}>{(logDashboard.summary?.pending||0)+(logDashboard.summary?.in_transit||0)}</div>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Cost</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(logDashboard.summary?.total_logistics_cost || 0)}</div>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Avg. Delivery Cost</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#8e44ad'}}>{formatCurrency(logDashboard.summary?.avg_delivery_cost || 0)}</div>
+                  </div>
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:20}}>
+                  {/* By Officer */}
+                  {logDashboard.by_officer?.length > 0 && (
+                    <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                      <h3 style={{marginTop:0}}>By Sales Officer</h3>
+                      <table className="data-table"><thead><tr><th>Officer</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
+                      <tbody>{logDashboard.by_officer.map((o,i) => (
+                        <tr key={i}><td>{o.sales_officer}</td><td>{o.deliveries}</td><td>{formatCurrency(o.total_cost)}</td></tr>
+                      ))}</tbody></table>
+                    </div>
+                  )}
+
+                  {/* By Location */}
+                  {logDashboard.by_location?.length > 0 && (
+                    <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                      <h3 style={{marginTop:0}}>By Location</h3>
+                      <table className="data-table"><thead><tr><th>Location</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
+                      <tbody>{logDashboard.by_location.map((l,i) => (
+                        <tr key={i}><td>{l.location}</td><td>{l.deliveries}</td><td>{formatCurrency(l.total_cost)}</td></tr>
+                      ))}</tbody></table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Recent deliveries */}
+                {logDashboard.recent_deliveries?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h3 style={{marginTop:0}}>Recent Deliveries</h3>
+                    <table className="data-table"><thead><tr><th>Delivery #</th><th>Officer</th><th>Customer</th><th>Address</th><th>Date</th><th>Cost</th><th>Status</th></tr></thead>
+                    <tbody>{logDashboard.recent_deliveries.map((d,i) => (
+                      <tr key={i}><td>{d.delivery_number}</td><td>{d.sales_officer}</td><td>{d.customer_name}</td><td>{d.delivery_address}</td>
+                      <td>{d.delivery_date}</td><td>{formatCurrency(d.total_cost)}</td>
+                      <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:d.status==='completed'?'#27ae60':d.status==='in_transit'?'#3498db':d.status==='pending'?'#f39c12':'#95a5a6',color:'#fff'}}>{d.status.toUpperCase()}</span></td></tr>
+                    ))}</tbody></table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* New Delivery Form */}
+            {logView === 'newDelivery' && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>Log New Delivery</h3>
+                <form onSubmit={submitLogDelivery}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                    <div><label className="form-label">Sales Officer *</label><input className="form-input" required value={logDeliveryForm.sales_officer} onChange={e=>setLogDeliveryForm(p=>({...p,sales_officer:e.target.value}))}/></div>
+                    <div><label className="form-label">Customer Name *</label><input className="form-input" required value={logDeliveryForm.customer_name} onChange={e=>setLogDeliveryForm(p=>({...p,customer_name:e.target.value}))}/></div>
+                    <div><label className="form-label">Customer Phone</label><input className="form-input" value={logDeliveryForm.customer_phone} onChange={e=>setLogDeliveryForm(p=>({...p,customer_phone:e.target.value}))}/></div>
+                    <div><label className="form-label">Delivery Date *</label><input className="form-input" type="date" required value={logDeliveryForm.delivery_date} onChange={e=>setLogDeliveryForm(p=>({...p,delivery_date:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Delivery Address *</label><textarea className="form-input" rows={2} required value={logDeliveryForm.delivery_address} onChange={e=>setLogDeliveryForm(p=>({...p,delivery_address:e.target.value}))}/></div>
+                    <div><label className="form-label">City</label><input className="form-input" value={logDeliveryForm.city} onChange={e=>setLogDeliveryForm(p=>({...p,city:e.target.value}))}/></div>
+                    <div><label className="form-label">State</label><input className="form-input" value={logDeliveryForm.state} onChange={e=>setLogDeliveryForm(p=>({...p,state:e.target.value}))}/></div>
+                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Landmark</label><input className="form-input" value={logDeliveryForm.landmark} onChange={e=>setLogDeliveryForm(p=>({...p,landmark:e.target.value}))}/></div>
+                    <div><label className="form-label">Departure Time</label><input className="form-input" type="time" value={logDeliveryForm.departure_time} onChange={e=>setLogDeliveryForm(p=>({...p,departure_time:e.target.value}))}/></div>
+                    <div><label className="form-label">Arrival Time</label><input className="form-input" type="time" value={logDeliveryForm.arrival_time} onChange={e=>setLogDeliveryForm(p=>({...p,arrival_time:e.target.value}))}/></div>
+                    <div><label className="form-label">Transport Mode</label>
+                      <select className="form-input" value={logDeliveryForm.transport_mode} onChange={e=>setLogDeliveryForm(p=>({...p,transport_mode:e.target.value}))}>
+                        <option value="vehicle">Vehicle</option><option value="motorcycle">Motorcycle</option><option value="truck">Truck</option><option value="bus">Bus</option><option value="courier">Courier Service</option><option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div><label className="form-label">Vehicle Details</label><input className="form-input" value={logDeliveryForm.vehicle_details} onChange={e=>setLogDeliveryForm(p=>({...p,vehicle_details:e.target.value}))}/></div>
+                    <div><label className="form-label">Driver Name</label><input className="form-input" value={logDeliveryForm.driver_name} onChange={e=>setLogDeliveryForm(p=>({...p,driver_name:e.target.value}))}/></div>
+                    <div><label className="form-label">Driver Phone</label><input className="form-input" value={logDeliveryForm.driver_phone} onChange={e=>setLogDeliveryForm(p=>({...p,driver_phone:e.target.value}))}/></div>
+                    <div><label className="form-label">Transport Cost (NGN) *</label><input className="form-input" type="number" step="0.01" required value={logDeliveryForm.transport_cost} onChange={e=>setLogDeliveryForm(p=>({...p,transport_cost:e.target.value}))}/></div>
+                    <div><label className="form-label">Additional Charges (NGN)</label><input className="form-input" type="number" step="0.01" value={logDeliveryForm.additional_charges} onChange={e=>setLogDeliveryForm(p=>({...p,additional_charges:e.target.value}))}/></div>
+                    <div><label className="form-label">Payment Method</label>
+                      <select className="form-input" value={logDeliveryForm.payment_method} onChange={e=>setLogDeliveryForm(p=>({...p,payment_method:e.target.value}))}>
+                        <option value="">Select...</option><option value="cash">Cash</option><option value="bank_transfer">Bank Transfer</option><option value="pos">POS</option>
+                      </select>
+                    </div>
+                    <div><label className="form-label">Payment Reference</label><input className="form-input" value={logDeliveryForm.payment_reference} onChange={e=>setLogDeliveryForm(p=>({...p,payment_reference:e.target.value}))}/></div>
+                  </div>
+
+                  <h4 style={{marginTop:20}}>Items Delivered</h4>
+                  {logDeliveryForm.items.map((item, idx) => (
+                    <div key={idx} style={{display:'grid',gridTemplateColumns:'2fr 1fr 80px 80px 60px',gap:8,marginBottom:8,alignItems:'end'}}>
+                      <div><label className="form-label" style={{fontSize:11}}>Product Name *</label><input className="form-input" required value={item.product_name} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].product_name=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>SKU</label><input className="form-input" value={item.sku} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].sku=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Qty</label><input className="form-input" type="number" min="1" value={item.quantity} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].quantity=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
+                      <div><label className="form-label" style={{fontSize:11}}>Unit</label><input className="form-input" value={item.unit} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].unit=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
+                      <button type="button" className="btn btn-danger" style={{padding:'6px 10px',fontSize:12}} onClick={()=>{const items=logDeliveryForm.items.filter((_,i)=>i!==idx);setLogDeliveryForm(p=>({...p,items:items.length?items:[{product_name:'',sku:'',quantity:'1',unit:'each',weight_kg:''}]}));}}>X</button>
+                    </div>
+                  ))}
+                  <button type="button" className="btn btn-secondary" style={{fontSize:12,marginBottom:16}} onClick={()=>setLogDeliveryForm(p=>({...p,items:[...p.items,{product_name:'',sku:'',quantity:'1',unit:'each',weight_kg:''}]}))}>+ Add Item</button>
+
+                  <div style={{marginTop:8,padding:12,background:'#f8f9fa',borderRadius:8}}>
+                    <strong>Total Cost: </strong>{formatCurrency(parseFloat(logDeliveryForm.transport_cost||0)+parseFloat(logDeliveryForm.additional_charges||0))}
+                  </div>
+
+                  <div><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={logDeliveryForm.notes} onChange={e=>setLogDeliveryForm(p=>({...p,notes:e.target.value}))}/></div>
+                  <div style={{marginTop:16,display:'flex',gap:8}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Logging...':'Log Delivery'}</button>
+                    <button type="button" className="btn btn-secondary" onClick={()=>setLogView('dashboard')}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* All Deliveries List */}
+            {logView === 'deliveries' && !logSelectedDelivery && (
+              <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <h3 style={{marginTop:0}}>All Deliveries</h3>
+                <table className="data-table">
+                  <thead><tr><th>Delivery #</th><th>Officer</th><th>Customer</th><th>Address</th><th>Date</th><th>Items</th><th>Cost</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {logDeliveries.map(d => (
+                      <tr key={d.id}>
+                        <td><button className="btn-link" onClick={()=>fetchLogDeliveryDetail(d.id)}>{d.delivery_number}</button></td>
+                        <td>{d.sales_officer}</td><td>{d.customer_name}</td>
+                        <td>{d.delivery_address}{d.city?`, ${d.city}`:''}</td>
+                        <td>{d.delivery_date}</td>
+                        <td>{d.item_count}</td>
+                        <td style={{fontWeight:600}}>{formatCurrency(d.total_cost)}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:d.status==='completed'?'#27ae60':d.status==='in_transit'?'#3498db':d.status==='pending'?'#f39c12':'#95a5a6',color:'#fff'}}>{d.status.toUpperCase()}</span></td>
+                      </tr>
+                    ))}
+                    {logDeliveries.length===0 && <tr><td colSpan="8" style={{textAlign:'center',padding:32,color:'#888'}}>No deliveries found</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Delivery Detail */}
+            {logView === 'deliveries' && logSelectedDelivery && (
+              <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                <button className="btn btn-secondary" style={{marginBottom:16}} onClick={()=>setLogSelectedDelivery(null)}>Back to List</button>
+                <h3 style={{marginTop:0}}>Delivery: {logSelectedDelivery.delivery_number}</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:20}}>
+                  <div><strong>Sales Officer:</strong> {logSelectedDelivery.sales_officer}</div>
+                  <div><strong>Customer:</strong> {logSelectedDelivery.customer_name}</div>
+                  <div><strong>Phone:</strong> {logSelectedDelivery.customer_phone||'N/A'}</div>
+                  <div><strong>Delivery Date:</strong> {logSelectedDelivery.delivery_date}</div>
+                  <div><strong>Departure:</strong> {logSelectedDelivery.departure_time||'N/A'}</div>
+                  <div><strong>Arrival:</strong> {logSelectedDelivery.arrival_time||'N/A'}</div>
+                  <div><strong>Transport Mode:</strong> {logSelectedDelivery.transport_mode}</div>
+                  <div><strong>Vehicle:</strong> {logSelectedDelivery.vehicle_details||'N/A'}</div>
+                  <div><strong>Driver:</strong> {logSelectedDelivery.driver_name||'N/A'} {logSelectedDelivery.driver_phone?`(${logSelectedDelivery.driver_phone})`:''}</div>
+                  <div><strong>Status:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:logSelectedDelivery.status==='completed'?'#27ae60':logSelectedDelivery.status==='in_transit'?'#3498db':'#f39c12',color:'#fff'}}>{logSelectedDelivery.status.toUpperCase()}</span></div>
+                </div>
+                <div style={{marginBottom:16}}><strong>Address:</strong> {logSelectedDelivery.delivery_address}{logSelectedDelivery.city?`, ${logSelectedDelivery.city}`:''}{logSelectedDelivery.state?`, ${logSelectedDelivery.state}`:''}{logSelectedDelivery.landmark?` (${logSelectedDelivery.landmark})`:''}</div>
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:20,textAlign:'center'}}>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Transport Cost</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedDelivery.transport_cost)}</div></div>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Additional Charges</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedDelivery.additional_charges)}</div></div>
+                  <div style={{padding:16,background:'#e8f5e9',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Total Cost</div><div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(logSelectedDelivery.total_cost)}</div></div>
+                </div>
+                {logSelectedDelivery.payment_method && <div style={{marginBottom:12}}><strong>Payment:</strong> {logSelectedDelivery.payment_method.replace('_',' ')} {logSelectedDelivery.payment_reference?`(Ref: ${logSelectedDelivery.payment_reference})`:''}</div>}
+                {logSelectedDelivery.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {logSelectedDelivery.notes}</div>}
+
+                <h4>Items Delivered ({logSelectedDelivery.items?.length || 0})</h4>
+                <table className="data-table"><thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Weight (kg)</th></tr></thead>
+                <tbody>{(logSelectedDelivery.items||[]).map((it,i)=>(
+                  <tr key={i}><td>{it.product_name}</td><td>{it.sku||'N/A'}</td><td>{it.quantity}</td><td>{it.unit}</td><td>{it.weight_kg||'N/A'}</td></tr>
+                ))}</tbody></table>
+              </div>
+            )}
+
+            {/* Analytics */}
+            {logView === 'analytics' && logAnalytics && (
+              <div>
+                {/* By Transport Mode */}
+                {logAnalytics.by_transport_mode?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)',marginBottom:20}}>
+                    <h3 style={{marginTop:0}}>By Transport Mode</h3>
+                    <table className="data-table"><thead><tr><th>Mode</th><th>Deliveries</th><th>Total Cost</th><th>Avg Cost</th></tr></thead>
+                    <tbody>{logAnalytics.by_transport_mode.map((m,i)=>(
+                      <tr key={i}><td style={{textTransform:'capitalize'}}>{m.mode}</td><td>{m.count}</td><td>{formatCurrency(m.total)}</td><td>{formatCurrency(m.avg_cost)}</td></tr>
+                    ))}</tbody></table>
+                  </div>
+                )}
+
+                {/* Top Customers */}
+                {logAnalytics.top_customers?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h3 style={{marginTop:0}}>Top Customers by Delivery Cost</h3>
+                    <table className="data-table"><thead><tr><th>Customer</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
+                    <tbody>{logAnalytics.top_customers.map((c,i)=>(
+                      <tr key={i}><td>{c.customer}</td><td>{c.deliveries}</td><td style={{fontWeight:600}}>{formatCurrency(c.total_cost)}</td></tr>
+                    ))}</tbody></table>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
