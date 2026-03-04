@@ -123,6 +123,17 @@ function AppMain({ currentUser = null }) {
   const [hrView, setHrView] = useState('dashboard');
   const [hrPerfDays, setHrPerfDays] = useState(30);
 
+  // Payment Tracking & Debt Reconciliation state
+  const [ptView, setPtView] = useState('dashboard');
+  const [ptReconciliation, setPtReconciliation] = useState(null);
+  const [ptInvoices, setPtInvoices] = useState([]);
+  const [ptDebtors, setPtDebtors] = useState([]);
+  const [ptReminders, setPtReminders] = useState([]);
+  const [ptSelectedInvoice, setPtSelectedInvoice] = useState(null);
+  const [ptSelectedDebtor, setPtSelectedDebtor] = useState(null);
+  const [ptReminderMsg, setPtReminderMsg] = useState(null);
+  const [ptPaymentForm, setPtPaymentForm] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
+
   // Form models
   const [forms, setForms] = useState({
     staff: {
@@ -194,6 +205,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'machinesEquipment') { fetchMachines(); fetchMachinesDashboard(); }
     if (activeModule === 'marketing') { fetchMktDashboard(); fetchMktPlans(); fetchMktLogs(); fetchMktProposals(); fetchMktProducts(); }
     if (activeModule === 'hrCustomerCare') { fetchHrDashboard(); fetchHrStaff(); fetchHrPerformance(); fetchHrProducts(); fetchHrSalesOrders(); fetchHrCustomers(); fetchHrAttendance(); }
+    if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -364,6 +376,57 @@ function AppMain({ currentUser = null }) {
   async function fetchHrProducts() { try { const r = await fetch('/api/hr-customercare/products-catalog'); const d = await r.json(); setHrProductsCatalog(d.items||[]); } catch(e) { console.error(e); }}
   async function fetchHrSalesOrders() { try { const r = await fetch('/api/hr-customercare/sales-orders'); const d = await r.json(); setHrSalesOrders(d.items||[]); } catch(e) { console.error(e); }}
   async function fetchHrCustomers() { try { const r = await fetch('/api/hr-customercare/customers'); const d = await r.json(); setHrCustomers(d.items||[]); } catch(e) { console.error(e); }}
+
+  // ===================== PAYMENT TRACKING =====================
+  async function fetchPtReconciliation() { try { const r = await fetch('/api/payment-tracking/reconciliation'); if(r.ok) setPtReconciliation(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchPtInvoices() { try { const r = await fetch('/api/payment-tracking/invoices'); if(r.ok) { const d = await r.json(); setPtInvoices(d.invoices||[]); } } catch(e) { console.error(e); }}
+  async function fetchPtDebtors() { try { const r = await fetch('/api/payment-tracking/debtors'); if(r.ok) { const d = await r.json(); setPtDebtors(d.debtors||[]); } } catch(e) { console.error(e); }}
+  async function fetchPtReminders() { try { const r = await fetch('/api/payment-tracking/reminders'); if(r.ok) { const d = await r.json(); setPtReminders(d.reminders||[]); } } catch(e) { console.error(e); }}
+  async function fetchPtInvoiceDetail(invoiceId) {
+    try { const r = await fetch(`/api/payment-tracking/invoices/${invoiceId}`); if(r.ok) setPtSelectedInvoice(await r.json()); } catch(e) { console.error(e); }
+  }
+  async function fetchPtDebtorDetail(customerId) {
+    try { const r = await fetch(`/api/payment-tracking/debtors/${customerId}`); if(r.ok) setPtSelectedDebtor(await r.json()); } catch(e) { console.error(e); }
+  }
+  async function createInvoiceFromOrder(orderId) {
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/payment-tracking/invoices/from-order/${orderId}`, { method: 'POST' });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Invoice ${d.invoice_number} created successfully!`, 'success');
+      fetchPtInvoices(); fetchPtReconciliation(); fetchPtDebtors();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function recordPtPayment(invoiceId) {
+    try {
+      setLoading(true);
+      const payload = { ...ptPaymentForm, amount: parseFloat(ptPaymentForm.amount) };
+      if(!payload.amount || payload.amount <= 0) { notify('Enter a valid amount', 'error'); return; }
+      const r = await fetch(`/api/payment-tracking/invoices/${invoiceId}/payments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Payment of ${formatCurrency(payload.amount)} recorded!`, 'success');
+      setPtPaymentForm({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
+      fetchPtInvoiceDetail(invoiceId); fetchPtInvoices(); fetchPtReconciliation(); fetchPtDebtors(); fetchPtReminders();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deletePtPayment(paymentId, invoiceId) {
+    if(!window.confirm('Delete this payment? This will recalculate the invoice balance.')) return;
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/payment-tracking/payments/${paymentId}`, { method: 'DELETE' });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('Payment deleted', 'success');
+      if(invoiceId) fetchPtInvoiceDetail(invoiceId);
+      fetchPtInvoices(); fetchPtReconciliation(); fetchPtDebtors(); fetchPtReminders();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function fetchPtReminderMsg(customerId) {
+    try { const r = await fetch(`/api/payment-tracking/debtors/${customerId}/reminder`); if(r.ok) setPtReminderMsg(await r.json()); } catch(e) { console.error(e); }
+  }
 
   async function fetchFinancialData() {
     try {
@@ -1828,9 +1891,9 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -1909,8 +1972,33 @@ function AppMain({ currentUser = null }) {
                 <button onClick={() => setActiveModule('sales')} className="action-btn">New Sales Order</button>
                 <button onClick={() => setActiveModule('production')} className="action-btn">Production Console</button>
                 <button onClick={() => setActiveModule('attendance')} className="action-btn">Clock In/Out</button>
+                <button onClick={() => setActiveModule('paymentTracking')} className="action-btn" style={{background:'#e74c3c',color:'#fff'}}>Payments & Debt</button>
               </div>
             </div>
+
+            {/* Debtors Overview on Dashboard */}
+            {ptDebtors.length > 0 && (
+              <div style={{background:'#fff',borderRadius:8,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginTop:20}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <h3 style={{margin:0,color:'#e74c3c'}}>Customers Owing ({ptDebtors.length})</h3>
+                  <button className="btn btn-primary" onClick={() => setActiveModule('paymentTracking')} style={{fontSize:12}}>View Full Details</button>
+                </div>
+                <div className="table-responsive"><table className="data-table"><thead><tr><th>Customer</th><th>Phone</th><th>Total Owed</th><th>Total Paid</th><th>Balance</th><th>Overdue</th><th>Action</th></tr></thead><tbody>
+                  {ptDebtors.slice(0, 10).map(d => (
+                    <tr key={d.customer_id} style={{background: d.is_overdue ? '#fff5f5' : '#fff'}}>
+                      <td><strong>{d.customer_name}</strong></td>
+                      <td>{d.phone || '-'}</td>
+                      <td>{formatCurrency(d.total_invoiced)}</td>
+                      <td style={{color:'#27ae60'}}>{formatCurrency(d.total_paid)}</td>
+                      <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(d.balance)}</td>
+                      <td>{d.is_overdue ? <span style={{color:'#e74c3c',fontWeight:600}}>{d.days_overdue} days</span> : <span style={{color:'#27ae60'}}>No</span>}</td>
+                      <td><button className="btn btn-sm btn-secondary" onClick={() => { setActiveModule('paymentTracking'); setPtView('debtorDetail'); fetchPtDebtorDetail(d.customer_id); }}>View</button></td>
+                    </tr>
+                  ))}
+                </tbody></table></div>
+                {ptDebtors.length > 10 && <p style={{textAlign:'center',color:'#888',marginTop:8}}>Showing top 10 of {ptDebtors.length} debtors</p>}
+              </div>
+            )}
           </div>
         )}
 
@@ -2321,12 +2409,18 @@ function AppMain({ currentUser = null }) {
                       <td className="actions">
                         {order.payment_status === 'unpaid' ? (
                           <>
-                            <button onClick={() => markOrderAsPaid(order.id)} className="btn btn-success" title="Mark as Paid & Generate Receipt">💳 Mark Paid</button>
-                            <button onClick={() => downloadInvoice(order.id)} className="btn btn-secondary" title="Download Invoice">📄 Invoice</button>
+                            <button onClick={() => createInvoiceFromOrder(order.id)} className="btn btn-primary" title="Generate Invoice for Payment Tracking" style={{background:'#8e44ad',color:'#fff',border:'none',marginRight:4}}>Generate Invoice</button>
+                            <button onClick={() => markOrderAsPaid(order.id)} className="btn btn-success" title="Mark as Paid & Generate Receipt">Mark Paid</button>
+                            <button onClick={() => downloadInvoice(order.id)} className="btn btn-secondary" title="Download Invoice">Invoice PDF</button>
+                          </>
+                        ) : order.payment_status === 'partial' ? (
+                          <>
+                            <button onClick={() => createInvoiceFromOrder(order.id)} className="btn btn-primary" title="View/Create Invoice" style={{background:'#8e44ad',color:'#fff',border:'none',marginRight:4}}>Track Payments</button>
+                            <button onClick={() => downloadReceipt(order.id)} className="btn btn-primary" title="Download Receipt">Receipt</button>
                           </>
                         ) : (
-                          <button onClick={() => downloadReceipt(order.id)} className="btn btn-primary" title="Download Receipt">🧾 Receipt</button>
-                        )}
+                          <button onClick={() => downloadReceipt(order.id)} className="btn btn-primary" title="Download Receipt">Receipt</button>
+                        )}}
                         <button onClick={() => processOrder(order.id)} className="btn-paid">✅ Process</button>
                       </td>
                     </tr>
@@ -3479,7 +3573,7 @@ function AppMain({ currentUser = null }) {
                       <div className="form-group"><label>Marketer (Staff ID)</label>
                         <select value={mktPlanForm.marketer_staff_id} onChange={e => setMktPlanForm({...mktPlanForm, marketer_staff_id: e.target.value})} required>
                           <option value="">Select Staff</option>
-                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                          {(data.staff||[]).map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
                         </select>
                       </div>
                       <div className="form-group"><label>Week Start</label><input type="date" value={mktPlanForm.week_start} onChange={e => setMktPlanForm({...mktPlanForm, week_start: e.target.value})} required /></div>
@@ -3528,7 +3622,7 @@ function AppMain({ currentUser = null }) {
                       <div className="form-group"><label>Marketer (Staff)</label>
                         <select value={mktLogForm.marketer_staff_id} onChange={e => setMktLogForm({...mktLogForm, marketer_staff_id: e.target.value})} required>
                           <option value="">Select Staff</option>
-                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                          {(data.staff||[]).map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
                         </select>
                       </div>
                       <div className="form-group"><label>Date</label><input type="date" value={mktLogForm.log_date} onChange={e => setMktLogForm({...mktLogForm, log_date: e.target.value})} required /></div>
@@ -3594,7 +3688,7 @@ function AppMain({ currentUser = null }) {
                       <div className="form-group"><label>Marketer (Staff)</label>
                         <select value={mktProposalForm.marketer_staff_id} onChange={e => setMktProposalForm({...mktProposalForm, marketer_staff_id: e.target.value})} required>
                           <option value="">Select Staff</option>
-                          {staffList.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
+                          {(data.staff||[]).map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} ({s.employee_id})</option>)}
                         </select>
                       </div>
                       <div className="form-group"><label>Title</label><input value={mktProposalForm.title} onChange={e => setMktProposalForm({...mktProposalForm, title: e.target.value})} required /></div>
@@ -3826,6 +3920,392 @@ function AppMain({ currentUser = null }) {
                 </tbody></table></div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ===================== PAYMENT TRACKING MODULE ===================== */}
+        {activeModule === 'paymentTracking' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Payments & Debt Reconciliation</h2>
+              </div>
+              <div className="module-actions">
+                {[{k:'dashboard',l:'Dashboard'},{k:'invoices',l:'Invoices'},{k:'debtors',l:'Debtors'},{k:'reminders',l:'Overdue'}].map(v => (
+                  <button key={v.k} className={`btn ${ptView===v.k?'btn-primary':'btn-secondary'}`} onClick={() => setPtView(v.k)} style={{marginRight:6}}>
+                    {v.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* RECONCILIATION DASHBOARD */}
+            {ptView === 'dashboard' && (
+              <div>
+                {ptReconciliation && (
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16,marginBottom:24}}>
+                    <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:28,fontWeight:700,color:'#2c3e50'}}>{ptReconciliation.total_invoices || 0}</div>
+                      <div style={{color:'#888',fontSize:13}}>Total Invoices</div>
+                    </div>
+                    <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:28,fontWeight:700,color:'#3498db'}}>{formatCurrency(ptReconciliation.total_invoiced || 0)}</div>
+                      <div style={{color:'#888',fontSize:13}}>Total Invoiced</div>
+                    </div>
+                    <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:28,fontWeight:700,color:'#27ae60'}}>{formatCurrency(ptReconciliation.total_paid || 0)}</div>
+                      <div style={{color:'#888',fontSize:13}}>Total Collected</div>
+                    </div>
+                    <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:28,fontWeight:700,color:'#e74c3c'}}>{formatCurrency(ptReconciliation.total_outstanding || 0)}</div>
+                      <div style={{color:'#888',fontSize:13}}>Outstanding</div>
+                    </div>
+                    <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:28,fontWeight:700,color:'#f39c12'}}>{(ptReconciliation.collection_rate || 0).toFixed(1)}%</div>
+                      <div style={{color:'#888',fontSize:13}}>Collection Rate</div>
+                    </div>
+                  </div>
+                )}
+
+                <h3 style={{marginBottom:12}}>Top Debtors</h3>
+                {ptDebtors.length === 0 ? (
+                  <div style={{background:'#d4edda',padding:20,borderRadius:8,textAlign:'center',color:'#155724'}}>No outstanding debts! All payments are up to date.</div>
+                ) : (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>Customer</th><th>Phone</th><th>Invoices</th><th>Total Owed</th><th>Total Paid</th><th>Balance</th><th>Overdue</th><th>Actions</th>
+                  </tr></thead><tbody>
+                    {ptDebtors.map(d => (
+                      <tr key={d.customer_id} style={{background: d.is_overdue ? '#fff5f5' : '#fff'}}>
+                        <td><strong>{d.customer_name}</strong></td>
+                        <td>{d.phone || '-'}</td>
+                        <td>{d.invoice_count}</td>
+                        <td>{formatCurrency(d.total_invoiced)}</td>
+                        <td style={{color:'#27ae60'}}>{formatCurrency(d.total_paid)}</td>
+                        <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(d.balance)}</td>
+                        <td>{d.is_overdue ? <span style={{color:'#e74c3c',fontWeight:600}}>{d.days_overdue}d overdue</span> : '-'}</td>
+                        <td>
+                          <button className="btn btn-sm btn-primary" onClick={() => { setPtView('debtorDetail'); fetchPtDebtorDetail(d.customer_id); }} style={{marginRight:4}}>Details</button>
+                          <button className="btn btn-sm btn-secondary" onClick={() => { fetchPtReminderMsg(d.customer_id); setPtView('reminder'); }} style={{background:'#25D366',color:'#fff',border:'none'}}>WhatsApp</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                )}
+              </div>
+            )}
+
+            {/* INVOICES LIST */}
+            {ptView === 'invoices' && (
+              <div>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <h3 style={{margin:0}}>All Invoices ({ptInvoices.length})</h3>
+                </div>
+                {ptInvoices.length === 0 ? (
+                  <div style={{background:'#f8f9fa',padding:30,borderRadius:8,textAlign:'center',color:'#666'}}>
+                    <p>No invoices yet. Generate invoices from the Sales module.</p>
+                    <button className="btn btn-primary" onClick={() => setActiveModule('sales')}>Go to Sales</button>
+                  </div>
+                ) : (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>Invoice #</th><th>Customer</th><th>Order #</th><th>Date</th><th>Due Date</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Actions</th>
+                  </tr></thead><tbody>
+                    {ptInvoices.map(inv => {
+                      const statusColors = { paid: '#27ae60', partial: '#f39c12', pending: '#3498db', overdue: '#e74c3c' };
+                      const displayStatus = inv.is_overdue && inv.status !== 'paid' ? 'overdue' : inv.status;
+                      return (
+                        <tr key={inv.id} style={{background: displayStatus === 'overdue' ? '#fff5f5' : '#fff'}}>
+                          <td><strong>{inv.invoice_number}</strong></td>
+                          <td>{inv.customer_name || '-'}</td>
+                          <td>{inv.order_number || '-'}</td>
+                          <td>{inv.invoice_date}</td>
+                          <td>{inv.due_date}</td>
+                          <td>{formatCurrency(inv.total_amount)}</td>
+                          <td style={{color:'#27ae60'}}>{formatCurrency(inv.total_paid || 0)}</td>
+                          <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(inv.balance || 0)}</td>
+                          <td><span style={{background: statusColors[displayStatus]||'#888', color:'#fff', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600, textTransform:'uppercase'}}>{displayStatus}</span></td>
+                          <td>
+                            <button className="btn btn-sm btn-primary" onClick={() => { setPtView('invoiceDetail'); fetchPtInvoiceDetail(inv.id); }}>View / Pay</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody></table></div>
+                )}
+              </div>
+            )}
+
+            {/* INVOICE DETAIL + PAYMENT */}
+            {ptView === 'invoiceDetail' && ptSelectedInvoice && (
+              <div>
+                <button className="btn btn-secondary" onClick={() => { setPtView('invoices'); setPtSelectedInvoice(null); }} style={{marginBottom:16}}>Back to Invoices</button>
+
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+                  <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)'}}>
+                    <h3 style={{marginTop:0}}>Invoice {ptSelectedInvoice.invoice_number}</h3>
+                    <table style={{width:'100%',fontSize:14}}><tbody>
+                      <tr><td style={{padding:6,color:'#888'}}>Customer</td><td style={{padding:6,fontWeight:600}}>{ptSelectedInvoice.customer_name}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Order #</td><td style={{padding:6}}>{ptSelectedInvoice.order_number || '-'}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Invoice Date</td><td style={{padding:6}}>{ptSelectedInvoice.invoice_date}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Due Date</td><td style={{padding:6,color: ptSelectedInvoice.is_overdue ? '#e74c3c' : 'inherit',fontWeight: ptSelectedInvoice.is_overdue ? 700 : 400}}>{ptSelectedInvoice.due_date} {ptSelectedInvoice.is_overdue && `(${ptSelectedInvoice.days_overdue}d overdue)`}</td></tr>
+                      <tr><td style={{padding:6,color:'#888'}}>Status</td><td style={{padding:6}}><span style={{background: ptSelectedInvoice.status==='paid'?'#27ae60':ptSelectedInvoice.status==='partial'?'#f39c12':'#3498db',color:'#fff',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:600,textTransform:'uppercase'}}>{ptSelectedInvoice.is_overdue && ptSelectedInvoice.status!=='paid' ? 'OVERDUE' : ptSelectedInvoice.status}</span></td></tr>
+                    </tbody></table>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)'}}>
+                    <h3 style={{marginTop:0}}>Payment Summary</h3>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,textAlign:'center'}}>
+                      <div><div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(ptSelectedInvoice.total_amount)}</div><div style={{color:'#888',fontSize:12}}>Total</div></div>
+                      <div><div style={{fontSize:22,fontWeight:700,color:'#27ae60'}}>{formatCurrency(ptSelectedInvoice.total_paid||0)}</div><div style={{color:'#888',fontSize:12}}>Paid</div></div>
+                      <div><div style={{fontSize:22,fontWeight:700,color:'#e74c3c'}}>{formatCurrency(ptSelectedInvoice.balance||0)}</div><div style={{color:'#888',fontSize:12}}>Balance</div></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Invoice Lines */}
+                {ptSelectedInvoice.lines && ptSelectedInvoice.lines.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:20}}>
+                    <h4 style={{marginTop:0}}>Invoice Items</h4>
+                    <table className="data-table"><thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Line Total</th></tr></thead><tbody>
+                      {ptSelectedInvoice.lines.map((l,i) => (
+                        <tr key={i}><td>{l.product_name||'-'}</td><td>{l.quantity}</td><td>{formatCurrency(l.unit_price)}</td><td>{formatCurrency(l.line_total)}</td></tr>
+                      ))}
+                    </tbody></table>
+                  </div>
+                )}
+
+                {/* Payment History */}
+                <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:20}}>
+                  <h4 style={{marginTop:0}}>Payment History</h4>
+                  {(!ptSelectedInvoice.payments || ptSelectedInvoice.payments.length === 0) ? (
+                    <p style={{color:'#888',textAlign:'center',padding:10}}>No payments recorded yet</p>
+                  ) : (
+                    <table className="data-table"><thead><tr><th>#</th><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Running Balance</th><th>Action</th></tr></thead><tbody>
+                      {ptSelectedInvoice.payments.map((p,i) => (
+                        <tr key={p.id}>
+                          <td>{i+1}</td>
+                          <td>{p.payment_date}</td>
+                          <td style={{color:'#27ae60',fontWeight:600}}>{formatCurrency(p.amount)}</td>
+                          <td style={{textTransform:'capitalize'}}>{(p.payment_method||'').replace(/_/g,' ')}</td>
+                          <td>{p.reference || '-'}</td>
+                          <td style={{fontWeight:600}}>{formatCurrency(p.running_balance)}</td>
+                          <td><button className="btn btn-sm" style={{background:'#e74c3c',color:'#fff',border:'none',fontSize:11}} onClick={() => deletePtPayment(p.id, ptSelectedInvoice.id)}>Delete</button></td>
+                        </tr>
+                      ))}
+                    </tbody></table>
+                  )}
+                </div>
+
+                {/* Record Payment Form */}
+                {ptSelectedInvoice.status !== 'paid' && (
+                  <div style={{background:'#f0f7ff',padding:20,borderRadius:8,border:'2px solid #3498db'}}>
+                    <h4 style={{marginTop:0,color:'#2980b9'}}>Record Payment</h4>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
+                      <div>
+                        <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:4}}>Amount *</label>
+                        <input type="number" step="0.01" className="form-control" placeholder={`Max: ${formatCurrency(ptSelectedInvoice.balance||0)}`} value={ptPaymentForm.amount} onChange={e => setPtPaymentForm(f => ({...f, amount: e.target.value}))} />
+                      </div>
+                      <div>
+                        <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:4}}>Payment Method</label>
+                        <select className="form-control" value={ptPaymentForm.payment_method} onChange={e => setPtPaymentForm(f => ({...f, payment_method: e.target.value}))}>
+                          <option value="bank_transfer">Bank Transfer</option>
+                          <option value="cash">Cash</option>
+                          <option value="card">Card</option>
+                          <option value="cheque">Cheque</option>
+                          <option value="mobile_money">Mobile Money</option>
+                          <option value="pos">POS</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:4}}>Payment Date</label>
+                        <input type="date" className="form-control" value={ptPaymentForm.payment_date} onChange={e => setPtPaymentForm(f => ({...f, payment_date: e.target.value}))} />
+                      </div>
+                      <div>
+                        <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:4}}>Reference / Receipt #</label>
+                        <input type="text" className="form-control" placeholder="e.g. TRF-12345" value={ptPaymentForm.reference} onChange={e => setPtPaymentForm(f => ({...f, reference: e.target.value}))} />
+                      </div>
+                      <div>
+                        <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:4}}>Notes</label>
+                        <input type="text" className="form-control" placeholder="Optional notes" value={ptPaymentForm.notes} onChange={e => setPtPaymentForm(f => ({...f, notes: e.target.value}))} />
+                      </div>
+                    </div>
+                    <div style={{marginTop:16,display:'flex',gap:8}}>
+                      <button className="btn btn-primary" onClick={() => recordPtPayment(ptSelectedInvoice.id)} disabled={loading}>
+                        {loading ? 'Recording...' : 'Record Payment'}
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => setPtPaymentForm(f => ({...f, amount: ptSelectedInvoice.balance||0}))}>
+                        Pay Full Balance ({formatCurrency(ptSelectedInvoice.balance||0)})
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* DEBTORS LIST */}
+            {ptView === 'debtors' && (
+              <div>
+                <h3 style={{marginBottom:12}}>All Debtors ({ptDebtors.length})</h3>
+                {ptDebtors.length === 0 ? (
+                  <div style={{background:'#d4edda',padding:20,borderRadius:8,textAlign:'center',color:'#155724'}}>No outstanding debts!</div>
+                ) : (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>Customer</th><th>Phone</th><th>Email</th><th>Invoices</th><th>Total Owed</th><th>Total Paid</th><th>Balance</th><th>Status</th><th>Actions</th>
+                  </tr></thead><tbody>
+                    {ptDebtors.map(d => (
+                      <tr key={d.customer_id} style={{background: d.is_overdue ? '#fff5f5' : '#fff'}}>
+                        <td><strong>{d.customer_name}</strong></td>
+                        <td>{d.phone || '-'}</td>
+                        <td>{d.email || '-'}</td>
+                        <td>{d.invoice_count}</td>
+                        <td>{formatCurrency(d.total_invoiced)}</td>
+                        <td style={{color:'#27ae60'}}>{formatCurrency(d.total_paid)}</td>
+                        <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(d.balance)}</td>
+                        <td>{d.is_overdue ? <span style={{color:'#e74c3c',fontWeight:600}}>OVERDUE ({d.days_overdue}d)</span> : <span style={{color:'#f39c12'}}>Outstanding</span>}</td>
+                        <td style={{whiteSpace:'nowrap'}}>
+                          <button className="btn btn-sm btn-primary" onClick={() => { setPtView('debtorDetail'); fetchPtDebtorDetail(d.customer_id); }} style={{marginRight:4}}>Details</button>
+                          <button className="btn btn-sm" onClick={() => { fetchPtReminderMsg(d.customer_id); setPtView('reminder'); }} style={{background:'#25D366',color:'#fff',border:'none',marginRight:4}}>WhatsApp</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                )}
+              </div>
+            )}
+
+            {/* DEBTOR DETAIL */}
+            {ptView === 'debtorDetail' && ptSelectedDebtor && (
+              <div>
+                <button className="btn btn-secondary" onClick={() => { setPtView('debtors'); setPtSelectedDebtor(null); }} style={{marginBottom:16}}>Back to Debtors</button>
+
+                <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:20}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div>
+                      <h3 style={{margin:0}}>{ptSelectedDebtor.customer?.name || 'Customer'}</h3>
+                      <p style={{margin:'4px 0',color:'#888'}}>{ptSelectedDebtor.customer?.phone || ''} {ptSelectedDebtor.customer?.email ? `| ${ptSelectedDebtor.customer.email}` : ''}</p>
+                    </div>
+                    <button className="btn btn-sm" onClick={() => { fetchPtReminderMsg(ptSelectedDebtor.customer?.id); setPtView('reminder'); }} style={{background:'#25D366',color:'#fff',border:'none',padding:'8px 16px'}}>Send WhatsApp Reminder</button>
+                  </div>
+                </div>
+
+                {ptSelectedDebtor.summary && (
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:20}}>
+                    <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{ptSelectedDebtor.summary.total_invoices}</div><div style={{color:'#888',fontSize:12}}>Invoices</div>
+                    </div>
+                    <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:22,fontWeight:700,color:'#3498db'}}>{formatCurrency(ptSelectedDebtor.summary.total_invoiced)}</div><div style={{color:'#888',fontSize:12}}>Total Invoiced</div>
+                    </div>
+                    <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:22,fontWeight:700,color:'#27ae60'}}>{formatCurrency(ptSelectedDebtor.summary.total_paid)}</div><div style={{color:'#888',fontSize:12}}>Total Paid</div>
+                    </div>
+                    <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                      <div style={{fontSize:22,fontWeight:700,color:'#e74c3c'}}>{formatCurrency(ptSelectedDebtor.summary.outstanding_balance)}</div><div style={{color:'#888',fontSize:12}}>Outstanding</div>
+                    </div>
+                  </div>
+                )}
+
+                <h4>Invoices</h4>
+                {ptSelectedDebtor.invoices && ptSelectedDebtor.invoices.length > 0 ? (
+                  <div className="table-responsive" style={{marginBottom:20}}><table className="data-table"><thead><tr>
+                    <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th>
+                  </tr></thead><tbody>
+                    {ptSelectedDebtor.invoices.map(inv => (
+                      <tr key={inv.id} style={{background: inv.is_overdue ? '#fff5f5' : '#fff'}}>
+                        <td><strong>{inv.invoice_number}</strong></td>
+                        <td>{inv.invoice_date}</td>
+                        <td>{inv.due_date}</td>
+                        <td>{formatCurrency(inv.total_amount)}</td>
+                        <td style={{color:'#27ae60'}}>{formatCurrency(inv.paid_amount||0)}</td>
+                        <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(inv.balance||0)}</td>
+                        <td><span style={{background: inv.is_overdue && inv.status!=='paid' ? '#e74c3c' : inv.status==='paid'?'#27ae60':inv.status==='partial'?'#f39c12':'#3498db', color:'#fff', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600}}>{inv.is_overdue && inv.status!=='paid' ? 'OVERDUE' : inv.status?.toUpperCase()}</span></td>
+                        <td><button className="btn btn-sm btn-primary" onClick={() => { setPtView('invoiceDetail'); fetchPtInvoiceDetail(inv.id); }}>Pay / View</button></td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                ) : <p style={{color:'#888'}}>No invoices found</p>}
+
+                <h4>All Payments</h4>
+                {ptSelectedDebtor.payments && ptSelectedDebtor.payments.length > 0 ? (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>#</th><th>Date</th><th>Invoice #</th><th>Amount</th><th>Method</th><th>Reference</th>
+                  </tr></thead><tbody>
+                    {ptSelectedDebtor.payments.map((p,i) => (
+                      <tr key={p.id}>
+                        <td>{i+1}</td>
+                        <td>{p.payment_date}</td>
+                        <td>{p.invoice_number||'-'}</td>
+                        <td style={{color:'#27ae60',fontWeight:600}}>{formatCurrency(p.amount)}</td>
+                        <td style={{textTransform:'capitalize'}}>{(p.payment_method||'').replace(/_/g,' ')}</td>
+                        <td>{p.reference || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                ) : <p style={{color:'#888'}}>No payments recorded</p>}
+              </div>
+            )}
+
+            {/* OVERDUE REMINDERS */}
+            {ptView === 'reminders' && (
+              <div>
+                <h3 style={{marginBottom:12}}>Overdue Reminders ({ptReminders.length})</h3>
+                {ptReminders.length === 0 ? (
+                  <div style={{background:'#d4edda',padding:20,borderRadius:8,textAlign:'center',color:'#155724'}}>No overdue invoices! All payments are current.</div>
+                ) : (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>Customer</th><th>Invoice #</th><th>Due Date</th><th>Days Overdue</th><th>Balance</th><th>Action</th>
+                  </tr></thead><tbody>
+                    {ptReminders.map(r => (
+                      <tr key={r.invoice_id} style={{background:'#fff5f5'}}>
+                        <td><strong>{r.customer_name}</strong></td>
+                        <td>{r.invoice_number}</td>
+                        <td>{r.due_date}</td>
+                        <td style={{color:'#e74c3c',fontWeight:600}}>{r.days_overdue} days</td>
+                        <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(r.balance)}</td>
+                        <td style={{whiteSpace:'nowrap'}}>
+                          <button className="btn btn-sm btn-primary" onClick={() => { setPtView('invoiceDetail'); fetchPtInvoiceDetail(r.invoice_id); }} style={{marginRight:4}}>Pay</button>
+                          <button className="btn btn-sm" onClick={() => { fetchPtReminderMsg(r.customer_id); setPtView('reminder'); }} style={{background:'#25D366',color:'#fff',border:'none'}}>WhatsApp</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                )}
+              </div>
+            )}
+
+            {/* WHATSAPP REMINDER */}
+            {ptView === 'reminder' && ptReminderMsg && (
+              <div>
+                <button className="btn btn-secondary" onClick={() => setPtView('debtors')} style={{marginBottom:16}}>Back to Debtors</button>
+
+                <div style={{background:'#fff',padding:24,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',maxWidth:700}}>
+                  <h3 style={{marginTop:0}}>WhatsApp Reminder for {ptReminderMsg.customer_name}</h3>
+                  <div style={{background:'#e8f5e9',padding:16,borderRadius:8,marginBottom:16,fontFamily:'monospace',whiteSpace:'pre-wrap',fontSize:13,lineHeight:1.6,border:'1px solid #c8e6c9'}}>
+                    {ptReminderMsg.message}
+                  </div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                    {ptReminderMsg.whatsapp_url && (
+                      <a href={ptReminderMsg.whatsapp_url} target="_blank" rel="noopener noreferrer" className="btn" style={{background:'#25D366',color:'#fff',border:'none',padding:'10px 24px',textDecoration:'none',borderRadius:6,fontWeight:600}}>
+                        Open WhatsApp
+                      </a>
+                    )}
+                    <button className="btn btn-secondary" onClick={() => { navigator.clipboard.writeText(ptReminderMsg.message); notify('Message copied to clipboard!', 'success'); }}>
+                      Copy Message
+                    </button>
+                  </div>
+                  {ptReminderMsg.summary && (
+                    <div style={{marginTop:20,padding:16,background:'#f8f9fa',borderRadius:8}}>
+                      <h4 style={{marginTop:0}}>Debt Summary</h4>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,textAlign:'center'}}>
+                        <div><strong style={{color:'#3498db'}}>{formatCurrency(ptReminderMsg.summary.total_invoiced)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Total Owed</span></div>
+                        <div><strong style={{color:'#27ae60'}}>{formatCurrency(ptReminderMsg.summary.total_paid)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Total Paid</span></div>
+                        <div><strong style={{color:'#e74c3c'}}>{formatCurrency(ptReminderMsg.summary.outstanding_balance)}</strong><br /><span style={{fontSize:12,color:'#888'}}>Balance</span></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
           </div>
         )}
 
