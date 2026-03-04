@@ -16,9 +16,9 @@ from app.db import get_session
 
 router = APIRouter(prefix="/api/procurement", tags=["Procurement"])
 
-# ─── ENSURE TABLES ──────────────────────────────────────────────────────────
-CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS purchase_requests (
+# ─── ENSURE TABLES (each statement executed separately for asyncpg) ──────────
+TABLE_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS purchase_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     request_number VARCHAR(64) UNIQUE NOT NULL,
     requested_by VARCHAR(255) NOT NULL,
@@ -41,9 +41,8 @@ CREATE TABLE IF NOT EXISTS purchase_requests (
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS purchase_request_items (
+)""",
+    """CREATE TABLE IF NOT EXISTS purchase_request_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     request_id UUID NOT NULL REFERENCES purchase_requests(id) ON DELETE CASCADE,
     item_type VARCHAR(50) NOT NULL DEFAULT 'general',
@@ -58,9 +57,8 @@ CREATE TABLE IF NOT EXISTS purchase_request_items (
     actual_total NUMERIC(18,2),
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS purchase_orders (
+)""",
+    """CREATE TABLE IF NOT EXISTS purchase_orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     po_number VARCHAR(64) UNIQUE NOT NULL,
     request_id UUID REFERENCES purchase_requests(id),
@@ -86,9 +84,8 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     created_by VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS purchase_order_items (
+)""",
+    """CREATE TABLE IF NOT EXISTS purchase_order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     po_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
     item_type VARCHAR(50) NOT NULL DEFAULT 'general',
@@ -102,9 +99,8 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
     received_qty NUMERIC(18,6) DEFAULT 0,
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS purchase_invoices (
+)""",
+    """CREATE TABLE IF NOT EXISTS purchase_invoices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     invoice_number VARCHAR(100) NOT NULL,
     po_id UUID REFERENCES purchase_orders(id),
@@ -121,9 +117,8 @@ CREATE TABLE IF NOT EXISTS purchase_invoices (
     description TEXT,
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS expense_records (
+)""",
+    """CREATE TABLE IF NOT EXISTS expense_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     expense_number VARCHAR(64) UNIQUE NOT NULL,
     category VARCHAR(50) NOT NULL,
@@ -140,24 +135,25 @@ CREATE TABLE IF NOT EXISTS expense_records (
     staff_id UUID,
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_pr_status ON purchase_requests(status);
-CREATE INDEX IF NOT EXISTS idx_pr_category ON purchase_requests(category);
-CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status);
-CREATE INDEX IF NOT EXISTS idx_po_payment ON purchase_orders(payment_status);
-CREATE INDEX IF NOT EXISTS idx_pi_payment ON purchase_invoices(payment_status);
-CREATE INDEX IF NOT EXISTS idx_exp_category ON expense_records(category);
-CREATE INDEX IF NOT EXISTS idx_exp_date ON expense_records(payment_date);
-"""
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_pr_status ON purchase_requests(status)",
+    "CREATE INDEX IF NOT EXISTS idx_pr_category ON purchase_requests(category)",
+    "CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status)",
+    "CREATE INDEX IF NOT EXISTS idx_po_payment ON purchase_orders(payment_status)",
+    "CREATE INDEX IF NOT EXISTS idx_pi_payment ON purchase_invoices(payment_status)",
+    "CREATE INDEX IF NOT EXISTS idx_exp_category ON expense_records(category)",
+    "CREATE INDEX IF NOT EXISTS idx_exp_date ON expense_records(payment_date)",
+]
 
 
 @router.on_event("startup")
 async def init_procurement_tables():
     from app.db import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
-        await session.execute(text(CREATE_TABLES_SQL))
+        for stmt in TABLE_STATEMENTS:
+            await session.execute(text(stmt))
         await session.commit()
+        print("Procurement tables ready")
         print("Procurement tables ready")
 
 

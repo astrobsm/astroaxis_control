@@ -14,8 +14,8 @@ from app.db import get_session
 
 router = APIRouter(prefix="/api/logistics", tags=["Logistics"])
 
-CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS logistics_deliveries (
+TABLE_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS logistics_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     delivery_number VARCHAR(64) UNIQUE NOT NULL,
     sales_order_id UUID,
@@ -43,9 +43,8 @@ CREATE TABLE IF NOT EXISTS logistics_deliveries (
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS logistics_delivery_items (
+)""",
+    """CREATE TABLE IF NOT EXISTS logistics_delivery_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     delivery_id UUID NOT NULL REFERENCES logistics_deliveries(id) ON DELETE CASCADE,
     product_id UUID,
@@ -56,20 +55,20 @@ CREATE TABLE IF NOT EXISTS logistics_delivery_items (
     weight_kg NUMERIC(10,3),
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_ld_officer ON logistics_deliveries(sales_officer);
-CREATE INDEX IF NOT EXISTS idx_ld_date ON logistics_deliveries(delivery_date);
-CREATE INDEX IF NOT EXISTS idx_ld_status ON logistics_deliveries(status);
-CREATE INDEX IF NOT EXISTS idx_ld_customer ON logistics_deliveries(customer_name);
-"""
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_ld_officer ON logistics_deliveries(sales_officer)",
+    "CREATE INDEX IF NOT EXISTS idx_ld_date ON logistics_deliveries(delivery_date)",
+    "CREATE INDEX IF NOT EXISTS idx_ld_status ON logistics_deliveries(status)",
+    "CREATE INDEX IF NOT EXISTS idx_ld_customer ON logistics_deliveries(customer_name)",
+]
 
 
 @router.on_event("startup")
 async def init_logistics_tables():
     from app.db import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
-        await session.execute(text(CREATE_TABLES_SQL))
+        for stmt in TABLE_STATEMENTS:
+            await session.execute(text(stmt))
         await session.commit()
         print("Logistics tables ready")
 
