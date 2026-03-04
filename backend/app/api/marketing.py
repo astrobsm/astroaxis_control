@@ -115,15 +115,47 @@ async def marketer_dashboard(session: AsyncSession = Depends(get_session)):
         "SELECT COUNT(*), COALESCE(SUM(orders_generated),0), COALESCE(SUM(order_value),0) FROM marketing_daily_logs WHERE log_date >= :ws AND log_date <= :today"
     ), {"ws": week_start, "today": today})
     row = r5.fetchone()
+
+    # Unique customers contacted this week
+    r6 = await session.execute(text(
+        "SELECT COUNT(DISTINCT customer_contacted) FROM marketing_daily_logs WHERE log_date >= :ws AND log_date <= :today AND customer_contacted IS NOT NULL AND customer_contacted != ''"
+    ), {"ws": week_start, "today": today})
+    customers_contacted = r6.scalar_one()
+
+    # Samples given this week
+    r7 = await session.execute(text(
+        "SELECT COALESCE(SUM(samples_distributed),0) FROM marketing_daily_logs WHERE log_date >= :ws AND log_date <= :today"
+    ), {"ws": week_start, "today": today})
+    samples_given = r7.scalar_one()
+
+    # Recent logs (last 5)
+    r8 = await session.execute(text("""
+        SELECT ml.*, s.first_name || ' ' || s.last_name as marketer_name
+        FROM marketing_daily_logs ml
+        LEFT JOIN staff s ON ml.marketer_staff_id = s.id
+        ORDER BY ml.log_date DESC, ml.created_at DESC LIMIT 5
+    """))
+    recent_logs = []
+    for rl in r8.fetchall():
+        recent_logs.append({
+            "log_date": str(rl.log_date), "marketer_name": rl.marketer_name or '',
+            "location_visited": rl.location_visited or '', "customer_contacted": rl.customer_contacted or '',
+            "outcome": rl.outcome or '', "orders_generated": rl.orders_generated or 0,
+        })
     
     return {
         "active_plans": active_plans,
         "today_logs": today_logs,
         "active_proposals": active_proposals,
         "pending_followups": pending_followups,
-        "week_logs_count": row[0],
-        "week_orders_generated": row[1],
-        "week_order_value": float(row[2]),
+        "week_stats": {
+            "total_logs": row[0],
+            "total_orders": row[1],
+            "total_order_value": float(row[2]),
+            "customers_contacted": customers_contacted,
+            "samples_given": samples_given,
+        },
+        "recent_logs": recent_logs,
     }
 
 
@@ -439,8 +471,10 @@ async def delete_proposal(proposal_id: str, session: AsyncSession = Depends(get_
 async def view_products_catalog(session: AsyncSession = Depends(get_session)):
     """Read-only product catalog with pricing for marketers."""
     result = await session.execute(text("""
-        SELECT p.id, p.name, p.sku, p.description, p.category,
-            pp.unit, pp.selling_price, pp.wholesale_price, pp.distributor_price
+        SELECT p.id, p.name, p.sku, p.description, p.manufacturer,
+            p.unit as product_unit, p.selling_price as p_selling, p.retail_price as p_retail,
+            p.wholesale_price as p_wholesale,
+            pp.unit as pp_unit, pp.retail_price as pp_retail, pp.wholesale_price as pp_wholesale
         FROM products p
         LEFT JOIN product_pricing pp ON p.id = pp.product_id
         ORDER BY p.name
@@ -450,15 +484,17 @@ async def view_products_catalog(session: AsyncSession = Depends(get_session)):
         pid = str(r.id)
         if pid not in products:
             products[pid] = {
-                "id": pid, "name": r.name, "sku": r.sku or '',
-                "description": r.description or '', "category": r.category or '',
+                "id": pid, "product_name": r.name, "sku": r.sku or '',
+                "description": r.description or '', "category": r.manufacturer or '',
+                "selling_price": float(r.p_selling or r.p_retail or 0),
+                "wholesale_price": float(r.p_wholesale or 0),
+                "unit_of_measure": r.product_unit or '',
                 "pricing": []
             }
-        if r.unit:
+        if r.pp_unit:
             products[pid]["pricing"].append({
-                "unit": r.unit,
-                "selling_price": float(r.selling_price or 0),
-                "wholesale_price": float(r.wholesale_price or 0),
-                "distributor_price": float(r.distributor_price or 0),
+                "unit": r.pp_unit,
+                "retail_price": float(r.pp_retail or 0),
+                "wholesale_price": float(r.pp_wholesale or 0),
             })
     return {"items": list(products.values()), "total": len(products)}

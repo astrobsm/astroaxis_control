@@ -32,7 +32,7 @@ async def hr_dashboard(session: AsyncSession = Depends(get_session)):
 
     # Today's attendance
     r2 = await session.execute(text(
-        "SELECT COUNT(DISTINCT staff_id) FROM attendance WHERE date = :today"
+        "SELECT COUNT(DISTINCT staff_id) FROM attendance WHERE DATE(clock_in) = :today"
     ), {"today": today})
     today_attendance = r2.scalar_one()
 
@@ -57,25 +57,32 @@ async def hr_dashboard(session: AsyncSession = Depends(get_session)):
     ))
     pending_orders = r6.scalar_one()
 
-    # Upcoming birthdays (7 days)
+    # Upcoming birthdays (14 days) - return list
     r7 = await session.execute(text("""
-        SELECT COUNT(*) FROM staff 
+        SELECT first_name, last_name, date_of_birth, position FROM staff 
         WHERE date_of_birth IS NOT NULL 
         AND (
             (EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM CURRENT_DATE) 
              AND EXTRACT(DAY FROM date_of_birth) >= EXTRACT(DAY FROM CURRENT_DATE)
-             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE) + 7)
+             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE) + 14)
             OR
-            (EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '7 days')
-             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '7 days'))
+            (EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '14 days')
+             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '14 days'))
         )
+        ORDER BY EXTRACT(MONTH FROM date_of_birth), EXTRACT(DAY FROM date_of_birth)
     """))
-    upcoming_birthdays = r7.scalar_one()
+    upcoming_birthdays = []
+    for b in r7.fetchall():
+        upcoming_birthdays.append({
+            "first_name": b.first_name, "last_name": b.last_name,
+            "date_of_birth": str(b.date_of_birth) if b.date_of_birth else '',
+            "position": b.position or 'Staff',
+        })
 
     return {
         "total_staff": total_staff,
         "active_staff": int(active_staff),
-        "today_attendance": today_attendance,
+        "active_today": today_attendance,
         "total_products": total_products,
         "total_customers": total_customers,
         "month_orders": orders_row[0],
@@ -118,18 +125,18 @@ async def staff_performance(days: int = Query(30, ge=1, le=365), session: AsyncS
     
     result = await session.execute(text("""
         SELECT s.id, s.employee_id, s.first_name, s.last_name, s.position,
-            COUNT(DISTINCT a.date) as days_present,
+            COUNT(DISTINCT DATE(a.clock_in)) as days_present,
             COALESCE(SUM(
                 CASE WHEN a.clock_out IS NOT NULL THEN 
                     EXTRACT(EPOCH FROM (a.clock_out - a.clock_in)) / 3600.0 
                     ELSE 0 END
             ), 0) as total_hours,
-            (SELECT COUNT(*) FROM production_completions pc 
-             WHERE pc.staff_id = s.id AND pc.production_date >= :since) as production_tasks,
-            (SELECT COALESCE(SUM(pc.total_cost), 0) FROM production_completions pc 
-             WHERE pc.staff_id = s.id AND pc.production_date >= :since) as production_value
+            (SELECT COUNT(*) FROM production_labor_logs pl 
+             WHERE pl.staff_id = s.id AND pl.work_date >= :since) as production_tasks,
+            (SELECT COALESCE(SUM(pl.total_cost), 0) FROM production_labor_logs pl 
+             WHERE pl.staff_id = s.id AND pl.work_date >= :since) as production_value
         FROM staff s
-        LEFT JOIN attendance a ON s.id = a.staff_id AND a.date >= :since
+        LEFT JOIN attendance a ON s.id = a.staff_id AND DATE(a.clock_in) >= :since
         WHERE s.is_active = true
         GROUP BY s.id, s.employee_id, s.first_name, s.last_name, s.position
         ORDER BY days_present DESC, total_hours DESC
@@ -139,7 +146,9 @@ async def staff_performance(days: int = Query(30, ge=1, le=365), session: AsyncS
     for r in result.fetchall():
         items.append({
             "id": str(r.id), "employee_id": r.employee_id,
+            "first_name": r.first_name, "last_name": r.last_name,
             "name": f"{r.first_name} {r.last_name}", "position": r.position or '',
+            "staff_id": str(r.id),
             "days_present": r.days_present,
             "total_hours": round(float(r.total_hours), 2),
             "production_tasks": r.production_tasks,
@@ -156,21 +165,23 @@ async def attendance_log(days: int = Query(7, ge=1, le=90), session: AsyncSessio
     """Recent attendance records for HR review."""
     since = date.today() - timedelta(days=days)
     result = await session.execute(text("""
-        SELECT a.*, s.first_name, s.last_name, s.employee_id
+        SELECT a.id, a.staff_id, a.clock_in, a.clock_out, a.hours_worked,
+               s.first_name, s.last_name, s.employee_id
         FROM attendance a
         JOIN staff s ON a.staff_id = s.id
-        WHERE a.date >= :since
-        ORDER BY a.date DESC, a.clock_in DESC
+        WHERE DATE(a.clock_in) >= :since
+        ORDER BY a.clock_in DESC
     """), {"since": since})
     items = []
     for r in result.fetchall():
-        hours = 0
-        if r.clock_out:
+        hours = float(r.hours_worked) if r.hours_worked else 0
+        if not hours and r.clock_out:
             hours = round((r.clock_out - r.clock_in).total_seconds() / 3600, 2)
         items.append({
             "id": str(r.id), "employee_id": r.employee_id,
+            "first_name": r.first_name, "last_name": r.last_name,
             "name": f"{r.first_name} {r.last_name}",
-            "date": str(r.date),
+            "date": str(r.clock_in.date()) if r.clock_in else '',
             "clock_in": str(r.clock_in) if r.clock_in else '',
             "clock_out": str(r.clock_out) if r.clock_out else 'Still working',
             "hours_worked": hours,
@@ -184,8 +195,11 @@ async def attendance_log(days: int = Query(7, ge=1, le=90), session: AsyncSessio
 async def view_products(session: AsyncSession = Depends(get_session)):
     """Read-only product catalog with pricing for HR/Customer Care."""
     result = await session.execute(text("""
-        SELECT p.id, p.name, p.sku, p.description, p.category,
-            pp.unit, pp.selling_price, pp.wholesale_price, pp.distributor_price
+        SELECT p.id, p.name, p.sku, p.description, p.manufacturer,
+            p.unit as product_unit, p.cost_price as p_cost, p.selling_price as p_selling,
+            p.retail_price as p_retail, p.wholesale_price as p_wholesale,
+            pp.unit as pp_unit, pp.cost_price as pp_cost, pp.retail_price as pp_retail,
+            pp.wholesale_price as pp_wholesale
         FROM products p
         LEFT JOIN product_pricing pp ON p.id = pp.product_id
         ORDER BY p.name
@@ -196,15 +210,18 @@ async def view_products(session: AsyncSession = Depends(get_session)):
         if pid not in products:
             products[pid] = {
                 "id": pid, "name": r.name, "sku": r.sku or '',
-                "description": r.description or '', "category": r.category or '',
+                "description": r.description or '', "category": r.manufacturer or '',
+                "cost_price": float(r.p_cost or 0),
+                "selling_price": float(r.p_selling or r.p_retail or 0),
+                "wholesale_price": float(r.p_wholesale or 0),
                 "pricing": []
             }
-        if r.unit:
+        if r.pp_unit:
             products[pid]["pricing"].append({
-                "unit": r.unit,
-                "selling_price": float(r.selling_price or 0),
-                "wholesale_price": float(r.wholesale_price or 0),
-                "distributor_price": float(r.distributor_price or 0),
+                "unit": r.pp_unit,
+                "cost_price": float(r.pp_cost or 0),
+                "retail_price": float(r.pp_retail or 0),
+                "wholesale_price": float(r.pp_wholesale or 0),
             })
     return {"items": list(products.values()), "total": len(products)}
 
