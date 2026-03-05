@@ -135,15 +135,38 @@ async def create_customer(
     customer_data: CustomerCreate,
     session: AsyncSession = Depends(get_session)
 ):
-    """Create a new customer"""
+    """Create a new customer with auto-generated customer code"""
     try:
-        customer = Customer(**customer_data.model_dump())
+        data_dict = customer_data.model_dump()
+        
+        # Auto-generate customer_code if not provided
+        if not data_dict.get('customer_code'):
+            # Find the highest existing customer code number
+            result = await session.execute(
+                select(Customer.customer_code).where(
+                    Customer.customer_code.like('CUST-%')
+                ).order_by(Customer.customer_code.desc())
+            )
+            last_code = result.scalar()
+            if last_code:
+                try:
+                    last_num = int(last_code.replace('CUST-', ''))
+                    next_num = last_num + 1
+                except ValueError:
+                    # Fallback: count all customers
+                    count_result = await session.execute(select(func.count(Customer.id)))
+                    next_num = (count_result.scalar() or 0) + 1
+            else:
+                next_num = 1
+            data_dict['customer_code'] = f'CUST-{next_num:04d}'
+        
+        customer = Customer(**data_dict)
         session.add(customer)
         await session.commit()
         await session.refresh(customer)
         
         return ApiResponse(
-            message=f"Customer '{customer.name}' created successfully",
+            message=f"Customer '{customer.name}' created successfully (Code: {customer.customer_code})",
             data=CustomerSchema.model_validate(customer)
         )
     except Exception as e:

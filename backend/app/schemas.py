@@ -198,7 +198,7 @@ class ApiResponse(BaseModel):
 
 # Sales Schemas
 class CustomerBase(BaseModel):
-    customer_code: str = Field(..., max_length=32)
+    customer_code: Optional[str] = Field(None, max_length=32)
     name: str = Field(..., max_length=255)
     email: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(None, max_length=50)

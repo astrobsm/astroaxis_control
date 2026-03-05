@@ -359,10 +359,12 @@ function AppMain({ currentUser = null }) {
 
   async function fetchUpcomingBirthdays() {
     try {
-      const res = await fetch('/api/staff/birthdays/upcoming?days_ahead=7');
+      const res = await fetch('/api/staff/birthdays/upcoming?days_ahead=30');
       if (res.ok) {
-        const birthdays = await res.json();
-        setUpcomingBirthdays(birthdays || []);
+        const result = await res.json();
+        // Backend returns {success, count, birthdays: [...]} - extract the array
+        const birthdayList = Array.isArray(result) ? result : (result.birthdays || []);
+        setUpcomingBirthdays(birthdayList);
       }
     } catch (e) {
       console.error('Error fetching birthdays:', e);
@@ -2323,25 +2325,28 @@ function AppMain({ currentUser = null }) {
             
             {/* Birthday Notifications */}
             {upcomingBirthdays.length > 0 && (
-              <div className="birthday-notifications">
-                <h3>‚ Upcoming Birthdays</h3>
-                {upcomingBirthdays.map(birthday => (
-                  <div key={birthday.staff_id} className={`birthday-card ${birthday.is_today ? 'birthday-today' : ''}`}>
-                    {birthday.is_today ? (
-                      <div className="birthday-message">
-                        <span className="birthday-icon">‰</span>
-                        <strong>Happy Birthday, {birthday.first_name} {birthday.last_name}!</strong>
-                        <span className="birthday-age">Turning {birthday.age_turning} today</span>
+              <div className="birthday-notifications" style={{background:'linear-gradient(135deg,#fff9e6 0%,#fff3cd 100%)',borderRadius:12,padding:20,marginBottom:20,border:'1px solid #ffc107'}}>
+                <h3 style={{margin:'0 0 12px 0',color:'#856404',fontSize:18}}>Upcoming Birthdays ({upcomingBirthdays.length})</h3>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}}>
+                  {upcomingBirthdays.map(birthday => (
+                    <div key={birthday.id || birthday.employee_id} className={`birthday-card ${birthday.is_today ? 'birthday-today' : ''}`} style={{background:birthday.is_today?'linear-gradient(135deg,#ff6b6b,#ee5a24)':'#fff',borderRadius:10,padding:14,boxShadow:'0 2px 8px rgba(0,0,0,0.08)',display:'flex',alignItems:'center',gap:12,color:birthday.is_today?'#fff':'#333'}}>
+                      <div style={{fontSize:32,lineHeight:1}}>{birthday.is_today ? '🎉' : '🎂'}</div>
+                      <div>
+                        {birthday.is_today ? (
+                          <>
+                            <div style={{fontWeight:700,fontSize:15}}>Happy Birthday, {birthday.first_name} {birthday.last_name}!</div>
+                            <div style={{fontSize:13,opacity:0.9}}>Turning {birthday.age_turning} today</div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{fontWeight:700,fontSize:15}}>{birthday.first_name} {birthday.last_name}</div>
+                            <div style={{fontSize:13,color:'#666'}}>Birthday in {birthday.days_until} day{birthday.days_until > 1 ? 's' : ''} &middot; Age {birthday.age_turning}</div>
+                          </>
+                        )}
                       </div>
-                    ) : (
-                      <div className="birthday-message">
-                        <span className="birthday-icon">‚</span>
-                        <strong>{birthday.first_name} {birthday.last_name}</strong>
-                        <span className="birthday-date">Birthday in {birthday.days_until} day{birthday.days_until > 1 ? 's' : ''} (Age {birthday.age_turning})</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             
@@ -3369,6 +3374,20 @@ function AppMain({ currentUser = null }) {
                       </div>
                     </div>
                   </div>
+                  {/* Birthday list inside Workforce card */}
+                  {upcomingBirthdays.length > 0 && (
+                    <div style={{marginTop:12,borderTop:'1px solid #eee',paddingTop:12}}>
+                      <div style={{fontWeight:600,fontSize:13,marginBottom:8,color:'#856404'}}>Upcoming Birthdays:</div>
+                      {upcomingBirthdays.slice(0,5).map(b => (
+                        <div key={b.id || b.employee_id} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 0',fontSize:13}}>
+                          <span>{b.is_today ? '🎉' : '🎂'}</span>
+                          <span style={{fontWeight:600}}>{b.first_name} {b.last_name}</span>
+                          <span style={{color:'#888',marginLeft:'auto'}}>{b.is_today ? 'Today!' : `in ${b.days_until} day${b.days_until>1?'s':''}`}</span>
+                        </div>
+                      ))}
+                      {upcomingBirthdays.length > 5 && <div style={{fontSize:12,color:'#888',marginTop:4}}>+{upcomingBirthdays.length-5} more</div>}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -6424,14 +6443,15 @@ function AppMain({ currentUser = null }) {
                 <form onSubmit={(e)=>{e.preventDefault(); saveItem('customer','/api/sales/customers');}}>
                   <div className="form-row">
                     <div className="form-group">
-                      <label>Customer Code *</label>
+                      <label>Customer Code</label>
                       <input 
-                        value={forms.customer.customer_code} 
+                        value={forms.customer.customer_code || ''} 
                         onChange={(e)=>handleFormChange('customer','customer_code',e.target.value)} 
-                        required 
-                        placeholder="e.g., CUST-001"
+                        placeholder="Auto-generated (e.g., CUST-0001)"
                         maxLength="32"
+                        style={{background:'#f8f9fa',color:'#6c757d',fontStyle: forms.customer.customer_code ? 'normal' : 'italic'}}
                       />
+                      <small style={{color:'#888',fontSize:11}}>Leave blank for auto-generation</small>
                     </div>
                     <div className="form-group">
                       <label>Customer Name *</label>
