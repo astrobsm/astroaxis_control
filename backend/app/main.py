@@ -64,7 +64,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers
     
     app.include_router(auth.router)
     app.include_router(permissions.router)
@@ -90,8 +90,9 @@ try:
     app.include_router(payment_tracking.router)
     app.include_router(procurement.router)
     app.include_router(logistics.router)
+    app.include_router(warehouse_transfers.router)
     
-    print("All routers loaded including procurement, logistics")
+    print("All routers loaded including procurement, logistics, warehouse_transfers")
 except ImportError as e:
     print(f"❌ Module import failed: {e}")
 except Exception as e:

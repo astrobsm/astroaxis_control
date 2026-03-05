@@ -560,6 +560,25 @@ class UserModuleAccess(Base):
     updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
     __table_args__ = (sa.UniqueConstraint('user_id', 'module_key', name='uq_user_module'),)
 
+class WarehouseTransfer(Base):
+    __tablename__ = 'warehouse_transfers'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    transfer_number = sa.Column(sa.String(64), unique=True, nullable=False, index=True)
+    from_warehouse_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('warehouses.id'), nullable=False, index=True)
+    to_warehouse_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('warehouses.id'), nullable=False, index=True)
+    product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'), nullable=False, index=True)
+    quantity = sa.Column(sa.Numeric(18,6), nullable=False)
+    reason = sa.Column(sa.Text, nullable=False)  # e.g. restock sales, production surplus, customer demand
+    status = sa.Column(sa.String(32), nullable=False, default='completed')  # completed, cancelled
+    notes = sa.Column(sa.Text)
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    # Relationships
+    from_warehouse = relationship("Warehouse", foreign_keys=[from_warehouse_id])
+    to_warehouse = relationship("Warehouse", foreign_keys=[to_warehouse_id])
+    product = relationship("Product", foreign_keys=[product_id])
+
 class CustomField(Base):
     __tablename__ = 'custom_fields'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

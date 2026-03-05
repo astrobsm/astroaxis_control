@@ -181,6 +181,13 @@ function AppMain({ currentUser = null }) {
   const [maLoading, setMaLoading] = useState(false);
   const [maSaving, setMaSaving] = useState({});
 
+  // Transfer Module state
+  const [transfersList, setTransfersList] = useState([]);
+  const [transferSummary, setTransferSummary] = useState({ total_transfers: 0, total_quantity_moved: 0, today_transfers: 0 });
+  const [transferForm, setTransferForm] = useState({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', quantity: '', reason: '', notes: '' });
+  const [showTransferForm, setShowTransferForm] = useState(false);
+  const [transferLoading, setTransferLoading] = useState(false);
+
   // Logistics Module state
   const [logView, setLogView] = useState('dashboard');
   const [logDashboard, setLogDashboard] = useState(null);
@@ -322,6 +329,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); }
     if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
     if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogDeliveries(); fetchLogAnalytics(); }
+    if (activeModule === 'transfers') { fetchTransfers(); fetchTransferSummary(); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -472,6 +480,16 @@ function AppMain({ currentUser = null }) {
       notify(d.message, 'success');
     } catch(e) { notify(e.message, 'error'); }
     finally { setMaSaving(prev => ({...prev, [userId]: false})); }
+  }
+
+  // ===== TRANSFER FETCHERS =====
+  async function fetchTransfers() {
+    try { const r = await fetch('/api/transfers/'); const d = await r.json(); setTransfersList(Array.isArray(d) ? d : []); }
+    catch(e) { console.error('fetchTransfers error', e); }
+  }
+  async function fetchTransferSummary() {
+    try { const r = await fetch('/api/transfers/summary'); const d = await r.json(); setTransferSummary(d); }
+    catch(e) { console.error('fetchTransferSummary error', e); }
   }
 
   // ===== MARKETING FETCHERS =====
@@ -2214,7 +2232,7 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
             // Admin always sees everything
             if (!currentUser || currentUser.role === 'admin') return true;
             // Dashboard always visible
@@ -2225,7 +2243,7 @@ function AppMain({ currentUser = null }) {
             return false;
           }).map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -2881,10 +2899,11 @@ function AppMain({ currentUser = null }) {
                 <tbody>
                   {(data.sales||[]).map(order => {
                     const warehouse = (data.warehouses||[]).find(w => w.id === order.warehouse_id);
+                    const customer = (data.customers||[]).find(c => c.id === order.customer_id);
                     return (
                     <tr key={order.id}>
                       <td>{order.order_number || `#${order.id.substring(0,8)}`}</td>
-                      <td>{order.customer_name || order.customer_id}</td>
+                      <td>{order.customer_name || (customer ? customer.name : order.customer_id)}</td>
                       <td>{warehouse ? warehouse.name : 'N/A'}</td>
                       <td>{formatCurrency(order.total_amount)}</td>
                       <td><span className={`status ${order.status}`}>{order.status}</span></td>
@@ -2908,6 +2927,164 @@ function AppMain({ currentUser = null }) {
                       </td>
                     </tr>
                   )})}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Warehouse Transfers */}
+        {activeModule === 'transfers' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Warehouse Transfers</h2>
+              </div>
+              <button onClick={() => { setShowTransferForm(true); setTransferForm({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', quantity: '', reason: '', notes: '' }); }} className="btn btn-primary">New Transfer</button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="stats-cards" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16,marginBottom:24}}>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#667eea 0%,#764ba2 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{transferSummary.total_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Transfers</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{transferSummary.total_quantity_moved.toLocaleString()}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Units Moved</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#f093fb 0%,#f5576c 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{transferSummary.today_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Today's Transfers</div>
+              </div>
+            </div>
+
+            {/* Transfer Form Modal */}
+            {showTransferForm && (
+              <div className="modal-overlay">
+                <div className="modal" style={{maxWidth:600}}>
+                  <div className="modal-header">
+                    <div className="modal-header-left"><img src="/company-logo.png" alt="AstroBSM" className="modal-logo" onError={(e) => { e.target.style.display = 'none'; }}/><h3>New Warehouse Transfer</h3></div>
+                    <button className="modal-close" onClick={() => setShowTransferForm(false)}>x</button>
+                  </div>
+                  <div className="modal-content">
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      setTransferLoading(true);
+                      try {
+                        const token = localStorage.getItem('access_token');
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (token) headers['Authorization'] = `Bearer ${token}`;
+                        const res = await fetch('/api/transfers/', {
+                          method: 'POST', headers,
+                          body: JSON.stringify({
+                            from_warehouse_id: transferForm.from_warehouse_id,
+                            to_warehouse_id: transferForm.to_warehouse_id,
+                            product_id: transferForm.product_id,
+                            quantity: parseFloat(transferForm.quantity),
+                            reason: transferForm.reason,
+                            notes: transferForm.notes || null
+                          })
+                        });
+                        const d = await res.json();
+                        if (!res.ok) throw new Error(d.detail || 'Transfer failed');
+                        notify(d.message, 'success');
+                        setShowTransferForm(false);
+                        fetchTransfers();
+                        fetchTransferSummary();
+                      } catch (err) { notify(err.message, 'error'); }
+                      finally { setTransferLoading(false); }
+                    }}>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Source Warehouse *</label>
+                          <select value={transferForm.from_warehouse_id} onChange={(e) => setTransferForm(f => ({...f, from_warehouse_id: e.target.value}))} required>
+                            <option value="">Select source warehouse</option>
+                            {(data.warehouses||[]).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Destination Warehouse *</label>
+                          <select value={transferForm.to_warehouse_id} onChange={(e) => setTransferForm(f => ({...f, to_warehouse_id: e.target.value}))} required>
+                            <option value="">Select destination warehouse</option>
+                            {(data.warehouses||[]).filter(w => w.id !== transferForm.from_warehouse_id).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Product *</label>
+                          <select value={transferForm.product_id} onChange={(e) => setTransferForm(f => ({...f, product_id: e.target.value}))} required>
+                            <option value="">Select product</option>
+                            {(data.products||[]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Quantity *</label>
+                          <input type="number" step="0.01" min="0.01" value={transferForm.quantity} onChange={(e) => setTransferForm(f => ({...f, quantity: e.target.value}))} required placeholder="Enter quantity"/>
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label>Reason for Transfer *</label>
+                        <select value={transferForm.reason} onChange={(e) => setTransferForm(f => ({...f, reason: e.target.value}))} required>
+                          <option value="">Select reason</option>
+                          <option value="Restock Sales Warehouse">Restock Sales Warehouse</option>
+                          <option value="Production Surplus">Production Surplus</option>
+                          <option value="Customer Demand">Customer Demand</option>
+                          <option value="Warehouse Consolidation">Warehouse Consolidation</option>
+                          <option value="Stock Rebalancing">Stock Rebalancing</option>
+                          <option value="Quality Control Move">Quality Control Move</option>
+                          <option value="Other">Other (specify in notes)</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Notes</label>
+                        <textarea rows="2" value={transferForm.notes} onChange={(e) => setTransferForm(f => ({...f, notes: e.target.value}))} placeholder="Optional additional details..."/>
+                      </div>
+                      <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={() => setShowTransferForm(false)}>Cancel</button>
+                        <button type="submit" className="btn btn-primary" disabled={transferLoading}>{transferLoading ? 'Processing...' : 'Complete Transfer'}</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Transfers Table */}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Transfer #</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Reason</th>
+                    <th>By</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transfersList.map(t => (
+                    <tr key={t.id}>
+                      <td style={{fontWeight:600,color:'#667eea'}}>{t.transfer_number}</td>
+                      <td>{t.from_warehouse_name}</td>
+                      <td>{t.to_warehouse_name}</td>
+                      <td>{t.product_name} <span style={{fontSize:10,color:'#999'}}>({t.product_sku})</span></td>
+                      <td style={{fontWeight:600}}>{t.quantity.toLocaleString()}</td>
+                      <td><span style={{background:'#e8f5e9',color:'#2e7d32',padding:'2px 8px',borderRadius:12,fontSize:11}}>{t.reason}</span></td>
+                      <td>{t.created_by_name || 'System'}</td>
+                      <td>{t.created_at ? new Date(t.created_at).toLocaleDateString() : 'N/A'}</td>
+                      <td><span className={`status ${t.status}`}>{t.status}</span></td>
+                    </tr>
+                  ))}
+                  {transfersList.length === 0 && (
+                    <tr><td colSpan="9" style={{textAlign:'center',padding:30,color:'#aaa'}}>No transfers yet. Click "New Transfer" to move products between warehouses.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -5781,9 +5958,9 @@ function AppMain({ currentUser = null }) {
                         <tr style={{background:'#f1f3f5'}}>
                           <th style={{padding:'10px 8px',textAlign:'left',position:'sticky',left:0,background:'#f1f3f5',zIndex:2,minWidth:180,borderBottom:'2px solid #dee2e6'}}>User</th>
                           <th style={{padding:'10px 4px',textAlign:'center',fontSize:10,borderBottom:'2px solid #dee2e6',minWidth:30}} title="Select All">All</th>
-                          {['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(mod => (
+                          {['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(mod => (
                             <th key={mod} style={{padding:'10px 4px',textAlign:'center',fontSize:9,textTransform:'uppercase',letterSpacing:0.3,borderBottom:'2px solid #dee2e6',minWidth:65,whiteSpace:'nowrap'}}>
-                              {mod === 'rawMaterials' ? 'Raw Mat.' : mod === 'stockManagement' ? 'Stock Mgt' : mod === 'productionCompletions' ? 'Prod.Comp' : mod === 'machinesEquipment' ? 'Machines' : mod === 'paymentTracking' ? 'Pay & Debt' : mod === 'hrCustomerCare' ? 'HR/CustCare' : mod === 'userManagement' ? 'User Mgt' : mod.charAt(0).toUpperCase() + mod.slice(1)}
+                              {mod === 'rawMaterials' ? 'Raw Mat.' : mod === 'stockManagement' ? 'Stock Mgt' : mod === 'productionCompletions' ? 'Prod.Comp' : mod === 'machinesEquipment' ? 'Machines' : mod === 'transfers' ? 'Transfers' : mod === 'paymentTracking' ? 'Pay & Debt' : mod === 'hrCustomerCare' ? 'HR/CustCare' : mod === 'userManagement' ? 'User Mgt' : mod.charAt(0).toUpperCase() + mod.slice(1)}
                             </th>
                           ))}
                           <th style={{padding:'10px 8px',borderBottom:'2px solid #dee2e6'}}>Save</th>
@@ -5792,7 +5969,7 @@ function AppMain({ currentUser = null }) {
                       <tbody>
                         {moduleAccessData.filter(u => u.is_active).map((u, idx) => {
                           const isAdmin = u.role === 'admin';
-                          const mods = ['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'];
+                          const mods = ['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'];
                           const allChecked = mods.every(m => u.modules[m]);
                           return (
                             <tr key={u.user_id} style={{background: idx%2===0?'#fff':'#fafbfc', opacity: isAdmin ? 0.6 : 1}}>
@@ -6238,7 +6415,7 @@ function AppMain({ currentUser = null }) {
                   </div>
                   <div className="form-row">
                     <div className="form-group">
-                      <label>Warehouse *</label>
+                      <label>Warehouse * <span style={{fontSize:10,color:'#888'}}>(Sales orders use Sales Warehouse only)</span></label>
                       <select
                         value={forms.salesOrder.warehouse_id}
                         onChange={(e)=>handleFormChange('salesOrder','warehouse_id',e.target.value)}
@@ -6246,7 +6423,11 @@ function AppMain({ currentUser = null }) {
                         disabled={!accessibleWarehouses.length}
                       >
                         <option value="">{accessibleWarehouses.length ? 'Select warehouse' : 'No warehouses assigned'}</option>
-                        {accessibleWarehouses.map((w)=>(<option key={w.id} value={w.id}>{w.name}</option>))}
+                        {accessibleWarehouses.filter(w => {
+                          // Non-admin can only create sales orders from Sales Warehouse
+                          if (currentUser && currentUser.role === 'admin') return true;
+                          return w.name && w.name.toUpperCase().includes('SALES');
+                        }).map((w)=>(<option key={w.id} value={w.id}>{w.name}</option>))}
                       </select>
                       {!accessibleWarehouses.length && (
                         <small style={{ color: 'var(--danger)', display: 'block', marginTop: '0.5rem' }}>

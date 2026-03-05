@@ -650,7 +650,7 @@ async def admin_reset_password(user_id: UUID, db: AsyncSession = Depends(get_ses
 ALL_MODULES = [
     'dashboard', 'staff', 'attendance', 'products', 'rawMaterials',
     'stockManagement', 'production', 'productionCompletions', 'consumables',
-    'machinesEquipment', 'sales', 'paymentTracking', 'procurement',
+    'machinesEquipment', 'transfers', 'sales', 'paymentTracking', 'procurement',
     'logistics', 'marketing', 'hrCustomerCare', 'reports', 'financial',
     'userManagement', 'settings'
 ]
@@ -660,12 +660,12 @@ MODULE_LABELS = {
     'products': 'Products', 'rawMaterials': 'Raw Materials',
     'stockManagement': 'Stock Management', 'production': 'Production',
     'productionCompletions': 'Prod. Completions', 'consumables': 'Consumables',
-    'machinesEquipment': 'Machines & Equipment', 'sales': 'Sales',
-    'paymentTracking': 'Payments & Debt', 'procurement': 'Procurement',
-    'logistics': 'Logistics', 'marketing': 'Marketer',
-    'hrCustomerCare': 'HR / Customer Care', 'reports': 'Reports',
-    'financial': 'Financial', 'userManagement': 'User Management',
-    'settings': 'Settings'
+    'machinesEquipment': 'Machines & Equipment', 'transfers': 'Transfers',
+    'sales': 'Sales', 'paymentTracking': 'Payments & Debt',
+    'procurement': 'Procurement', 'logistics': 'Logistics',
+    'marketing': 'Marketer', 'hrCustomerCare': 'HR / Customer Care',
+    'reports': 'Reports', 'financial': 'Financial',
+    'userManagement': 'User Management', 'settings': 'Settings'
 }
 
 
