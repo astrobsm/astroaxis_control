@@ -2298,10 +2298,8 @@ function AppMain({ currentUser = null }) {
                           } else {
                             const retail = Number(p.retail_price || p.selling_price || 0);
                             const wholesale = Number(p.wholesale_price || p.selling_price || 0);
-                            const distributor = Number(p.selling_price || 0);
                             text += `  Retail: NGN ${retail.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
                             text += `  Wholesale: NGN ${wholesale.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
-                            text += `  Distributor: NGN ${distributor.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
                           }
                           text += '\n';
                         });
@@ -2323,7 +2321,7 @@ function AppMain({ currentUser = null }) {
                               text += ` | Per ${pr.unit}: Retail NGN ${Number(pr.retail_price||0).toLocaleString()} / Wholesale NGN ${Number(pr.wholesale_price||0).toLocaleString()}`;
                             });
                           } else {
-                            text += ` | Retail: NGN ${Number(p.retail_price||p.selling_price||0).toLocaleString()} | Wholesale: NGN ${Number(p.wholesale_price||p.selling_price||0).toLocaleString()} | Distributor: NGN ${Number(p.selling_price||0).toLocaleString()}`;
+                            text += ` | Retail: NGN ${Number(p.retail_price||p.selling_price||0).toLocaleString()} | Wholesale: NGN ${Number(p.wholesale_price||p.selling_price||0).toLocaleString()}`;
                           }
                           text += '\n';
                         });
@@ -2351,7 +2349,6 @@ function AppMain({ currentUser = null }) {
                           <th style={{padding:'10px 8px',color:'#fff',textAlign:'left',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Unit</th>
                           <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Retail Price</th>
                           <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Wholesale Price</th>
-                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Distributor Price</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2369,7 +2366,6 @@ function AppMain({ currentUser = null }) {
                                     <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#666'}}>{pr.unit}</td>
                                     <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#e74c3c'}}>{formatCurrency(pr.retail_price)}</td>
                                     <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#f39c12'}}>{formatCurrency(pr.wholesale_price)}</td>
-                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#3498db'}}>{formatCurrency(pr.cost_price || pr.wholesale_price)}</td>
                                   </tr>
                                 );
                               });
@@ -2382,7 +2378,6 @@ function AppMain({ currentUser = null }) {
                                   <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#666'}}>{p.unit || 'each'}</td>
                                   <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#e74c3c'}}>{formatCurrency(p.retail_price || p.selling_price)}</td>
                                   <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#f39c12'}}>{formatCurrency(p.wholesale_price || p.selling_price)}</td>
-                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#3498db'}}>{formatCurrency(p.selling_price)}</td>
                                 </tr>
                               );
                             }
