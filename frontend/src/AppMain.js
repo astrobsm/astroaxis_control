@@ -128,6 +128,9 @@ function AppMain({ currentUser = null }) {
   const [hrView, setHrView] = useState('dashboard');
   const [hrPerfDays, setHrPerfDays] = useState(30);
 
+  // Price List state
+  const [showPriceList, setShowPriceList] = useState(false);
+
   // Payment Tracking & Debt Reconciliation state
   const [ptView, setPtView] = useState('dashboard');
   const [ptReconciliation, setPtReconciliation] = useState(null);
@@ -2242,8 +2245,161 @@ function AppMain({ currentUser = null }) {
                 <button onClick={() => setActiveModule('production')} className="action-btn">Production Console</button>
                 <button onClick={() => setActiveModule('attendance')} className="action-btn">Clock In/Out</button>
                 <button onClick={() => setActiveModule('paymentTracking')} className="action-btn" style={{background:'#e74c3c',color:'#fff'}}>Payments & Debt</button>
+                <button onClick={() => setShowPriceList(true)} className="action-btn" style={{background:'#2ecc71',color:'#fff',fontWeight:700,fontSize:14}}>Product Price List</button>
               </div>
             </div>
+
+            {/* ===================== PRODUCT PRICE LIST OVERLAY ===================== */}
+            {showPriceList && (
+              <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:10000,display:'flex',justifyContent:'center',alignItems:'flex-start',overflowY:'auto',padding:'20px 0'}}>
+                <div style={{background:'#fff',width:'100%',maxWidth:900,borderRadius:12,boxShadow:'0 8px 32px rgba(0,0,0,0.3)',margin:'auto'}}>
+                  {/* Action Bar */}
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 24px',borderBottom:'1px solid #eee',position:'sticky',top:0,background:'#fff',borderRadius:'12px 12px 0 0',zIndex:1}} className="price-list-no-print">
+                    <h3 style={{margin:0,fontSize:18,color:'#2c3e50'}}>Product Price List</h3>
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <button onClick={() => {
+                        const printArea = document.getElementById('price-list-printable');
+                        if (!printArea) return;
+                        const win = window.open('', '_blank');
+                        win.document.write(`<!DOCTYPE html><html><head><title>Bonnesante Medicals - Product Price List</title><style>
+                          @page { size: A4 portrait; margin: 15mm; }
+                          * { margin:0; padding:0; box-sizing:border-box; }
+                          body { font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; padding: 0; }
+                          .header { text-align:center; padding:20px 0 15px; border-bottom:3px solid #2ecc71; margin-bottom:15px; }
+                          .header img { height:60px; margin-bottom:8px; }
+                          .header h1 { font-size:20px; color:#2c3e50; margin:4px 0; }
+                          .header p { font-size:11px; color:#888; }
+                          table { width:100%; border-collapse:collapse; font-size:11px; }
+                          th { background:#2ecc71; color:#fff; padding:8px 6px; text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }
+                          td { padding:7px 6px; border-bottom:1px solid #eee; }
+                          tr:nth-child(even) { background:#f9fafb; }
+                          .price { font-weight:600; color:#2c3e50; }
+                          .footer { text-align:center; margin-top:20px; padding-top:15px; border-top:2px solid #eee; font-size:10px; color:#888; }
+                          .footer strong { color:#2c3e50; }
+                        </style></head><body>` + printArea.innerHTML + `</body></html>`);
+                        win.document.close();
+                        setTimeout(() => { win.print(); win.close(); }, 500);
+                      }} className="btn" style={{background:'#3498db',color:'#fff',border:'none',padding:'8px 16px',borderRadius:6,fontWeight:600,cursor:'pointer'}}>Print / Save PDF</button>
+                      <button onClick={() => {
+                        let text = '*BONNESANTE MEDICALS - PRODUCT PRICE LIST*\n';
+                        text += `Date: ${new Date().toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'})}\n`;
+                        text += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+                        const sortedProducts = [...(data.products||[])].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+                        sortedProducts.forEach((p, i) => {
+                          text += `*${i+1}. ${p.name}*`;
+                          if (p.sku) text += ` (${p.sku})`;
+                          text += '\n';
+                          if (p.pricing && p.pricing.length > 0) {
+                            p.pricing.forEach(pr => {
+                              text += `  Per ${pr.unit}:\n`;
+                              text += `    Retail: NGN ${Number(pr.retail_price||0).toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
+                              text += `    Wholesale: NGN ${Number(pr.wholesale_price||0).toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
+                            });
+                          } else {
+                            const retail = Number(p.retail_price || p.selling_price || 0);
+                            const wholesale = Number(p.wholesale_price || p.selling_price || 0);
+                            const distributor = Number(p.selling_price || 0);
+                            text += `  Retail: NGN ${retail.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
+                            text += `  Wholesale: NGN ${wholesale.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
+                            text += `  Distributor: NGN ${distributor.toLocaleString(undefined,{minimumFractionDigits:2})}\n`;
+                          }
+                          text += '\n';
+                        });
+                        text += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+                        text += '*Bonnesante Medicals*\n';
+                        text += 'Tel: +234 707 679 3866 | +234 901 283 5413\n';
+                        text += 'Prices subject to change without notice.';
+                        const encoded = encodeURIComponent(text);
+                        window.open(`https://wa.me/?text=${encoded}`, '_blank');
+                      }} className="btn" style={{background:'#25D366',color:'#fff',border:'none',padding:'8px 16px',borderRadius:6,fontWeight:600,cursor:'pointer'}}>Share on WhatsApp</button>
+                      <button onClick={() => {
+                        let text = 'BONNESANTE MEDICALS - PRODUCT PRICE LIST\n';
+                        text += `Date: ${new Date().toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'})}\n\n`;
+                        const sortedProducts = [...(data.products||[])].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+                        sortedProducts.forEach((p, i) => {
+                          text += `${i+1}. ${p.name}`;
+                          if (p.pricing && p.pricing.length > 0) {
+                            p.pricing.forEach(pr => {
+                              text += ` | Per ${pr.unit}: Retail NGN ${Number(pr.retail_price||0).toLocaleString()} / Wholesale NGN ${Number(pr.wholesale_price||0).toLocaleString()}`;
+                            });
+                          } else {
+                            text += ` | Retail: NGN ${Number(p.retail_price||p.selling_price||0).toLocaleString()} | Wholesale: NGN ${Number(p.wholesale_price||p.selling_price||0).toLocaleString()} | Distributor: NGN ${Number(p.selling_price||0).toLocaleString()}`;
+                          }
+                          text += '\n';
+                        });
+                        navigator.clipboard.writeText(text);
+                        notify('Price list copied to clipboard!', 'success');
+                      }} className="btn btn-secondary" style={{padding:'8px 16px',borderRadius:6,fontWeight:600}}>Copy Text</button>
+                      <button onClick={() => setShowPriceList(false)} className="btn" style={{background:'#e74c3c',color:'#fff',border:'none',padding:'8px 16px',borderRadius:6,fontWeight:600,cursor:'pointer'}}>Close</button>
+                    </div>
+                  </div>
+
+                  {/* Printable Content */}
+                  <div id="price-list-printable" style={{padding:'24px'}}>
+                    <div className="header" style={{textAlign:'center',paddingBottom:16,borderBottom:'3px solid #2ecc71',marginBottom:20}}>
+                      <img src="/company-logo.png" alt="" style={{height:60,marginBottom:8}} onError={(e)=>{e.target.style.display='none';}} />
+                      <h1 style={{fontSize:22,color:'#2c3e50',margin:'4px 0'}}>Bonnesante Medicals</h1>
+                      <p style={{fontSize:14,color:'#2ecc71',fontWeight:600,margin:'2px 0'}}>PRODUCT PRICE LIST</p>
+                      <p style={{fontSize:11,color:'#888'}}>Effective Date: {new Date().toLocaleDateString('en-NG', {day:'2-digit', month:'long', year:'numeric'})} | Prices in Nigerian Naira (NGN)</p>
+                    </div>
+
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                      <thead>
+                        <tr style={{background:'#2ecc71'}}>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'left',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>#</th>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'left',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Product</th>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'left',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Unit</th>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Retail Price</th>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Wholesale Price</th>
+                          <th style={{padding:'10px 8px',color:'#fff',textAlign:'right',fontSize:11,textTransform:'uppercase',letterSpacing:0.5,borderBottom:'2px solid #27ae60'}}>Distributor Price</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const sortedProducts = [...(data.products||[])].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+                          let rowNum = 0;
+                          return sortedProducts.map((p, idx) => {
+                            if (p.pricing && p.pricing.length > 0) {
+                              return p.pricing.map((pr, pi) => {
+                                rowNum++;
+                                return (
+                                  <tr key={`${p.id}-${pi}`} style={{background: rowNum%2===0?'#f9fafb':'#fff'}}>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#888'}}>{rowNum}</td>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',fontWeight:600}}>{p.name}{pi>0?` (${pr.unit})`:''}</td>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#666'}}>{pr.unit}</td>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#e74c3c'}}>{formatCurrency(pr.retail_price)}</td>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#f39c12'}}>{formatCurrency(pr.wholesale_price)}</td>
+                                    <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#3498db'}}>{formatCurrency(pr.cost_price || pr.wholesale_price)}</td>
+                                  </tr>
+                                );
+                              });
+                            } else {
+                              rowNum++;
+                              return (
+                                <tr key={p.id} style={{background: rowNum%2===0?'#f9fafb':'#fff'}}>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#888'}}>{rowNum}</td>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',fontWeight:600}}>{p.name}</td>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',fontSize:12,color:'#666'}}>{p.unit || 'each'}</td>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#e74c3c'}}>{formatCurrency(p.retail_price || p.selling_price)}</td>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#f39c12'}}>{formatCurrency(p.wholesale_price || p.selling_price)}</td>
+                                  <td style={{padding:'8px',borderBottom:'1px solid #eee',textAlign:'right',fontWeight:600,color:'#3498db'}}>{formatCurrency(p.selling_price)}</td>
+                                </tr>
+                              );
+                            }
+                          });
+                        })()}
+                      </tbody>
+                    </table>
+
+                    <div className="footer" style={{textAlign:'center',marginTop:24,paddingTop:16,borderTop:'2px solid #eee'}}>
+                      <p style={{fontSize:11,color:'#888',marginBottom:4}}><strong style={{color:'#2c3e50'}}>Bonnesante Medicals</strong> | Tel: +234 707 679 3866 | +234 901 283 5413</p>
+                      <p style={{fontSize:10,color:'#aaa'}}>Prices are subject to change without prior notice. All prices are in Nigerian Naira (NGN).</p>
+                      <p style={{fontSize:10,color:'#aaa',marginTop:2}}>Generated on {new Date().toLocaleString('en-NG')}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Debtors Overview on Dashboard */}
             {ptDebtors.length > 0 && (
