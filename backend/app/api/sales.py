@@ -339,9 +339,9 @@ async def create_sales_order(
         
         sales_order.total_amount = total_amount
         
-        # Deduct stock if order is confirmed
-        if sales_order.status == 'confirmed':
-            await deduct_stock_for_order(session, sales_order)
+        # Always deduct stock when a sales order is created (order commits inventory)
+        sales_order.status = 'confirmed'
+        await deduct_stock_for_order(session, sales_order)
         
         await session.commit()
         

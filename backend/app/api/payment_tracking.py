@@ -5,9 +5,9 @@ Tracks partial payments, balances, debt reminders, WhatsApp messages
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text, func, and_
 from app.db import get_session
-from app.models import Invoice, InvoiceLine, Payment, SalesOrder, SalesOrderLine, Customer, Product
+from app.models import Invoice, InvoiceLine, Payment, SalesOrder, SalesOrderLine, Customer, Product, StockLevel, StockMovement
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -95,6 +95,32 @@ async def create_invoice_from_order(
                 line_total=line.line_total
             )
             session.add(inv_line)
+
+        # Deduct stock if the order hasn't been confirmed yet (safety net)
+        if order.status not in ('confirmed', 'completed', 'shipped', 'delivered'):
+            for line in lines:
+                quantity = Decimal(str(line.quantity))
+                stock_result = await session.execute(
+                    select(StockLevel).where(
+                        and_(
+                            StockLevel.warehouse_id == order.warehouse_id,
+                            StockLevel.product_id == line.product_id
+                        )
+                    )
+                )
+                stock_level = stock_result.scalars().first()
+                if stock_level and stock_level.current_stock >= quantity:
+                    stock_level.current_stock -= quantity
+                    movement = StockMovement(
+                        warehouse_id=order.warehouse_id,
+                        product_id=line.product_id,
+                        movement_type='OUT',
+                        quantity=quantity,
+                        reference=f"Invoice: {inv_number}",
+                        notes=f"Stock deducted on invoice generation for order {order.order_number}"
+                    )
+                    session.add(movement)
+            order.status = 'confirmed'
 
         await session.commit()
 
