@@ -188,20 +188,20 @@ function AppMain({ currentUser = null }) {
   const [showTransferForm, setShowTransferForm] = useState(false);
   const [transferLoading, setTransferLoading] = useState(false);
 
-  // Logistics Module state
+  // Logistics Module state (Batch Manifest Workflow)
   const [logView, setLogView] = useState('dashboard');
   const [logDashboard, setLogDashboard] = useState(null);
-  const [logDeliveries, setLogDeliveries] = useState([]);
+  const [logManifests, setLogManifests] = useState([]);
   const [logAnalytics, setLogAnalytics] = useState(null);
-  const [logSelectedDelivery, setLogSelectedDelivery] = useState(null);
-  const [logDeliveryForm, setLogDeliveryForm] = useState({
-    sales_officer: '', customer_name: '', customer_phone: '', delivery_address: '',
-    city: '', state: '', landmark: '', delivery_date: new Date().toISOString().split('T')[0],
-    departure_time: '', arrival_time: '', transport_mode: 'vehicle',
-    vehicle_details: '', driver_name: '', driver_phone: '',
-    transport_cost: '', additional_charges: '0', payment_method: '', payment_reference: '',
-    notes: '', sales_order_id: '',
-    items: [{ product_name: '', sku: '', quantity: '1', unit: 'each', weight_kg: '' }]
+  const [logSelectedManifest, setLogSelectedManifest] = useState(null);
+  const [logConfirmForm, setLogConfirmForm] = useState({ receiver_name: '', receiver_phone: '', physical_invoice_number: '', delivery_notes: '', signature_collected: true });
+  const [logConfirmingCustomerId, setLogConfirmingCustomerId] = useState(null);
+  const [logManifestForm, setLogManifestForm] = useState({
+    logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0],
+    vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle',
+    transport_cost: '', additional_charges: '0', notes: '',
+    customers: [{ customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '',
+      items: [{ product_name: '', sku: '', quantity: '1', unit: 'each' }] }]
   });
 
   // Form models
@@ -328,7 +328,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'hrCustomerCare') { fetchHrDashboard(); fetchHrStaff(); fetchHrPerformance(); fetchHrProducts(); fetchHrSalesOrders(); fetchHrCustomers(); fetchHrAttendance(); }
     if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); }
     if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
-    if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogDeliveries(); fetchLogAnalytics(); }
+    if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogManifests(); fetchLogAnalytics(); }
     if (activeModule === 'transfers') { fetchTransfers(); fetchTransferSummary(); }
   }, [activeModule]);
 
@@ -711,23 +711,55 @@ function AppMain({ currentUser = null }) {
 
   // ===================== LOGISTICS MODULE =====================
   async function fetchLogDashboard() { try { const r = await fetch('/api/logistics/dashboard'); if(r.ok) setLogDashboard(await r.json()); } catch(e) { console.error(e); }}
-  async function fetchLogDeliveries(officer) { try { const url = officer ? `/api/logistics/deliveries?sales_officer=${encodeURIComponent(officer)}` : '/api/logistics/deliveries'; const r = await fetch(url); if(r.ok) { const d = await r.json(); setLogDeliveries(d.items||[]); } } catch(e) { console.error(e); }}
+  async function fetchLogManifests() { try { const r = await fetch('/api/logistics/manifests'); if(r.ok) { const d = await r.json(); setLogManifests(d.items||[]); } } catch(e) { console.error(e); }}
   async function fetchLogAnalytics() { try { const r = await fetch('/api/logistics/analytics'); if(r.ok) setLogAnalytics(await r.json()); } catch(e) { console.error(e); }}
-  async function fetchLogDeliveryDetail(id) { try { const r = await fetch(`/api/logistics/deliveries/${id}`); if(r.ok) setLogSelectedDelivery(await r.json()); } catch(e) { console.error(e); }}
+  async function fetchLogManifestDetail(id) { try { const r = await fetch(`/api/logistics/manifests/${id}`); if(r.ok) setLogSelectedManifest(await r.json()); } catch(e) { console.error(e); }}
 
-  async function submitLogDelivery(e) {
+  async function submitLogManifest(e) {
     e.preventDefault();
     try {
       setLoading(true);
-      const payload = { ...logDeliveryForm, items: logDeliveryForm.items.filter(i => i.product_name), transport_cost: parseFloat(logDeliveryForm.transport_cost || 0), additional_charges: parseFloat(logDeliveryForm.additional_charges || 0) };
-      const r = await fetch('/api/logistics/deliveries', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const payload = {
+        ...logManifestForm,
+        transport_cost: parseFloat(logManifestForm.transport_cost || 0),
+        additional_charges: parseFloat(logManifestForm.additional_charges || 0),
+        customers: logManifestForm.customers.filter(c => c.customer_name).map(c => ({
+          ...c, items: c.items.filter(i => i.product_name)
+        }))
+      };
+      const r = await fetch('/api/logistics/manifests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const d = await r.json();
       if(!r.ok) throw new Error(d.detail || 'Failed');
-      notify(`Delivery ${d.delivery_number} logged! Cost: ${formatCurrency(d.total_cost)}`, 'success');
-      setLogDeliveryForm({ sales_officer: '', customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '', landmark: '', delivery_date: new Date().toISOString().split('T')[0], departure_time: '', arrival_time: '', transport_mode: 'vehicle', vehicle_details: '', driver_name: '', driver_phone: '', transport_cost: '', additional_charges: '0', payment_method: '', payment_reference: '', notes: '', sales_order_id: '', items: [{ product_name: '', sku: '', quantity: '1', unit: 'each', weight_kg: '' }] });
-      setLogView('deliveries');
-      fetchLogDeliveries(); fetchLogDashboard(); fetchLogAnalytics();
+      notify(`Manifest ${d.manifest_number} created with ${payload.customers.length} customer(s)! Cost: ${formatCurrency(d.total_cost)}`, 'success');
+      setLogManifestForm({ logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0], vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle', transport_cost: '', additional_charges: '0', notes: '', customers: [{ customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '', items: [{ product_name: '', sku: '', quantity: '1', unit: 'each' }] }] });
+      setLogView('manifests');
+      fetchLogManifests(); fetchLogDashboard(); fetchLogAnalytics();
     } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function confirmCustomerDelivery(mcId) {
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/logistics/manifests/customer/${mcId}/confirm`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(logConfirmForm) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify('Delivery confirmed for customer!', 'success');
+      setLogConfirmingCustomerId(null);
+      setLogConfirmForm({ receiver_name: '', receiver_phone: '', physical_invoice_number: '', delivery_notes: '', signature_collected: true });
+      if(logSelectedManifest) fetchLogManifestDetail(logSelectedManifest.id);
+      fetchLogDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+
+  async function updateManifestStatus(manifestId, status) {
+    try {
+      const r = await fetch(`/api/logistics/manifests/${manifestId}/status`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(d.message, 'success');
+      fetchLogManifests(); fetchLogDashboard();
+      if(logSelectedManifest) fetchLogManifestDetail(manifestId);
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); }
   }
 
   async function fetchFinancialData() {
@@ -5407,9 +5439,9 @@ function AppMain({ currentUser = null }) {
                 <h2>Logistics & Delivery</h2>
               </div>
               <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {['dashboard','newDelivery','deliveries','analytics'].map(v => (
-                  <button key={v} className={`btn ${logView===v?'btn-primary':'btn-secondary'}`} style={{fontSize:12,padding:'6px 12px'}} onClick={()=>setLogView(v)}>
-                    {v==='dashboard'?'Dashboard':v==='newDelivery'?'Log Delivery':v==='deliveries'?'All Deliveries':v==='analytics'?'Analytics':v}
+                {['dashboard','createManifest','manifests','analytics'].map(v => (
+                  <button key={v} className={`btn ${logView===v?'btn-primary':'btn-secondary'}`} style={{fontSize:12,padding:'6px 12px'}} onClick={()=>{setLogView(v);setLogSelectedManifest(null);}}>
+                    {v==='dashboard'?'Dashboard':v==='createManifest'?'Create Manifest':v==='manifests'?'All Manifests':'Analytics'}
                   </button>
                 ))}
               </div>
@@ -5420,205 +5452,284 @@ function AppMain({ currentUser = null }) {
               <div>
                 <div className="stats-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:24}}>
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Deliveries</h4>
-                    <div style={{fontSize:28,fontWeight:700,color:'#3498db'}}>{logDashboard.summary?.total_deliveries || 0}</div>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Manifests</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#3498db'}}>{logDashboard.summary?.total_manifests || 0}</div>
                   </div>
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
                     <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Completed</h4>
                     <div style={{fontSize:28,fontWeight:700,color:'#27ae60'}}>{logDashboard.summary?.completed || 0}</div>
                   </div>
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Pending / In Transit</h4>
-                    <div style={{fontSize:28,fontWeight:700,color:'#f39c12'}}>{(logDashboard.summary?.pending||0)+(logDashboard.summary?.in_transit||0)}</div>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Preparing / In Transit</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#f39c12'}}>{(logDashboard.summary?.preparing||0)+(logDashboard.summary?.in_transit||0)}</div>
                   </div>
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Cost</h4>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Total Logistics Cost</h4>
                     <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(logDashboard.summary?.total_logistics_cost || 0)}</div>
                   </div>
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Avg. Delivery Cost</h4>
-                    <div style={{fontSize:22,fontWeight:700,color:'#8e44ad'}}>{formatCurrency(logDashboard.summary?.avg_delivery_cost || 0)}</div>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Avg. Manifest Cost</h4>
+                    <div style={{fontSize:22,fontWeight:700,color:'#8e44ad'}}>{formatCurrency(logDashboard.summary?.avg_manifest_cost || 0)}</div>
+                  </div>
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
+                    <h4 style={{margin:'0 0 8px',color:'#888',fontSize:13}}>Customer Drops Delivered</h4>
+                    <div style={{fontSize:28,fontWeight:700,color:'#16a085'}}>{logDashboard.delivery_stats?.delivered_drops || 0} / {logDashboard.delivery_stats?.total_customer_drops || 0}</div>
                   </div>
                 </div>
 
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:20}}>
-                  {/* By Officer */}
                   {logDashboard.by_officer?.length > 0 && (
                     <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                      <h3 style={{marginTop:0}}>By Sales Officer</h3>
-                      <table className="data-table"><thead><tr><th>Officer</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
+                      <h3 style={{marginTop:0}}>By Logistics Officer</h3>
+                      <table className="data-table"><thead><tr><th>Officer</th><th>Manifests</th><th>Total Cost</th></tr></thead>
                       <tbody>{logDashboard.by_officer.map((o,i) => (
-                        <tr key={i}><td>{o.sales_officer}</td><td>{o.deliveries}</td><td>{formatCurrency(o.total_cost)}</td></tr>
+                        <tr key={i}><td>{o.officer}</td><td>{o.manifests}</td><td>{formatCurrency(o.total_cost)}</td></tr>
                       ))}</tbody></table>
                     </div>
                   )}
-
-                  {/* By Location */}
-                  {logDashboard.by_location?.length > 0 && (
+                  {logDashboard.monthly_trend?.length > 0 && (
                     <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                      <h3 style={{marginTop:0}}>By Location</h3>
-                      <table className="data-table"><thead><tr><th>Location</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
-                      <tbody>{logDashboard.by_location.map((l,i) => (
-                        <tr key={i}><td>{l.location}</td><td>{l.deliveries}</td><td>{formatCurrency(l.total_cost)}</td></tr>
+                      <h3 style={{marginTop:0}}>Monthly Trend</h3>
+                      <table className="data-table"><thead><tr><th>Month</th><th>Manifests</th><th>Total Cost</th></tr></thead>
+                      <tbody>{logDashboard.monthly_trend.map((m,i) => (
+                        <tr key={i}><td>{m.month}</td><td>{m.manifests}</td><td>{formatCurrency(m.total_cost)}</td></tr>
                       ))}</tbody></table>
                     </div>
                   )}
                 </div>
 
-                {/* Recent deliveries */}
-                {logDashboard.recent_deliveries?.length > 0 && (
+                {logDashboard.recent_manifests?.length > 0 && (
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h3 style={{marginTop:0}}>Recent Deliveries</h3>
-                    <table className="data-table"><thead><tr><th>Delivery #</th><th>Officer</th><th>Customer</th><th>Address</th><th>Date</th><th>Cost</th><th>Status</th></tr></thead>
-                    <tbody>{logDashboard.recent_deliveries.map((d,i) => (
-                      <tr key={i}><td>{d.delivery_number}</td><td>{d.sales_officer}</td><td>{d.customer_name}</td><td>{d.delivery_address}</td>
-                      <td>{d.delivery_date}</td><td>{formatCurrency(d.total_cost)}</td>
-                      <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:d.status==='completed'?'#27ae60':d.status==='in_transit'?'#3498db':d.status==='pending'?'#f39c12':'#95a5a6',color:'#fff'}}>{d.status.toUpperCase()}</span></td></tr>
+                    <h3 style={{marginTop:0}}>Recent Manifests</h3>
+                    <table className="data-table"><thead><tr><th>Manifest #</th><th>Officer</th><th>Date</th><th>Customers</th><th>Cost</th><th>Status</th></tr></thead>
+                    <tbody>{logDashboard.recent_manifests.map((d,i) => (
+                      <tr key={i} style={{cursor:'pointer'}} onClick={()=>{fetchLogManifestDetail(d.manifest_number.replace('MF-',''));setLogView('manifests');}}>
+                        <td style={{color:'#667eea',fontWeight:600}}>{d.manifest_number}</td><td>{d.logistics_officer}</td>
+                        <td>{d.delivery_date}</td><td>{d.customer_count}</td>
+                        <td>{formatCurrency(d.total_cost)}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:d.status==='completed'?'#27ae60':d.status==='in_transit'||d.status==='dispatched'?'#3498db':d.status==='preparing'?'#f39c12':'#95a5a6',color:'#fff'}}>{d.status.replace('_',' ').toUpperCase()}</span></td>
+                      </tr>
                     ))}</tbody></table>
                   </div>
                 )}
               </div>
             )}
 
-            {/* New Delivery Form */}
-            {logView === 'newDelivery' && (
+            {/* Create Manifest Form */}
+            {logView === 'createManifest' && (
               <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                <h3 style={{marginTop:0}}>Log New Delivery</h3>
-                <form onSubmit={submitLogDelivery}>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-                    <div><label className="form-label">Sales Officer *</label><input className="form-input" required value={logDeliveryForm.sales_officer} onChange={e=>setLogDeliveryForm(p=>({...p,sales_officer:e.target.value}))}/></div>
-                    <div><label className="form-label">Customer Name *</label><input className="form-input" required value={logDeliveryForm.customer_name} onChange={e=>setLogDeliveryForm(p=>({...p,customer_name:e.target.value}))}/></div>
-                    <div><label className="form-label">Customer Phone</label><input className="form-input" value={logDeliveryForm.customer_phone} onChange={e=>setLogDeliveryForm(p=>({...p,customer_phone:e.target.value}))}/></div>
-                    <div><label className="form-label">Delivery Date *</label><input className="form-input" type="date" required value={logDeliveryForm.delivery_date} onChange={e=>setLogDeliveryForm(p=>({...p,delivery_date:e.target.value}))}/></div>
-                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Delivery Address *</label><textarea className="form-input" rows={2} required value={logDeliveryForm.delivery_address} onChange={e=>setLogDeliveryForm(p=>({...p,delivery_address:e.target.value}))}/></div>
-                    <div><label className="form-label">City</label><input className="form-input" value={logDeliveryForm.city} onChange={e=>setLogDeliveryForm(p=>({...p,city:e.target.value}))}/></div>
-                    <div><label className="form-label">State</label><input className="form-input" value={logDeliveryForm.state} onChange={e=>setLogDeliveryForm(p=>({...p,state:e.target.value}))}/></div>
-                    <div style={{gridColumn:'1/-1'}}><label className="form-label">Landmark</label><input className="form-input" value={logDeliveryForm.landmark} onChange={e=>setLogDeliveryForm(p=>({...p,landmark:e.target.value}))}/></div>
-                    <div><label className="form-label">Departure Time</label><input className="form-input" type="time" value={logDeliveryForm.departure_time} onChange={e=>setLogDeliveryForm(p=>({...p,departure_time:e.target.value}))}/></div>
-                    <div><label className="form-label">Arrival Time</label><input className="form-input" type="time" value={logDeliveryForm.arrival_time} onChange={e=>setLogDeliveryForm(p=>({...p,arrival_time:e.target.value}))}/></div>
-                    <div><label className="form-label">Transport Mode</label>
-                      <select className="form-input" value={logDeliveryForm.transport_mode} onChange={e=>setLogDeliveryForm(p=>({...p,transport_mode:e.target.value}))}>
-                        <option value="vehicle">Vehicle</option><option value="motorcycle">Motorcycle</option><option value="truck">Truck</option><option value="bus">Bus</option><option value="courier">Courier Service</option><option value="other">Other</option>
-                      </select>
+                <h3 style={{marginTop:0}}>Create Delivery Manifest</h3>
+                <p style={{color:'#666',fontSize:13,marginBottom:16}}>Create a batch delivery manifest. Add all customers and their items that will be delivered in this trip.</p>
+                <form onSubmit={submitLogManifest}>
+                  <div style={{background:'#f8f9fa',padding:16,borderRadius:8,marginBottom:20}}>
+                    <h4 style={{marginTop:0,color:'#667eea'}}>Trip Details</h4>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16}}>
+                      <div><label className="form-label">Logistics Officer *</label><input className="form-input" required value={logManifestForm.logistics_officer} onChange={e=>setLogManifestForm(p=>({...p,logistics_officer:e.target.value}))}/></div>
+                      <div><label className="form-label">Delivery Date *</label><input className="form-input" type="date" required value={logManifestForm.delivery_date} onChange={e=>setLogManifestForm(p=>({...p,delivery_date:e.target.value}))}/></div>
+                      <div><label className="form-label">Transport Mode</label>
+                        <select className="form-input" value={logManifestForm.transport_mode} onChange={e=>setLogManifestForm(p=>({...p,transport_mode:e.target.value}))}>
+                          <option value="vehicle">Vehicle</option><option value="motorcycle">Motorcycle</option><option value="truck">Truck</option><option value="bus">Bus</option><option value="courier">Courier</option>
+                        </select>
+                      </div>
+                      <div><label className="form-label">Vehicle Details</label><input className="form-input" placeholder="e.g. Toyota Hilux - ABC 123" value={logManifestForm.vehicle_details} onChange={e=>setLogManifestForm(p=>({...p,vehicle_details:e.target.value}))}/></div>
+                      <div><label className="form-label">Driver Name</label><input className="form-input" value={logManifestForm.driver_name} onChange={e=>setLogManifestForm(p=>({...p,driver_name:e.target.value}))}/></div>
+                      <div><label className="form-label">Driver Phone</label><input className="form-input" value={logManifestForm.driver_phone} onChange={e=>setLogManifestForm(p=>({...p,driver_phone:e.target.value}))}/></div>
+                      <div><label className="form-label">Transport Cost (NGN)</label><input className="form-input" type="number" step="0.01" value={logManifestForm.transport_cost} onChange={e=>setLogManifestForm(p=>({...p,transport_cost:e.target.value}))}/></div>
+                      <div><label className="form-label">Additional Charges (NGN)</label><input className="form-input" type="number" step="0.01" value={logManifestForm.additional_charges} onChange={e=>setLogManifestForm(p=>({...p,additional_charges:e.target.value}))}/></div>
+                      <div style={{display:'flex',alignItems:'end'}}><div style={{padding:'10px 16px',background:'#e8f5e9',borderRadius:8,fontWeight:700,fontSize:16}}>Total: {formatCurrency(parseFloat(logManifestForm.transport_cost||0)+parseFloat(logManifestForm.additional_charges||0))}</div></div>
                     </div>
-                    <div><label className="form-label">Vehicle Details</label><input className="form-input" value={logDeliveryForm.vehicle_details} onChange={e=>setLogDeliveryForm(p=>({...p,vehicle_details:e.target.value}))}/></div>
-                    <div><label className="form-label">Driver Name</label><input className="form-input" value={logDeliveryForm.driver_name} onChange={e=>setLogDeliveryForm(p=>({...p,driver_name:e.target.value}))}/></div>
-                    <div><label className="form-label">Driver Phone</label><input className="form-input" value={logDeliveryForm.driver_phone} onChange={e=>setLogDeliveryForm(p=>({...p,driver_phone:e.target.value}))}/></div>
-                    <div><label className="form-label">Transport Cost (NGN) *</label><input className="form-input" type="number" step="0.01" required value={logDeliveryForm.transport_cost} onChange={e=>setLogDeliveryForm(p=>({...p,transport_cost:e.target.value}))}/></div>
-                    <div><label className="form-label">Additional Charges (NGN)</label><input className="form-input" type="number" step="0.01" value={logDeliveryForm.additional_charges} onChange={e=>setLogDeliveryForm(p=>({...p,additional_charges:e.target.value}))}/></div>
-                    <div><label className="form-label">Payment Method</label>
-                      <select className="form-input" value={logDeliveryForm.payment_method} onChange={e=>setLogDeliveryForm(p=>({...p,payment_method:e.target.value}))}>
-                        <option value="">Select...</option><option value="cash">Cash</option><option value="bank_transfer">Bank Transfer</option><option value="pos">POS</option>
-                      </select>
-                    </div>
-                    <div><label className="form-label">Payment Reference</label><input className="form-input" value={logDeliveryForm.payment_reference} onChange={e=>setLogDeliveryForm(p=>({...p,payment_reference:e.target.value}))}/></div>
+                    <div style={{marginTop:12}}><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={logManifestForm.notes} onChange={e=>setLogManifestForm(p=>({...p,notes:e.target.value}))}/></div>
                   </div>
 
-                  <h4 style={{marginTop:20}}>Items Delivered</h4>
-                  {logDeliveryForm.items.map((item, idx) => (
-                    <div key={idx} style={{display:'grid',gridTemplateColumns:'2fr 1fr 80px 80px 60px',gap:8,marginBottom:8,alignItems:'end'}}>
-                      <div><label className="form-label" style={{fontSize:11}}>Product Name *</label><input className="form-input" required value={item.product_name} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].product_name=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
-                      <div><label className="form-label" style={{fontSize:11}}>SKU</label><input className="form-input" value={item.sku} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].sku=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
-                      <div><label className="form-label" style={{fontSize:11}}>Qty</label><input className="form-input" type="number" min="1" value={item.quantity} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].quantity=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
-                      <div><label className="form-label" style={{fontSize:11}}>Unit</label><input className="form-input" value={item.unit} onChange={e=>{const items=[...logDeliveryForm.items];items[idx].unit=e.target.value;setLogDeliveryForm(p=>({...p,items}));}}/></div>
-                      <button type="button" className="btn btn-danger" style={{padding:'6px 10px',fontSize:12}} onClick={()=>{const items=logDeliveryForm.items.filter((_,i)=>i!==idx);setLogDeliveryForm(p=>({...p,items:items.length?items:[{product_name:'',sku:'',quantity:'1',unit:'each',weight_kg:''}]}));}}>X</button>
+                  <h4 style={{marginBottom:8,color:'#667eea'}}>Customers & Items ({logManifestForm.customers.length})</h4>
+                  {logManifestForm.customers.map((cust, ci) => (
+                    <div key={ci} style={{border:'2px solid #667eea',borderRadius:10,padding:16,marginBottom:16,background:'#fafbff'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                        <h4 style={{margin:0,color:'#667eea'}}>Customer {ci+1}</h4>
+                        {logManifestForm.customers.length > 1 && (
+                          <button type="button" className="btn btn-danger" style={{fontSize:11,padding:'4px 10px'}} onClick={()=>{
+                            const custs = logManifestForm.customers.filter((_,i) => i !== ci);
+                            setLogManifestForm(p => ({...p, customers: custs}));
+                          }}>Remove Customer</button>
+                        )}
+                      </div>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                        <div><label className="form-label" style={{fontSize:12}}>Customer Name *</label><input className="form-input" required value={cust.customer_name} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].customer_name=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                        <div><label className="form-label" style={{fontSize:12}}>Phone</label><input className="form-input" value={cust.customer_phone} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].customer_phone=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                        <div style={{gridColumn:'1/-1'}}><label className="form-label" style={{fontSize:12}}>Delivery Address *</label><input className="form-input" required value={cust.delivery_address} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].delivery_address=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                        <div><label className="form-label" style={{fontSize:12}}>City</label><input className="form-input" value={cust.city} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].city=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                        <div><label className="form-label" style={{fontSize:12}}>State</label><input className="form-input" value={cust.state} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].state=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                      </div>
+                      <div style={{marginTop:12}}>
+                        <label className="form-label" style={{fontSize:12,fontWeight:600}}>Items for this customer:</label>
+                        {cust.items.map((item, ii) => (
+                          <div key={ii} style={{display:'grid',gridTemplateColumns:'2fr 1fr 80px 80px 40px',gap:8,marginBottom:6,alignItems:'end'}}>
+                            <div><input className="form-input" placeholder="Product Name *" required value={item.product_name} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].product_name=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                            <div><input className="form-input" placeholder="SKU" value={item.sku} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].sku=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                            <div><input className="form-input" type="number" min="1" placeholder="Qty" value={item.quantity} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].quantity=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                            <div><input className="form-input" placeholder="Unit" value={item.unit} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].unit=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                            <button type="button" style={{background:'#e74c3c',color:'#fff',border:'none',borderRadius:6,padding:'6px',cursor:'pointer',fontSize:12}} onClick={()=>{
+                              const custs=[...logManifestForm.customers];custs[ci].items=custs[ci].items.filter((_,i)=>i!==ii);
+                              if(custs[ci].items.length===0) custs[ci].items=[{product_name:'',sku:'',quantity:'1',unit:'each'}];
+                              setLogManifestForm(p=>({...p,customers:custs}));
+                            }}>X</button>
+                          </div>
+                        ))}
+                        <button type="button" className="btn btn-secondary" style={{fontSize:11,padding:'4px 10px',marginTop:4}} onClick={()=>{
+                          const custs=[...logManifestForm.customers];custs[ci].items.push({product_name:'',sku:'',quantity:'1',unit:'each'});
+                          setLogManifestForm(p=>({...p,customers:custs}));
+                        }}>+ Add Item</button>
+                      </div>
                     </div>
                   ))}
-                  <button type="button" className="btn btn-secondary" style={{fontSize:12,marginBottom:16}} onClick={()=>setLogDeliveryForm(p=>({...p,items:[...p.items,{product_name:'',sku:'',quantity:'1',unit:'each',weight_kg:''}]}))}>+ Add Item</button>
 
-                  <div style={{marginTop:8,padding:12,background:'#f8f9fa',borderRadius:8}}>
-                    <strong>Total Cost: </strong>{formatCurrency(parseFloat(logDeliveryForm.transport_cost||0)+parseFloat(logDeliveryForm.additional_charges||0))}
-                  </div>
+                  <button type="button" className="btn btn-secondary" style={{marginBottom:20,background:'#667eea',color:'#fff',border:'none'}} onClick={()=>{
+                    setLogManifestForm(p=>({...p, customers: [...p.customers, {customer_name:'',customer_phone:'',delivery_address:'',city:'',state:'',items:[{product_name:'',sku:'',quantity:'1',unit:'each'}]}]}));
+                  }}>+ Add Another Customer</button>
 
-                  <div><label className="form-label">Notes</label><textarea className="form-input" rows={2} value={logDeliveryForm.notes} onChange={e=>setLogDeliveryForm(p=>({...p,notes:e.target.value}))}/></div>
-                  <div style={{marginTop:16,display:'flex',gap:8}}>
-                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Logging...':'Log Delivery'}</button>
+                  <div style={{display:'flex',gap:8}}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>{loading?'Creating...':'Create Manifest'}</button>
                     <button type="button" className="btn btn-secondary" onClick={()=>setLogView('dashboard')}>Cancel</button>
                   </div>
                 </form>
               </div>
             )}
 
-            {/* All Deliveries List */}
-            {logView === 'deliveries' && !logSelectedDelivery && (
+            {/* All Manifests List */}
+            {logView === 'manifests' && !logSelectedManifest && (
               <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                <h3 style={{marginTop:0}}>All Deliveries</h3>
+                <h3 style={{marginTop:0}}>All Delivery Manifests</h3>
                 <table className="data-table">
-                  <thead><tr><th>Delivery #</th><th>Officer</th><th>Customer</th><th>Address</th><th>Date</th><th>Items</th><th>Cost</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Manifest #</th><th>Officer</th><th>Date</th><th>Customers</th><th>Items</th><th>Delivered</th><th>Cost</th><th>Status</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {logDeliveries.map(d => (
-                      <tr key={d.id}>
-                        <td><button className="btn-link" onClick={()=>fetchLogDeliveryDetail(d.id)}>{d.delivery_number}</button></td>
-                        <td>{d.sales_officer}</td><td>{d.customer_name}</td>
-                        <td>{d.delivery_address}{d.city?`, ${d.city}`:''}</td>
-                        <td>{d.delivery_date}</td>
-                        <td>{d.item_count}</td>
-                        <td style={{fontWeight:600}}>{formatCurrency(d.total_cost)}</td>
-                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:d.status==='completed'?'#27ae60':d.status==='in_transit'?'#3498db':d.status==='pending'?'#f39c12':'#95a5a6',color:'#fff'}}>{d.status.toUpperCase()}</span></td>
+                    {logManifests.map(m => (
+                      <tr key={m.id}>
+                        <td><button className="btn-link" style={{fontWeight:600}} onClick={()=>fetchLogManifestDetail(m.id)}>{m.manifest_number}</button></td>
+                        <td>{m.logistics_officer}</td>
+                        <td>{m.delivery_date}</td>
+                        <td style={{textAlign:'center'}}>{m.customer_count}</td>
+                        <td style={{textAlign:'center'}}>{m.total_items}</td>
+                        <td style={{textAlign:'center',fontWeight:600,color:m.delivered_count===m.customer_count?'#27ae60':'#f39c12'}}>{m.delivered_count}/{m.customer_count}</td>
+                        <td style={{fontWeight:600}}>{formatCurrency(m.total_cost)}</td>
+                        <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:m.status==='completed'?'#27ae60':m.status==='in_transit'||m.status==='dispatched'?'#3498db':m.status==='preparing'?'#f39c12':'#95a5a6',color:'#fff'}}>{m.status.replace('_',' ').toUpperCase()}</span></td>
+                        <td style={{display:'flex',gap:4}}>
+                          <button className="btn btn-secondary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>window.open(`/api/logistics/manifests/${m.id}/pdf`,'_blank')}>PDF</button>
+                          {m.status==='preparing' && <button className="btn btn-primary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>updateManifestStatus(m.id,'dispatched')}>Dispatch</button>}
+                        </td>
                       </tr>
                     ))}
-                    {logDeliveries.length===0 && <tr><td colSpan="8" style={{textAlign:'center',padding:32,color:'#888'}}>No deliveries found</td></tr>}
+                    {logManifests.length===0 && <tr><td colSpan="9" style={{textAlign:'center',padding:32,color:'#888'}}>No manifests found</td></tr>}
                   </tbody>
                 </table>
               </div>
             )}
 
-            {/* Delivery Detail */}
-            {logView === 'deliveries' && logSelectedDelivery && (
+            {/* Manifest Detail */}
+            {logView === 'manifests' && logSelectedManifest && (
               <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                <button className="btn btn-secondary" style={{marginBottom:16}} onClick={()=>setLogSelectedDelivery(null)}>Back to List</button>
-                <h3 style={{marginTop:0}}>Delivery: {logSelectedDelivery.delivery_number}</h3>
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                  <button className="btn btn-secondary" onClick={()=>setLogSelectedManifest(null)}>Back to List</button>
+                  <button className="btn btn-primary" style={{fontSize:12}} onClick={()=>window.open(`/api/logistics/manifests/${logSelectedManifest.id}/pdf`,'_blank')}>Download PDF</button>
+                  {logSelectedManifest.status==='preparing' && <button className="btn btn-primary" style={{background:'#27ae60',borderColor:'#27ae60',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'dispatched')}>Mark Dispatched</button>}
+                  {logSelectedManifest.status==='dispatched' && <button className="btn btn-primary" style={{background:'#3498db',borderColor:'#3498db',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'in_transit')}>Mark In Transit</button>}
+                </div>
+                <h3 style={{marginTop:0}}>Manifest: {logSelectedManifest.manifest_number}</h3>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:20}}>
-                  <div><strong>Sales Officer:</strong> {logSelectedDelivery.sales_officer}</div>
-                  <div><strong>Customer:</strong> {logSelectedDelivery.customer_name}</div>
-                  <div><strong>Phone:</strong> {logSelectedDelivery.customer_phone||'N/A'}</div>
-                  <div><strong>Delivery Date:</strong> {logSelectedDelivery.delivery_date}</div>
-                  <div><strong>Departure:</strong> {logSelectedDelivery.departure_time||'N/A'}</div>
-                  <div><strong>Arrival:</strong> {logSelectedDelivery.arrival_time||'N/A'}</div>
-                  <div><strong>Transport Mode:</strong> {logSelectedDelivery.transport_mode}</div>
-                  <div><strong>Vehicle:</strong> {logSelectedDelivery.vehicle_details||'N/A'}</div>
-                  <div><strong>Driver:</strong> {logSelectedDelivery.driver_name||'N/A'} {logSelectedDelivery.driver_phone?`(${logSelectedDelivery.driver_phone})`:''}</div>
-                  <div><strong>Status:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:logSelectedDelivery.status==='completed'?'#27ae60':logSelectedDelivery.status==='in_transit'?'#3498db':'#f39c12',color:'#fff'}}>{logSelectedDelivery.status.toUpperCase()}</span></div>
+                  <div><strong>Logistics Officer:</strong> {logSelectedManifest.logistics_officer}</div>
+                  <div><strong>Delivery Date:</strong> {logSelectedManifest.delivery_date}</div>
+                  <div><strong>Transport Mode:</strong> {(logSelectedManifest.transport_mode||'vehicle').replace('_',' ')}</div>
+                  <div><strong>Vehicle:</strong> {logSelectedManifest.vehicle_details||'N/A'}</div>
+                  <div><strong>Driver:</strong> {logSelectedManifest.driver_name||'N/A'} {logSelectedManifest.driver_phone?`(${logSelectedManifest.driver_phone})`:''}</div>
+                  <div><strong>Status:</strong> <span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:logSelectedManifest.status==='completed'?'#27ae60':logSelectedManifest.status==='in_transit'||logSelectedManifest.status==='dispatched'?'#3498db':'#f39c12',color:'#fff'}}>{logSelectedManifest.status.replace('_',' ').toUpperCase()}</span></div>
                 </div>
-                <div style={{marginBottom:16}}><strong>Address:</strong> {logSelectedDelivery.delivery_address}{logSelectedDelivery.city?`, ${logSelectedDelivery.city}`:''}{logSelectedDelivery.state?`, ${logSelectedDelivery.state}`:''}{logSelectedDelivery.landmark?` (${logSelectedDelivery.landmark})`:''}</div>
 
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:20,textAlign:'center'}}>
-                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Transport Cost</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedDelivery.transport_cost)}</div></div>
-                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Additional Charges</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedDelivery.additional_charges)}</div></div>
-                  <div style={{padding:16,background:'#e8f5e9',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Total Cost</div><div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(logSelectedDelivery.total_cost)}</div></div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:24,textAlign:'center'}}>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Transport Cost</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedManifest.transport_cost)}</div></div>
+                  <div style={{padding:16,background:'#f8f9fa',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Additional Charges</div><div style={{fontSize:20,fontWeight:700}}>{formatCurrency(logSelectedManifest.additional_charges)}</div></div>
+                  <div style={{padding:16,background:'#e8f5e9',borderRadius:8}}><div style={{fontSize:11,color:'#888'}}>Total Cost</div><div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(logSelectedManifest.total_cost)}</div></div>
                 </div>
-                {logSelectedDelivery.payment_method && <div style={{marginBottom:12}}><strong>Payment:</strong> {logSelectedDelivery.payment_method.replace('_',' ')} {logSelectedDelivery.payment_reference?`(Ref: ${logSelectedDelivery.payment_reference})`:''}</div>}
-                {logSelectedDelivery.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {logSelectedDelivery.notes}</div>}
 
-                <h4>Items Delivered ({logSelectedDelivery.items?.length || 0})</h4>
-                <table className="data-table"><thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Weight (kg)</th></tr></thead>
-                <tbody>{(logSelectedDelivery.items||[]).map((it,i)=>(
-                  <tr key={i}><td>{it.product_name}</td><td>{it.sku||'N/A'}</td><td>{it.quantity}</td><td>{it.unit}</td><td>{it.weight_kg||'N/A'}</td></tr>
-                ))}</tbody></table>
+                {logSelectedManifest.notes && <div style={{marginBottom:16,padding:12,background:'#f8f9fa',borderRadius:8}}><strong>Notes:</strong> {logSelectedManifest.notes}</div>}
+
+                <h4 style={{color:'#667eea'}}>Customer Deliveries ({logSelectedManifest.customers?.length || 0})</h4>
+                {(logSelectedManifest.customers||[]).map((cust, ci) => (
+                  <div key={cust.id} style={{border:'1px solid #ddd',borderRadius:10,padding:16,marginBottom:16,background:cust.status==='delivered'?'#f0fff0':'#fffbf0'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                      <h4 style={{margin:0}}>
+                        <span style={{color:cust.status==='delivered'?'#27ae60':'#f39c12',marginRight:8}}>{cust.status==='delivered'?'[DELIVERED]':'[PENDING]'}</span>
+                        {cust.customer_name}
+                      </h4>
+                      {cust.status !== 'delivered' && logSelectedManifest.status !== 'preparing' && (
+                        <button className="btn btn-primary" style={{fontSize:12,background:'#27ae60',borderColor:'#27ae60'}} onClick={()=>{setLogConfirmingCustomerId(cust.id);setLogConfirmForm({receiver_name:'',receiver_phone:'',physical_invoice_number:'',delivery_notes:'',signature_collected:true});}}>Confirm Delivery</button>
+                      )}
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,fontSize:13,marginBottom:8}}>
+                      <div><strong>Phone:</strong> {cust.customer_phone||'N/A'}</div>
+                      <div><strong>Address:</strong> {cust.delivery_address}{cust.city?`, ${cust.city}`:''}{cust.state?`, ${cust.state}`:''}</div>
+                      {cust.status==='delivered' && <div><strong>Delivered:</strong> {cust.delivery_time?new Date(cust.delivery_time).toLocaleString():'N/A'}</div>}
+                    </div>
+                    {cust.status==='delivered' && (
+                      <div style={{background:'#e8f5e9',padding:10,borderRadius:6,fontSize:13,marginBottom:8}}>
+                        <strong>Receiver:</strong> {cust.receiver_name} ({cust.receiver_phone||'N/A'}) | <strong>Invoice #:</strong> {cust.physical_invoice_number||'N/A'}
+                        {cust.delivery_notes && <span> | <strong>Notes:</strong> {cust.delivery_notes}</span>}
+                      </div>
+                    )}
+                    <table className="data-table" style={{fontSize:12}}>
+                      <thead><tr><th>#</th><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th></tr></thead>
+                      <tbody>{(cust.items||[]).map((it,i) => (
+                        <tr key={it.id}><td>{i+1}</td><td>{it.product_name}</td><td>{it.sku||'-'}</td><td>{it.quantity}</td><td>{it.unit}</td></tr>
+                      ))}</tbody>
+                    </table>
+
+                    {/* Confirm Delivery Form (inline) */}
+                    {logConfirmingCustomerId === cust.id && (
+                      <div style={{marginTop:12,padding:16,background:'#fff',border:'2px solid #27ae60',borderRadius:8}}>
+                        <h4 style={{margin:'0 0 12px',color:'#27ae60'}}>Confirm Delivery for {cust.customer_name}</h4>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                          <div><label className="form-label" style={{fontSize:12}}>Receiver Name *</label><input className="form-input" required value={logConfirmForm.receiver_name} onChange={e=>setLogConfirmForm(p=>({...p,receiver_name:e.target.value}))}/></div>
+                          <div><label className="form-label" style={{fontSize:12}}>Receiver Phone</label><input className="form-input" value={logConfirmForm.receiver_phone} onChange={e=>setLogConfirmForm(p=>({...p,receiver_phone:e.target.value}))}/></div>
+                          <div><label className="form-label" style={{fontSize:12}}>Physical Invoice Number *</label><input className="form-input" required placeholder="From invoice booklet" value={logConfirmForm.physical_invoice_number} onChange={e=>setLogConfirmForm(p=>({...p,physical_invoice_number:e.target.value}))}/></div>
+                          <div><label className="form-label" style={{fontSize:12}}>Delivery Notes</label><input className="form-input" value={logConfirmForm.delivery_notes} onChange={e=>setLogConfirmForm(p=>({...p,delivery_notes:e.target.value}))}/></div>
+                          <div style={{display:'flex',alignItems:'center',gap:8}}><input type="checkbox" checked={logConfirmForm.signature_collected} onChange={e=>setLogConfirmForm(p=>({...p,signature_collected:e.target.checked}))}/><label style={{fontSize:13}}>Signature Collected</label></div>
+                        </div>
+                        <div style={{marginTop:12,display:'flex',gap:8}}>
+                          <button className="btn btn-primary" style={{background:'#27ae60',borderColor:'#27ae60'}} disabled={loading||!logConfirmForm.receiver_name} onClick={()=>confirmCustomerDelivery(cust.id)}>{loading?'Confirming...':'Confirm Delivery'}</button>
+                          <button className="btn btn-secondary" onClick={()=>setLogConfirmingCustomerId(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
 
             {/* Analytics */}
             {logView === 'analytics' && logAnalytics && (
               <div>
-                {/* By Transport Mode */}
                 {logAnalytics.by_transport_mode?.length > 0 && (
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)',marginBottom:20}}>
                     <h3 style={{marginTop:0}}>By Transport Mode</h3>
-                    <table className="data-table"><thead><tr><th>Mode</th><th>Deliveries</th><th>Total Cost</th><th>Avg Cost</th></tr></thead>
+                    <table className="data-table"><thead><tr><th>Mode</th><th>Manifests</th><th>Total Cost</th><th>Avg Cost</th></tr></thead>
                     <tbody>{logAnalytics.by_transport_mode.map((m,i)=>(
                       <tr key={i}><td style={{textTransform:'capitalize'}}>{m.mode}</td><td>{m.count}</td><td>{formatCurrency(m.total)}</td><td>{formatCurrency(m.avg_cost)}</td></tr>
                     ))}</tbody></table>
                   </div>
                 )}
-
-                {/* Top Customers */}
+                {logAnalytics.by_day_of_week?.length > 0 && (
+                  <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)',marginBottom:20}}>
+                    <h3 style={{marginTop:0}}>By Day of Week</h3>
+                    <table className="data-table"><thead><tr><th>Day</th><th>Manifests</th><th>Total Cost</th></tr></thead>
+                    <tbody>{logAnalytics.by_day_of_week.map((d,i)=>(
+                      <tr key={i}><td>{d.day}</td><td>{d.count}</td><td>{formatCurrency(d.total)}</td></tr>
+                    ))}</tbody></table>
+                  </div>
+                )}
                 {logAnalytics.top_customers?.length > 0 && (
                   <div style={{background:'#fff',padding:20,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
-                    <h3 style={{marginTop:0}}>Top Customers by Delivery Cost</h3>
-                    <table className="data-table"><thead><tr><th>Customer</th><th>Deliveries</th><th>Total Cost</th></tr></thead>
+                    <h3 style={{marginTop:0}}>Top Customers by Delivery Frequency</h3>
+                    <table className="data-table"><thead><tr><th>Customer</th><th>Manifests</th><th>Total Drops</th></tr></thead>
                     <tbody>{logAnalytics.top_customers.map((c,i)=>(
-                      <tr key={i}><td>{c.customer}</td><td>{c.deliveries}</td><td style={{fontWeight:600}}>{formatCurrency(c.total_cost)}</td></tr>
+                      <tr key={i}><td>{c.customer}</td><td>{c.manifests}</td><td>{c.drops}</td></tr>
                     ))}</tbody></table>
                   </div>
                 )}
