@@ -1289,7 +1289,7 @@ function AppMain({ currentUser = null }) {
       });
 
       const method = editingItem?.id ? 'PUT' : 'POST';
-      const url = editingItem?.id ? `${endpoint}${editingItem.id}` : endpoint;
+      const url = editingItem?.id ? `${endpoint.replace(/\/+$/, '')}/${editingItem.id}` : endpoint;
 
       const token = localStorage.getItem('access_token');
       const headers = { 'Content-Type': 'application/json' };
