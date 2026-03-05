@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db import get_session
-from app.models import User, UserSession, AuditLog, RolePermission
+from app.models import User, UserSession, AuditLog, RolePermission, UserModuleAccess
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
@@ -179,6 +179,21 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
     
     await db.commit()
     
+    # Fetch module access for user
+    access_result = await db.execute(
+        select(UserModuleAccess).where(UserModuleAccess.user_id == user.id)
+    )
+    access_rows = access_result.scalars().all()
+    access_map = {r.module_key: r.is_granted for r in access_rows}
+    is_admin = user.role == 'admin'
+    all_mods = [
+        'dashboard','staff','attendance','products','rawMaterials','stockManagement',
+        'production','productionCompletions','consumables','machinesEquipment','sales',
+        'paymentTracking','procurement','logistics','marketing','hrCustomerCare',
+        'reports','financial','userManagement','settings'
+    ]
+    module_access = {m: access_map.get(m, True if is_admin else (m == 'dashboard')) for m in all_mods}
+    
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -188,7 +203,8 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
             "full_name": user.full_name,
             "role": user.role,
             "department": user.department,
-            "phone": user.phone
+            "phone": user.phone,
+            "module_access": module_access
         }
     }
 
@@ -256,6 +272,21 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
     
     await db.commit()
     
+    # Fetch module access for user
+    access_result = await db.execute(
+        select(UserModuleAccess).where(UserModuleAccess.user_id == user.id)
+    )
+    access_rows = access_result.scalars().all()
+    access_map = {r.module_key: r.is_granted for r in access_rows}
+    is_admin = user.role == 'admin'
+    all_mods = [
+        'dashboard','staff','attendance','products','rawMaterials','stockManagement',
+        'production','productionCompletions','consumables','machinesEquipment','sales',
+        'paymentTracking','procurement','logistics','marketing','hrCustomerCare',
+        'reports','financial','userManagement','settings'
+    ]
+    module_access = {m: access_map.get(m, True if is_admin else (m == 'dashboard')) for m in all_mods}
+    
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -265,7 +296,8 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
             "full_name": user.full_name,
             "role": user.role,
             "department": user.department,
-            "phone": user.phone
+            "phone": user.phone,
+            "module_access": module_access
         }
     }
 
@@ -611,4 +643,132 @@ async def admin_reset_password(user_id: UUID, db: AsyncSession = Depends(get_ses
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Error resetting password: {str(e)}")
+
+
+# ======================== MODULE ACCESS MANAGEMENT ========================
+
+ALL_MODULES = [
+    'dashboard', 'staff', 'attendance', 'products', 'rawMaterials',
+    'stockManagement', 'production', 'productionCompletions', 'consumables',
+    'machinesEquipment', 'sales', 'paymentTracking', 'procurement',
+    'logistics', 'marketing', 'hrCustomerCare', 'reports', 'financial',
+    'userManagement', 'settings'
+]
+
+MODULE_LABELS = {
+    'dashboard': 'Dashboard', 'staff': 'Staff', 'attendance': 'Attendance',
+    'products': 'Products', 'rawMaterials': 'Raw Materials',
+    'stockManagement': 'Stock Management', 'production': 'Production',
+    'productionCompletions': 'Prod. Completions', 'consumables': 'Consumables',
+    'machinesEquipment': 'Machines & Equipment', 'sales': 'Sales',
+    'paymentTracking': 'Payments & Debt', 'procurement': 'Procurement',
+    'logistics': 'Logistics', 'marketing': 'Marketer',
+    'hrCustomerCare': 'HR / Customer Care', 'reports': 'Reports',
+    'financial': 'Financial', 'userManagement': 'User Management',
+    'settings': 'Settings'
+}
+
+
+class ModuleAccessUpdate(BaseModel):
+    modules: dict  # { "staff": true, "sales": false, ... }
+
+
+@router.get("/modules/list")
+async def list_all_modules():
+    """Return the list of all application modules"""
+    return [{"key": k, "label": MODULE_LABELS.get(k, k)} for k in ALL_MODULES]
+
+
+@router.get("/modules/access/{user_id}")
+async def get_user_module_access(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Get module access for a specific user"""
+    result = await db.execute(
+        select(UserModuleAccess).where(UserModuleAccess.user_id == user_id)
+    )
+    rows = result.scalars().all()
+    access_map = {r.module_key: r.is_granted for r in rows}
+    # If no records exist yet, admin gets all, others get dashboard only
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one_or_none()
+    is_admin = user and user.role == 'admin'
+    modules = {}
+    for m in ALL_MODULES:
+        if m in access_map:
+            modules[m] = access_map[m]
+        else:
+            modules[m] = True if is_admin else (m == 'dashboard')
+    return {"user_id": str(user_id), "modules": modules}
+
+
+@router.get("/modules/access-all")
+async def get_all_users_module_access(db: AsyncSession = Depends(get_session)):
+    """Get module access for all users (admin view)"""
+    users_result = await db.execute(select(User).order_by(User.full_name))
+    users = users_result.scalars().all()
+    access_result = await db.execute(select(UserModuleAccess))
+    all_access = access_result.scalars().all()
+    access_by_user = {}
+    for a in all_access:
+        uid = str(a.user_id)
+        if uid not in access_by_user:
+            access_by_user[uid] = {}
+        access_by_user[uid][a.module_key] = a.is_granted
+    result = []
+    for u in users:
+        uid = str(u.id)
+        is_admin = u.role == 'admin'
+        user_access = access_by_user.get(uid, {})
+        modules = {}
+        for m in ALL_MODULES:
+            if m in user_access:
+                modules[m] = user_access[m]
+            else:
+                modules[m] = True if is_admin else (m == 'dashboard')
+        result.append({
+            "user_id": uid,
+            "full_name": u.full_name,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "modules": modules
+        })
+    return result
+
+
+@router.put("/modules/access/{user_id}")
+async def set_user_module_access(user_id: UUID, body: ModuleAccessUpdate, db: AsyncSession = Depends(get_session)):
+    """Set module access for a specific user"""
+    try:
+        for module_key, is_granted in body.modules.items():
+            if module_key not in ALL_MODULES:
+                continue
+            result = await db.execute(
+                select(UserModuleAccess).where(
+                    UserModuleAccess.user_id == user_id,
+                    UserModuleAccess.module_key == module_key
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.is_granted = is_granted
+            else:
+                db.add(UserModuleAccess(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    module_key=module_key,
+                    is_granted=is_granted
+                ))
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            action="MODULE_ACCESS_UPDATED",
+            module="auth",
+            details=f"Module access updated for user {user_id}"
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"success": True, "message": "Module access updated successfully"}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating module access: {str(e)}")
 

@@ -175,6 +175,12 @@ function AppMain({ currentUser = null }) {
   const [umSelectedUser, setUmSelectedUser] = useState(null);
   const [umEditingRole, setUmEditingRole] = useState(null);
 
+  // Module Access Control state
+  const [moduleAccessData, setModuleAccessData] = useState([]);  // all users' module access for admin grid
+  const [myModuleAccess, setMyModuleAccess] = useState(null);    // current user's module access
+  const [maLoading, setMaLoading] = useState(false);
+  const [maSaving, setMaSaving] = useState({});
+
   // Logistics Module state
   const [logView, setLogView] = useState('dashboard');
   const [logDashboard, setLogDashboard] = useState(null);
@@ -424,6 +430,48 @@ function AppMain({ currentUser = null }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Fetch module access for current user on mount
+  useEffect(() => {
+    if (currentUser && currentUser.id) {
+      // Use module_access from login response if available
+      if (currentUser.module_access) {
+        setMyModuleAccess(currentUser.module_access);
+      } else {
+        fetch(`/api/auth/modules/access/${currentUser.id}`)
+          .then(r => r.json())
+          .then(d => setMyModuleAccess(d.modules || null))
+          .catch(() => {});
+      }
+    }
+  }, [currentUser]);
+
+  // Fetch all users module access for admin settings
+  async function fetchModuleAccessAll() {
+    setMaLoading(true);
+    try {
+      const r = await fetch('/api/auth/modules/access-all');
+      const d = await r.json();
+      setModuleAccessData(Array.isArray(d) ? d : []);
+    } catch(e) { console.error(e); }
+    finally { setMaLoading(false); }
+  }
+
+  // Save module access for one user
+  async function saveModuleAccess(userId, modules) {
+    setMaSaving(prev => ({...prev, [userId]: true}));
+    try {
+      const r = await fetch(`/api/auth/modules/access/${userId}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ modules })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Failed');
+      notify(d.message, 'success');
+    } catch(e) { notify(e.message, 'error'); }
+    finally { setMaSaving(prev => ({...prev, [userId]: false})); }
   }
 
   // ===== MARKETING FETCHERS =====
@@ -2166,7 +2214,16 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
+            // Admin always sees everything
+            if (!currentUser || currentUser.role === 'admin') return true;
+            // Dashboard always visible
+            if (m === 'dashboard') return true;
+            // Use module access if available
+            if (myModuleAccess && myModuleAccess[m] !== undefined) return myModuleAccess[m];
+            // Default: hide for non-admin if no access data loaded yet
+            return false;
+          }).map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
               {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m.toUpperCase()}
             </button>
@@ -5707,6 +5764,69 @@ function AppMain({ currentUser = null }) {
                 </table>
               </div>
               
+              {/* Module Access Control - Full Grid */}
+              <div className="settings-card" style={{gridColumn: '1 / -1'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <h3>Module Access Control</h3>
+                  <button className="btn btn-primary" onClick={fetchModuleAccessAll} style={{fontSize:12}}>{maLoading ? 'Loading...' : 'Load / Refresh Access Data'}</button>
+                </div>
+                <p style={{fontSize:13,color:'#666',marginBottom:16}}>Grant or deny access to each module for individual users. Admins always have full access. Changes save immediately per user.</p>
+                {moduleAccessData.length === 0 && !maLoading && (
+                  <div style={{textAlign:'center',padding:30,color:'#aaa'}}>Click "Load / Refresh Access Data" above to view and manage module access for all users.</div>
+                )}
+                {moduleAccessData.length > 0 && (
+                  <div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                      <thead>
+                        <tr style={{background:'#f1f3f5'}}>
+                          <th style={{padding:'10px 8px',textAlign:'left',position:'sticky',left:0,background:'#f1f3f5',zIndex:2,minWidth:180,borderBottom:'2px solid #dee2e6'}}>User</th>
+                          <th style={{padding:'10px 4px',textAlign:'center',fontSize:10,borderBottom:'2px solid #dee2e6',minWidth:30}} title="Select All">All</th>
+                          {['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(mod => (
+                            <th key={mod} style={{padding:'10px 4px',textAlign:'center',fontSize:9,textTransform:'uppercase',letterSpacing:0.3,borderBottom:'2px solid #dee2e6',minWidth:65,whiteSpace:'nowrap'}}>
+                              {mod === 'rawMaterials' ? 'Raw Mat.' : mod === 'stockManagement' ? 'Stock Mgt' : mod === 'productionCompletions' ? 'Prod.Comp' : mod === 'machinesEquipment' ? 'Machines' : mod === 'paymentTracking' ? 'Pay & Debt' : mod === 'hrCustomerCare' ? 'HR/CustCare' : mod === 'userManagement' ? 'User Mgt' : mod.charAt(0).toUpperCase() + mod.slice(1)}
+                            </th>
+                          ))}
+                          <th style={{padding:'10px 8px',borderBottom:'2px solid #dee2e6'}}>Save</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {moduleAccessData.filter(u => u.is_active).map((u, idx) => {
+                          const isAdmin = u.role === 'admin';
+                          const mods = ['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'];
+                          const allChecked = mods.every(m => u.modules[m]);
+                          return (
+                            <tr key={u.user_id} style={{background: idx%2===0?'#fff':'#fafbfc', opacity: isAdmin ? 0.6 : 1}}>
+                              <td style={{padding:'8px',fontWeight:600,position:'sticky',left:0,background:idx%2===0?'#fff':'#fafbfc',zIndex:1,borderBottom:'1px solid #eee'}}>
+                                <div>{u.full_name}</div>
+                                <div style={{fontSize:10,color:'#888',fontWeight:400}}>{u.email} ({u.role})</div>
+                              </td>
+                              <td style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                <input type="checkbox" checked={allChecked} disabled={isAdmin} onChange={(e) => {
+                                  const val = e.target.checked;
+                                  setModuleAccessData(prev => prev.map(x => x.user_id === u.user_id ? {...x, modules: {...x.modules, ...Object.fromEntries(mods.map(m => [m, val]))}} : x));
+                                }} title="Toggle all modules" style={{cursor:isAdmin?'not-allowed':'pointer'}} />
+                              </td>
+                              {mods.map(mod => (
+                                <td key={mod} style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                  <input type="checkbox" checked={!!u.modules[mod]} disabled={isAdmin} onChange={() => {
+                                    setModuleAccessData(prev => prev.map(x => x.user_id === u.user_id ? {...x, modules: {...x.modules, [mod]: !x.modules[mod]}} : x));
+                                  }} style={{cursor:isAdmin?'not-allowed':'pointer',accentColor: u.modules[mod]?'#27ae60':'#ccc'}} />
+                                </td>
+                              ))}
+                              <td style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                <button disabled={isAdmin || maSaving[u.user_id]} onClick={() => saveModuleAccess(u.user_id, u.modules)} style={{padding:'4px 10px',borderRadius:6,border:'none',background:isAdmin?'#eee':'#27ae60',color:isAdmin?'#999':'#fff',fontSize:10,fontWeight:700,cursor:isAdmin?'not-allowed':'pointer'}}>
+                                  {maSaving[u.user_id] ? '...' : 'Save'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
               {/* Company Information */}
               <div className="settings-card">
                 <h3>🏢 Company Information</h3>
@@ -5752,20 +5872,10 @@ function AppMain({ currentUser = null }) {
                 <div className="form-group"><label>Login Attempt Limit</label><input type="number" defaultValue="5" min="3" max="10"/></div>
               </div>
 
-              {/* Module Management */}
-              <div className="settings-card">
-                <h3>🧩 Module Management</h3>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>HR & Staff Module</span></div>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>Payroll Module</span></div>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>Inventory Module</span></div>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>Production Module</span></div>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>Sales Module</span></div>
-                <div className="form-group"><input type="checkbox" defaultChecked/> <span style={{marginLeft:'8px'}}>Accounting Module</span></div>
-              </div>
             </div>
 
             <div style={{marginTop:'24px', textAlign:'center'}}>
-              <button className="btn btn-primary" style={{padding:'12px 48px', fontSize:'16px'}}>💾 Save All Settings</button>
+              <button className="btn btn-primary" style={{padding:'12px 48px', fontSize:'16px'}}>Save All Settings</button>
             </div>
           </div>
         )}

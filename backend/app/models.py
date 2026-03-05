@@ -550,6 +550,16 @@ class UserSession(Base):
     expires_at = sa.Column(sa.TIMESTAMP(timezone=True), nullable=False)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
 
+class UserModuleAccess(Base):
+    __tablename__ = 'user_module_access'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    module_key = sa.Column(sa.String(50), nullable=False)  # e.g. staff, sales, production
+    is_granted = sa.Column(sa.Boolean, default=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+    __table_args__ = (sa.UniqueConstraint('user_id', 'module_key', name='uq_user_module'),)
+
 class CustomField(Base):
     __tablename__ = 'custom_fields'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
