@@ -169,6 +169,12 @@ function AppMain({ currentUser = null }) {
   });
   const [procPoPayForm, setProcPoPayForm] = useState({ amount: '', payment_method: '', payment_reference: '' });
 
+  // User Management state
+  const [umFilter, setUmFilter] = useState('all');
+  const [umSearch, setUmSearch] = useState('');
+  const [umSelectedUser, setUmSelectedUser] = useState(null);
+  const [umEditingRole, setUmEditingRole] = useState(null);
+
   // Logistics Module state
   const [logView, setLogView] = useState('dashboard');
   const [logDashboard, setLogDashboard] = useState(null);
@@ -2160,9 +2166,9 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','settings'].map(m => (
+          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -5386,6 +5392,215 @@ function AppMain({ currentUser = null }) {
             )}
           </div>
         )}
+
+        {/* ===================== USER MANAGEMENT MODULE ===================== */}
+        {activeModule === 'userManagement' && (() => {
+          const users = data.users || [];
+          const pendingUsers = users.filter(u => !u.is_active && !u.is_locked);
+          const activeUsers = users.filter(u => u.is_active && !u.is_locked);
+          const lockedUsers = users.filter(u => u.is_locked);
+          const inactiveUsers = users.filter(u => !u.is_active);
+          const filteredUsers = users.filter(u => {
+            const matchesSearch = !umSearch || u.full_name?.toLowerCase().includes(umSearch.toLowerCase()) || u.email?.toLowerCase().includes(umSearch.toLowerCase()) || u.phone?.includes(umSearch);
+            if (umFilter === 'all') return matchesSearch;
+            if (umFilter === 'pending') return !u.is_active && !u.is_locked && matchesSearch;
+            if (umFilter === 'active') return u.is_active && !u.is_locked && matchesSearch;
+            if (umFilter === 'locked') return u.is_locked && matchesSearch;
+            if (umFilter === 'inactive') return !u.is_active && matchesSearch;
+            return matchesSearch;
+          });
+          const roleLabels = { admin: 'Administrator', sales_staff: 'Sales Staff', marketer: 'Marketer', customer_care: 'Customer Care', production_staff: 'Production Staff' };
+          const roleColors = { admin: '#e74c3c', sales_staff: '#3498db', marketer: '#9b59b6', customer_care: '#2ecc71', production_staff: '#f39c12' };
+
+          const handleApprove = async (userId) => {
+            try { const r = await fetch(`/api/auth/users/${userId}/approve`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); fetchData('users'); } catch(e) { notify(e.message,'error'); }
+          };
+          const handleReject = async (userId, email) => {
+            if (!window.confirm(`Permanently reject and delete registration for ${email}?`)) return;
+            try { const r = await fetch(`/api/auth/users/${userId}/reject`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); fetchData('users'); } catch(e) { notify(e.message,'error'); }
+          };
+          const handleDeactivate = async (userId, email) => {
+            if (!window.confirm(`Deactivate user ${email}? They will not be able to login.`)) return;
+            try { const r = await fetch(`/api/auth/users/${userId}/deactivate`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); fetchData('users'); } catch(e) { notify(e.message,'error'); }
+          };
+          const handleToggleLock = async (userId) => {
+            try { const r = await fetch(`/api/auth/users/${userId}/toggle-lock`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); fetchData('users'); } catch(e) { notify(e.message,'error'); }
+          };
+          const handleChangeRole = async (userId, newRole) => {
+            try { const r = await fetch(`/api/auth/users/${userId}/role`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role:newRole})}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); setUmEditingRole(null); fetchData('users'); } catch(e) { notify(e.message,'error'); }
+          };
+          const handleResetPassword = async (userId, email) => {
+            if (!window.confirm(`Reset password for ${email}? A temporary password will be assigned.`)) return;
+            try { const r = await fetch(`/api/auth/users/${userId}/reset-password`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); } catch(e) { notify(e.message,'error'); }
+          };
+
+          return (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="" className="module-logo" onError={(e)=>{e.target.style.display='none';}} />
+                <h2>User Management & Approval</h2>
+              </div>
+              <button className="btn btn-refresh" onClick={() => fetchData('users')}>Refresh</button>
+            </div>
+
+            {/* Stats Cards */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:16,marginBottom:24}}>
+              <div onClick={()=>setUmFilter('all')} style={{background:umFilter==='all'?'#2c3e50':'#fff',color:umFilter==='all'?'#fff':'#2c3e50',borderRadius:12,padding:'20px 16px',boxShadow:'0 2px 8px rgba(0,0,0,.08)',cursor:'pointer',textAlign:'center',transition:'all .2s',border:umFilter==='all'?'2px solid #2c3e50':'2px solid #eee'}}>
+                <div style={{fontSize:32,fontWeight:800}}>{users.length}</div>
+                <div style={{fontSize:13,fontWeight:600,marginTop:4}}>Total Users</div>
+              </div>
+              <div onClick={()=>setUmFilter('pending')} style={{background:umFilter==='pending'?'#f39c12':'#fff',color:umFilter==='pending'?'#fff':'#f39c12',borderRadius:12,padding:'20px 16px',boxShadow:'0 2px 8px rgba(0,0,0,.08)',cursor:'pointer',textAlign:'center',transition:'all .2s',border:umFilter==='pending'?'2px solid #f39c12':'2px solid #eee'}}>
+                <div style={{fontSize:32,fontWeight:800}}>{pendingUsers.length}</div>
+                <div style={{fontSize:13,fontWeight:600,marginTop:4}}>Pending Approval</div>
+              </div>
+              <div onClick={()=>setUmFilter('active')} style={{background:umFilter==='active'?'#27ae60':'#fff',color:umFilter==='active'?'#fff':'#27ae60',borderRadius:12,padding:'20px 16px',boxShadow:'0 2px 8px rgba(0,0,0,.08)',cursor:'pointer',textAlign:'center',transition:'all .2s',border:umFilter==='active'?'2px solid #27ae60':'2px solid #eee'}}>
+                <div style={{fontSize:32,fontWeight:800}}>{activeUsers.length}</div>
+                <div style={{fontSize:13,fontWeight:600,marginTop:4}}>Active</div>
+              </div>
+              <div onClick={()=>setUmFilter('locked')} style={{background:umFilter==='locked'?'#e74c3c':'#fff',color:umFilter==='locked'?'#fff':'#e74c3c',borderRadius:12,padding:'20px 16px',boxShadow:'0 2px 8px rgba(0,0,0,.08)',cursor:'pointer',textAlign:'center',transition:'all .2s',border:umFilter==='locked'?'2px solid #e74c3c':'2px solid #eee'}}>
+                <div style={{fontSize:32,fontWeight:800}}>{lockedUsers.length}</div>
+                <div style={{fontSize:13,fontWeight:600,marginTop:4}}>Locked</div>
+              </div>
+            </div>
+
+            {/* Pending Approval Alert */}
+            {pendingUsers.length > 0 && (
+              <div style={{background:'linear-gradient(135deg,#fff3cd,#ffeaa7)',border:'1px solid #f39c12',borderRadius:10,padding:'16px 20px',marginBottom:20,display:'flex',alignItems:'center',gap:12}}>
+                <span style={{fontSize:28}}>!</span>
+                <div>
+                  <strong style={{color:'#856404',fontSize:15}}>{pendingUsers.length} user{pendingUsers.length>1?'s':''} awaiting approval</strong>
+                  <p style={{margin:'4px 0 0',fontSize:13,color:'#856404'}}>New registrations need admin approval before users can access the system.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Search Bar */}
+            <div style={{display:'flex',gap:12,marginBottom:20,flexWrap:'wrap',alignItems:'center'}}>
+              <input type="text" placeholder="Search by name, email or phone..." value={umSearch} onChange={(e)=>setUmSearch(e.target.value)} style={{flex:1,minWidth:250,padding:'10px 16px',borderRadius:8,border:'1px solid #ddd',fontSize:14}} />
+              <select value={umFilter} onChange={(e)=>setUmFilter(e.target.value)} style={{padding:'10px 16px',borderRadius:8,border:'1px solid #ddd',fontSize:14,background:'#fff'}}>
+                <option value="all">All Users ({users.length})</option>
+                <option value="pending">Pending ({pendingUsers.length})</option>
+                <option value="active">Active ({activeUsers.length})</option>
+                <option value="locked">Locked ({lockedUsers.length})</option>
+                <option value="inactive">Inactive ({inactiveUsers.length})</option>
+              </select>
+            </div>
+
+            {/* Users Table */}
+            <div style={{background:'#fff',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.06)',overflow:'hidden'}}>
+              <div className="table-responsive">
+                <table className="data-table" style={{marginBottom:0}}>
+                  <thead>
+                    <tr style={{background:'#f8f9fa'}}>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>#</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>User</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>Contact</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>Role</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>Department</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>Status</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700}}>Registered</th>
+                      <th style={{padding:'14px 12px',fontSize:11,textTransform:'uppercase',letterSpacing:.5,color:'#666',fontWeight:700,minWidth:280}}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.map((u, idx) => (
+                      <tr key={u.id} style={{background: !u.is_active ? '#fff8f0' : u.is_locked ? '#fff5f5' : idx%2===0 ? '#fff' : '#fafbfc', borderLeft: !u.is_active && !u.is_locked ? '4px solid #f39c12' : u.is_locked ? '4px solid #e74c3c' : '4px solid #27ae60'}}>
+                        <td style={{padding:'12px',fontSize:12,color:'#999'}}>{idx+1}</td>
+                        <td style={{padding:'12px'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:10}}>
+                            <div style={{width:38,height:38,borderRadius:'50%',background:roleColors[u.role]||'#95a5a6',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:14,flexShrink:0}}>
+                              {(u.full_name||'?').charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div style={{fontWeight:600,fontSize:14}}>{u.full_name}</div>
+                              <div style={{fontSize:11,color:'#888'}}>{u.email}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{padding:'12px',fontSize:13}}>{u.phone || <span style={{color:'#ccc'}}>No phone</span>}</td>
+                        <td style={{padding:'12px'}}>
+                          {umEditingRole === u.id ? (
+                            <select defaultValue={u.role} onChange={(e)=>handleChangeRole(u.id, e.target.value)} onBlur={()=>setUmEditingRole(null)} autoFocus style={{padding:'4px 8px',borderRadius:6,border:'2px solid #3498db',fontSize:12,fontWeight:600}}>
+                              <option value="admin">Administrator</option>
+                              <option value="sales_staff">Sales Staff</option>
+                              <option value="marketer">Marketer</option>
+                              <option value="customer_care">Customer Care</option>
+                              <option value="production_staff">Production Staff</option>
+                            </select>
+                          ) : (
+                            <span onClick={()=>setUmEditingRole(u.id)} style={{display:'inline-block',padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:700,background:roleColors[u.role]||'#95a5a6',color:'#fff',cursor:'pointer',letterSpacing:.3}} title="Click to change role">
+                              {roleLabels[u.role] || u.role}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{padding:'12px',fontSize:13,color:'#666'}}>{u.department || '-'}</td>
+                        <td style={{padding:'12px'}}>
+                          {u.is_locked ? (
+                            <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:700,background:'#fde8e8',color:'#e74c3c'}}>Locked</span>
+                          ) : u.is_active ? (
+                            <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:700,background:'#e8f8ef',color:'#27ae60'}}>Active</span>
+                          ) : (
+                            <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:700,background:'#fef3e2',color:'#f39c12'}}>Pending</span>
+                          )}
+                        </td>
+                        <td style={{padding:'12px',fontSize:12,color:'#888'}}>{u.created_at ? new Date(u.created_at).toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'}) : '-'}</td>
+                        <td style={{padding:'12px'}}>
+                          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                            {/* Pending user: Approve / Reject */}
+                            {!u.is_active && !u.is_locked && (
+                              <>
+                                <button onClick={()=>handleApprove(u.id)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#27ae60',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Approve</button>
+                                <button onClick={()=>handleReject(u.id,u.email)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#e74c3c',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Reject</button>
+                              </>
+                            )}
+                            {/* Active user: Deactivate / Lock */}
+                            {u.is_active && !u.is_locked && (
+                              <>
+                                <button onClick={()=>handleDeactivate(u.id,u.email)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#e67e22',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Deactivate</button>
+                                <button onClick={()=>handleToggleLock(u.id)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#c0392b',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Lock</button>
+                              </>
+                            )}
+                            {/* Locked user: Unlock */}
+                            {u.is_locked && (
+                              <button onClick={()=>handleToggleLock(u.id)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#27ae60',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Unlock</button>
+                            )}
+                            {/* Inactive (deactivated) user: Re-approve */}
+                            {!u.is_active && u.is_locked && (
+                              <button onClick={()=>handleApprove(u.id)} style={{padding:'5px 12px',borderRadius:6,border:'none',background:'#27ae60',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>Re-Activate</button>
+                            )}
+                            {/* Reset password - always available */}
+                            <button onClick={()=>handleResetPassword(u.id,u.email)} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #ddd',background:'#fff',color:'#333',fontSize:11,fontWeight:600,cursor:'pointer'}}>Reset Pwd</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredUsers.length === 0 && (
+                      <tr><td colSpan="8" style={{textAlign:'center',padding:40,color:'#aaa',fontSize:15}}>No users match the current filter</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Role Overview */}
+            <div style={{marginTop:24}}>
+              <h3 style={{fontSize:16,fontWeight:700,color:'#2c3e50',marginBottom:12}}>Users by Role</h3>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(160px, 1fr))',gap:12}}>
+                {Object.entries(roleLabels).map(([key, label]) => {
+                  const count = users.filter(u => u.role === key).length;
+                  return (
+                    <div key={key} style={{background:'#fff',borderRadius:10,padding:'14px 16px',boxShadow:'0 1px 4px rgba(0,0,0,.06)',borderLeft:`4px solid ${roleColors[key]}`}}>
+                      <div style={{fontSize:22,fontWeight:800,color:roleColors[key]}}>{count}</div>
+                      <div style={{fontSize:12,fontWeight:600,color:'#666',marginTop:2}}>{label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          );
+        })()}
 
         {/* Settings */}
         {activeModule === 'settings' && (

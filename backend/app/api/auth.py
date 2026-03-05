@@ -524,3 +524,91 @@ async def toggle_user_lock(user_id: UUID, db: AsyncSession = Depends(get_session
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Error toggling user lock: {str(e)}")
 
+
+@router.post("/users/{user_id}/deactivate")
+async def deactivate_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Deactivate an active user account"""
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.is_active = False
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            action="USER_DEACTIVATED",
+            module="auth",
+            details=f"User {user.email} deactivated by administrator"
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"success": True, "message": f"User {user.email} has been deactivated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deactivating user: {str(e)}")
+
+
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+@router.put("/users/{user_id}/role")
+async def update_user_role(user_id: UUID, body: UpdateRoleRequest, db: AsyncSession = Depends(get_session)):
+    """Update a user's role"""
+    valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff"]
+    if body.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        old_role = user.role
+        user.role = body.role
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            action="USER_ROLE_CHANGED",
+            module="auth",
+            details=f"User {user.email} role changed from {old_role} to {body.role}"
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"success": True, "message": f"User {user.email} role changed to {body.role}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating role: {str(e)}")
+
+
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: UUID, db: AsyncSession = Depends(get_session)):
+    """Reset user password to a temporary default (user must change on next login)"""
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        temp_password = "Welcome@123"
+        user.hashed_password = hash_password(temp_password)
+        user.failed_login_attempts = 0
+        user.is_locked = False
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            action="PASSWORD_RESET_BY_ADMIN",
+            module="auth",
+            details=f"Password reset for {user.email} by administrator"
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"success": True, "message": f"Password for {user.email} reset to temporary password: {temp_password}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error resetting password: {str(e)}")
+
