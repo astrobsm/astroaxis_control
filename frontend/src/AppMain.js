@@ -48,6 +48,16 @@ function AppMain({ currentUser = null }) {
   // Financial data (admin only)
   const [financialData, setFinancialData] = useState(null);
   
+  // Salary & Payroll module state
+  const [payrollDashboard, setPayrollDashboard] = useState(null);
+  const [payrollEntries, setPayrollEntries] = useState([]);
+  const [payrollTab, setPayrollTab] = useState('dashboard'); // dashboard | history | process
+  const [payrollPeriod, setPayrollPeriod] = useState({
+    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    end: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0],
+  });
+  const [payrollProcessing, setPayrollProcessing] = useState(false);
+
   // Stock Management state
   const [stockLevels, setStockLevels] = useState({ products: [], rawMaterials: [] });
   const [stockAnalysis, setStockAnalysis] = useState(null);
@@ -330,6 +340,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
     if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogManifests(); fetchLogAnalytics(); }
     if (activeModule === 'transfers') { fetchTransfers(); fetchTransferSummary(); }
+    if (activeModule === 'salaryPayroll') { fetchPayrollDashboard(); fetchPayrollEntries(); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -780,6 +791,99 @@ function AppMain({ currentUser = null }) {
 
   async function exportFinancialPDF() {
     window.open('/api/financial/company-status/export', '_blank');
+  }
+
+  // ===================== SALARY & PAYROLL FUNCTIONS =====================
+  async function fetchPayrollDashboard(start, end) {
+    try {
+      const s = start || payrollPeriod.start;
+      const e = end || payrollPeriod.end;
+      const res = await fetch(`/api/staff/payroll/dashboard?period_start=${s}&period_end=${e}`);
+      if (!res.ok) throw new Error('Failed to fetch payroll dashboard');
+      const result = await res.json();
+      setPayrollDashboard(result);
+    } catch (e) {
+      console.error('Payroll dashboard error:', e);
+      notify(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  async function fetchPayrollEntries() {
+    try {
+      const res = await fetch('/api/staff/payroll/entries');
+      if (!res.ok) throw new Error('Failed to fetch payroll entries');
+      const result = await res.json();
+      setPayrollEntries(result.entries || []);
+    } catch (e) {
+      console.error('Payroll entries error:', e);
+    }
+  }
+
+  async function bulkProcessPayroll() {
+    if (!window.confirm(`Process payroll for ALL active staff for period ${payrollPeriod.start} to ${payrollPeriod.end}?`)) return;
+    try {
+      setPayrollProcessing(true);
+      const res = await fetch(`/api/staff/payroll/bulk-calculate?period_start=${payrollPeriod.start}&period_end=${payrollPeriod.end}`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Bulk payroll failed');
+      const result = await res.json();
+      notify(`Payroll processed for ${result.processed_count} staff (${result.skipped_count} skipped)`, 'success');
+      fetchPayrollDashboard();
+      fetchPayrollEntries();
+    } catch (e) {
+      notify(`Payroll error: ${e.message}`, 'error');
+    } finally {
+      setPayrollProcessing(false);
+    }
+  }
+
+  async function updatePayrollEntryStatus(payrollId, newStatus) {
+    try {
+      const res = await fetch(`/api/staff/payroll/entries/${payrollId}/status?new_status=${newStatus}`, { method: 'PUT' });
+      if (!res.ok) throw new Error('Failed');
+      notify(`Status updated to ${newStatus}`, 'success');
+      fetchPayrollDashboard();
+      fetchPayrollEntries();
+    } catch (e) {
+      notify(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  async function downloadPayslipPdf(payrollId, staffName) {
+    try {
+      const res = await fetch(`/api/staff/payslip/${payrollId}/pdf-v2`);
+      if (!res.ok) throw new Error('Failed to generate payslip PDF');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payslip_${staffName || payrollId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      notify('Payslip downloaded', 'success');
+    } catch (e) {
+      notify(`Payslip error: ${e.message}`, 'error');
+    }
+  }
+
+  async function processSinglePayroll(staffId) {
+    try {
+      setPayrollProcessing(true);
+      const payload = { staff_id: staffId, pay_period_start: payrollPeriod.start, pay_period_end: payrollPeriod.end };
+      const res = await fetch('/api/staff/payroll/calculate-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+      const payroll = await res.json();
+      notify('Payroll calculated', 'success');
+      // auto-download payslip
+      await downloadPayslipPdf(payroll.id, '');
+      fetchPayrollDashboard();
+      fetchPayrollEntries();
+    } catch (e) {
+      notify(`Error: ${e.message}`, 'error');
+    } finally {
+      setPayrollProcessing(false);
+    }
   }
 
   // ===================== PRODUCTION CONSUMABLES =====================
@@ -2266,7 +2370,7 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
+          {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
             // Admin always sees everything
             if (!currentUser || currentUser.role === 'admin') return true;
             // Dashboard always visible
@@ -2277,7 +2381,7 @@ function AppMain({ currentUser = null }) {
             return false;
           }).map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -2624,6 +2728,283 @@ function AppMain({ currentUser = null }) {
             
             {/* Status Display Area */}
             <div id="attendanceDisplayArea" className="attendance-display-area"></div>
+          </div>
+        )}
+
+        {/* ==================== SALARY & PAYROLL MODULE ==================== */}
+        {activeModule === 'salaryPayroll' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Salary & Payroll</h2>
+              </div>
+              <div className="module-actions">
+                <button className={`btn ${payrollTab === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setPayrollTab('dashboard')}>Dashboard</button>
+                <button className={`btn ${payrollTab === 'history' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setPayrollTab('history')}>Payroll History</button>
+                <button className={`btn ${payrollTab === 'process' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setPayrollTab('process')}>Process Payroll</button>
+              </div>
+            </div>
+
+            {/* Period Selector */}
+            <div style={{display:'flex', gap:'1rem', alignItems:'center', padding:'0.75rem 1rem', background:'var(--gray-50, #f8f9fa)', borderRadius:8, marginBottom:'1rem', flexWrap:'wrap'}}>
+              <label style={{fontWeight:600, fontSize:13}}>Pay Period:</label>
+              <input type="date" value={payrollPeriod.start} onChange={(e) => setPayrollPeriod(p => ({...p, start: e.target.value}))} style={{padding:'6px 10px', borderRadius:6, border:'1px solid #ddd'}} />
+              <span>to</span>
+              <input type="date" value={payrollPeriod.end} onChange={(e) => setPayrollPeriod(p => ({...p, end: e.target.value}))} style={{padding:'6px 10px', borderRadius:6, border:'1px solid #ddd'}} />
+              <button className="btn btn-primary" onClick={() => fetchPayrollDashboard(payrollPeriod.start, payrollPeriod.end)} style={{fontSize:12}}>Load Period</button>
+              <button className="btn btn-secondary" onClick={() => {
+                const now = new Date();
+                const s = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+                const e = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+                setPayrollPeriod({ start: s, end: e });
+                fetchPayrollDashboard(s, e);
+              }} style={{fontSize:12}}>Current Month</button>
+            </div>
+
+            {/* DASHBOARD TAB */}
+            {payrollTab === 'dashboard' && (
+              <div>
+                {/* Summary Cards */}
+                {payrollDashboard && (
+                  <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'1rem', marginBottom:'1.5rem'}}>
+                    <div style={{background:'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
+                      <div style={{fontSize:28, fontWeight:700}}>N{(payrollDashboard.total_due || 0).toLocaleString('en-NG', {minimumFractionDigits:2})}</div>
+                      <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Total Due Salaries</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
+                      <div style={{fontSize:28, fontWeight:700}}>{payrollDashboard.total_staff || 0}</div>
+                      <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Active Staff</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
+                      <div style={{fontSize:28, fontWeight:700}}>{(payrollDashboard.total_hours || 0).toFixed(1)}</div>
+                      <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Total Hours Worked</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
+                      <div style={{fontSize:28, fontWeight:700}}>{payrollDashboard.period_start} - {payrollDashboard.period_end}</div>
+                      <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Current Period</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Staff Salary Table */}
+                <div className="table-container">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Employee ID</th>
+                        <th>Name</th>
+                        <th>Position</th>
+                        <th>Pay Mode</th>
+                        <th>Rate</th>
+                        <th>Hours Worked</th>
+                        <th>Days</th>
+                        <th>Overtime</th>
+                        <th>Gross Pay (N)</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(payrollDashboard?.staff || []).map(s => (
+                        <tr key={s.staff_id} style={{background: s.payroll_status === 'paid' ? '#e8f5e9' : s.payroll_status === 'approved' ? '#e3f2fd' : s.payroll_status === 'draft' ? '#fff8e1' : 'transparent'}}>
+                          <td><strong>{s.employee_id}</strong></td>
+                          <td>{s.first_name} {s.last_name}</td>
+                          <td>{s.position}</td>
+                          <td><span style={{background: s.payment_mode === 'hourly' ? '#e3f2fd' : '#f3e5f5', padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600}}>{s.payment_mode === 'hourly' ? 'Hourly' : 'Monthly'}</span></td>
+                          <td>{s.payment_mode === 'hourly' ? `N${s.hourly_rate.toLocaleString()}/hr` : `N${s.monthly_salary.toLocaleString()}/mo`}</td>
+                          <td>{s.hours_worked.toFixed(1)}</td>
+                          <td>{s.days_worked}</td>
+                          <td style={{color: s.overtime_hours > 0 ? '#e65100' : 'inherit', fontWeight: s.overtime_hours > 0 ? 600 : 400}}>{s.overtime_hours.toFixed(1)}</td>
+                          <td><strong style={{color:'#1b5e20'}}>N{s.gross_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</strong></td>
+                          <td>
+                            <span style={{
+                              padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
+                              background: s.payroll_status === 'paid' ? '#c8e6c9' : s.payroll_status === 'approved' ? '#bbdefb' : s.payroll_status === 'draft' ? '#fff9c4' : '#f5f5f5',
+                              color: s.payroll_status === 'paid' ? '#2e7d32' : s.payroll_status === 'approved' ? '#1565c0' : s.payroll_status === 'draft' ? '#f57f17' : '#757575'
+                            }}>
+                              {s.payroll_status === 'not_processed' ? 'Pending' : s.payroll_status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="actions" style={{whiteSpace:'nowrap'}}>
+                            {s.payroll_status === 'not_processed' && (
+                              <button className="btn-edit" onClick={() => processSinglePayroll(s.staff_id)} disabled={payrollProcessing} style={{fontSize:11}}>Process</button>
+                            )}
+                            {s.payroll_id && (
+                              <button className="btn-download" onClick={() => downloadPayslipPdf(s.payroll_id, `${s.employee_id}_${s.first_name}`)} style={{fontSize:11}}>Payslip PDF</button>
+                            )}
+                            {s.payroll_id && s.payroll_status === 'draft' && (
+                              <button className="btn-edit" onClick={() => updatePayrollEntryStatus(s.payroll_id, 'approved')} style={{fontSize:11, background:'#1565c0', color:'#fff'}}>Approve</button>
+                            )}
+                            {s.payroll_id && s.payroll_status === 'approved' && (
+                              <button className="btn-edit" onClick={() => updatePayrollEntryStatus(s.payroll_id, 'paid')} style={{fontSize:11, background:'#2e7d32', color:'#fff'}}>Mark Paid</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {(!payrollDashboard?.staff || payrollDashboard.staff.length === 0) && (
+                        <tr><td colSpan="11" style={{textAlign:'center', padding:'2rem', color:'#999'}}>No staff data. Click "Load Period" to fetch salary data.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Bank Details Summary */}
+                {payrollDashboard?.staff?.length > 0 && (
+                  <div style={{marginTop:'1.5rem'}}>
+                    <h3 style={{marginBottom:'0.75rem', fontSize:15}}>Bank Payment Summary</h3>
+                    <div className="table-container">
+                      <table className="data-table">
+                        <thead>
+                          <tr><th>Employee</th><th>Bank</th><th>Account Name</th><th>Account Number</th><th>Amount (N)</th></tr>
+                        </thead>
+                        <tbody>
+                          {payrollDashboard.staff.filter(s => s.gross_pay > 0).map(s => (
+                            <tr key={s.staff_id}>
+                              <td>{s.first_name} {s.last_name}</td>
+                              <td>{s.bank_name || 'N/A'}</td>
+                              <td>{s.bank_account_name || 'N/A'}</td>
+                              <td>{s.bank_account_number || 'N/A'}</td>
+                              <td><strong>N{s.net_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</strong></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* HISTORY TAB */}
+            {payrollTab === 'history' && (
+              <div>
+                <div style={{display:'flex', gap:'0.5rem', marginBottom:'1rem'}}>
+                  <button className="btn btn-secondary" onClick={fetchPayrollEntries} style={{fontSize:12}}>Refresh</button>
+                </div>
+                <div className="table-container">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Employee</th>
+                        <th>Position</th>
+                        <th>Period</th>
+                        <th>Regular Hrs</th>
+                        <th>OT Hrs</th>
+                        <th>Gross (N)</th>
+                        <th>Deductions (N)</th>
+                        <th>Net Pay (N)</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payrollEntries.map(entry => (
+                        <tr key={entry.id} style={{background: entry.status === 'paid' ? '#e8f5e9' : entry.status === 'approved' ? '#e3f2fd' : 'transparent'}}>
+                          <td style={{fontSize:11}}>{new Date(entry.created_at).toLocaleDateString()}</td>
+                          <td><strong>{entry.employee_id}</strong> - {entry.staff_name}</td>
+                          <td>{entry.position}</td>
+                          <td style={{fontSize:11}}>{entry.pay_period_start} to {entry.pay_period_end}</td>
+                          <td>{entry.regular_hours.toFixed(1)}</td>
+                          <td>{entry.overtime_hours.toFixed(1)}</td>
+                          <td>N{entry.gross_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</td>
+                          <td>N{entry.deductions.toLocaleString('en-NG', {minimumFractionDigits:2})}</td>
+                          <td><strong style={{color:'#1b5e20'}}>N{entry.net_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</strong></td>
+                          <td>
+                            <span style={{
+                              padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
+                              background: entry.status === 'paid' ? '#c8e6c9' : entry.status === 'approved' ? '#bbdefb' : '#fff9c4',
+                              color: entry.status === 'paid' ? '#2e7d32' : entry.status === 'approved' ? '#1565c0' : '#f57f17'
+                            }}>{entry.status.toUpperCase()}</span>
+                          </td>
+                          <td className="actions" style={{whiteSpace:'nowrap'}}>
+                            <button className="btn-download" onClick={() => downloadPayslipPdf(entry.id, `${entry.employee_id}_${entry.staff_name}`)} style={{fontSize:11}}>PDF</button>
+                            {entry.status === 'draft' && (
+                              <button className="btn-edit" onClick={() => updatePayrollEntryStatus(entry.id, 'approved')} style={{fontSize:11}}>Approve</button>
+                            )}
+                            {entry.status === 'approved' && (
+                              <button className="btn-edit" onClick={() => updatePayrollEntryStatus(entry.id, 'paid')} style={{fontSize:11, background:'#2e7d32', color:'#fff'}}>Paid</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {payrollEntries.length === 0 && (
+                        <tr><td colSpan="11" style={{textAlign:'center', padding:'2rem', color:'#999'}}>No payroll entries yet. Process payroll from the Dashboard or Process tab.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* PROCESS TAB */}
+            {payrollTab === 'process' && (
+              <div>
+                <div style={{background:'#fff', borderRadius:12, padding:'2rem', boxShadow:'0 2px 8px rgba(0,0,0,0.08)', maxWidth:600}}>
+                  <h3 style={{marginBottom:'1rem'}}>Bulk Payroll Processing</h3>
+                  <p style={{color:'#666', fontSize:13, marginBottom:'1.5rem'}}>
+                    Process payroll for all active staff members for the selected pay period. This calculates gross pay based on each staff member's configured payment mode (hourly or monthly), attendance hours, and overtime.
+                  </p>
+                  <div style={{background:'#f8f9fa', padding:'1rem', borderRadius:8, marginBottom:'1rem'}}>
+                    <div style={{fontSize:13}}><strong>Period:</strong> {payrollPeriod.start} to {payrollPeriod.end}</div>
+                    <div style={{fontSize:13, marginTop:4}}><strong>Active Staff:</strong> {payrollDashboard?.total_staff || '...'}</div>
+                    <div style={{fontSize:13, marginTop:4}}><strong>Estimated Total:</strong> N{(payrollDashboard?.total_due || 0).toLocaleString('en-NG', {minimumFractionDigits:2})}</div>
+                  </div>
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={bulkProcessPayroll} 
+                    disabled={payrollProcessing}
+                    style={{width:'100%', padding:'12px', fontSize:15, fontWeight:600}}
+                  >
+                    {payrollProcessing ? 'Processing...' : 'Process Payroll for All Staff'}
+                  </button>
+                  <p style={{color:'#999', fontSize:11, marginTop:'0.75rem', textAlign:'center'}}>
+                    Staff with already-processed payroll for this period will be skipped automatically.
+                  </p>
+                </div>
+
+                {/* Individual Processing */}
+                <div style={{marginTop:'2rem'}}>
+                  <h3 style={{marginBottom:'0.75rem'}}>Individual Payroll</h3>
+                  <p style={{color:'#666', fontSize:13, marginBottom:'1rem'}}>Process payroll for a single staff member and auto-download their payslip.</p>
+                  <div className="table-container">
+                    <table className="data-table">
+                      <thead>
+                        <tr><th>Employee ID</th><th>Name</th><th>Position</th><th>Pay Mode</th><th>Rate</th><th>Status</th><th>Action</th></tr>
+                      </thead>
+                      <tbody>
+                        {(payrollDashboard?.staff || []).map(s => (
+                          <tr key={s.staff_id}>
+                            <td>{s.employee_id}</td>
+                            <td>{s.first_name} {s.last_name}</td>
+                            <td>{s.position}</td>
+                            <td>{s.payment_mode === 'hourly' ? 'Hourly' : 'Monthly'}</td>
+                            <td>{s.payment_mode === 'hourly' ? `N${s.hourly_rate.toLocaleString()}/hr` : `N${s.monthly_salary.toLocaleString()}/mo`}</td>
+                            <td>
+                              <span style={{
+                                padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
+                                background: s.payroll_status === 'paid' ? '#c8e6c9' : s.payroll_status === 'approved' ? '#bbdefb' : s.payroll_status === 'draft' ? '#fff9c4' : '#f5f5f5',
+                                color: s.payroll_status === 'paid' ? '#2e7d32' : s.payroll_status === 'approved' ? '#1565c0' : s.payroll_status === 'draft' ? '#f57f17' : '#757575'
+                              }}>{s.payroll_status === 'not_processed' ? 'Pending' : s.payroll_status.toUpperCase()}</span>
+                            </td>
+                            <td>
+                              {s.payroll_status === 'not_processed' ? (
+                                <button className="btn btn-primary" onClick={() => processSinglePayroll(s.staff_id)} disabled={payrollProcessing} style={{fontSize:11, padding:'4px 12px'}}>
+                                  {payrollProcessing ? '...' : 'Process & Download'}
+                                </button>
+                              ) : (
+                                <button className="btn-download" onClick={() => downloadPayslipPdf(s.payroll_id, `${s.employee_id}_${s.first_name}`)} style={{fontSize:11}}>Download Payslip</button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

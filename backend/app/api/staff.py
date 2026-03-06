@@ -722,6 +722,534 @@ async def generate_payslip_pdf(payroll_id: UUID, session: AsyncSession = Depends
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating payslip PDF: {str(e)}")
 
+
+# ==================== SALARY & PAYROLL MODULE ENDPOINTS ====================
+
+@router.get('/payroll/dashboard')
+async def payroll_dashboard(
+    period_start: Optional[date] = None,
+    period_end: Optional[date] = None,
+    session: AsyncSession = Depends(get_session)
+):
+    """
+    Get salary dashboard: all active staff with their pay configuration,
+    attendance hours for the selected period, and calculated due amounts.
+    Defaults to current calendar month if no period specified.
+    """
+    try:
+        today = date.today()
+        if not period_start:
+            period_start = today.replace(day=1)
+        if not period_end:
+            # last day of current month
+            next_month = today.replace(day=28) + timedelta(days=4)
+            period_end = next_month - timedelta(days=next_month.day)
+
+        # Get all active staff
+        result = await session.execute(select(Staff).where(Staff.is_active == True))
+        all_staff = result.scalars().all()
+
+        dashboard = []
+        total_due = Decimal('0')
+        total_hours = Decimal('0')
+
+        for staff in all_staff:
+            # Sum attendance hours in period
+            att_q = select(func.coalesce(func.sum(Attendance.hours_worked), 0)).where(
+                Attendance.staff_id == staff.id,
+                func.date(Attendance.clock_in) >= period_start,
+                func.date(Attendance.clock_in) <= period_end,
+                Attendance.status == 'completed'
+            )
+            att_res = await session.execute(att_q)
+            hours_worked = Decimal(str(att_res.scalar_one() or 0))
+
+            # Count attendance days
+            days_q = select(func.count(Attendance.id)).where(
+                Attendance.staff_id == staff.id,
+                func.date(Attendance.clock_in) >= period_start,
+                func.date(Attendance.clock_in) <= period_end,
+                Attendance.status == 'completed'
+            )
+            days_res = await session.execute(days_q)
+            days_worked = days_res.scalar_one() or 0
+
+            # Calculate pay based on staff payment mode
+            payment_mode = staff.payment_mode or 'monthly'
+            hourly_rate = Decimal(str(staff.hourly_rate or 0))
+            monthly_salary = Decimal(str(staff.monthly_salary or 0))
+
+            standard_hours = Decimal('160')  # 40h/week * 4 weeks
+            overtime_rate_multiplier = Decimal('1.5')
+
+            if payment_mode == 'hourly':
+                regular_hours = min(hours_worked, standard_hours)
+                overtime_hours = max(Decimal('0'), hours_worked - standard_hours)
+                regular_pay = regular_hours * hourly_rate
+                overtime_pay = overtime_hours * (hourly_rate * overtime_rate_multiplier)
+                gross_pay = regular_pay + overtime_pay
+            else:
+                # Monthly salary: pro-rate if needed, add overtime
+                gross_pay = monthly_salary
+                regular_hours = min(hours_worked, standard_hours)
+                overtime_hours = max(Decimal('0'), hours_worked - standard_hours)
+                # For monthly staff, overtime uses equivalent hourly rate
+                if monthly_salary > 0 and standard_hours > 0:
+                    equiv_hourly = monthly_salary / standard_hours
+                    overtime_pay = overtime_hours * (equiv_hourly * overtime_rate_multiplier)
+                    gross_pay = monthly_salary + overtime_pay
+                else:
+                    overtime_pay = Decimal('0')
+                regular_pay = gross_pay - (overtime_hours * (monthly_salary / standard_hours * overtime_rate_multiplier) if monthly_salary > 0 else Decimal('0'))
+
+            # Check if payroll already processed for this period
+            existing_q = select(PayrollEntry).where(
+                PayrollEntry.staff_id == staff.id,
+                PayrollEntry.pay_period_start == period_start,
+                PayrollEntry.pay_period_end == period_end,
+            )
+            existing_res = await session.execute(existing_q)
+            existing_payroll = existing_res.scalars().first()
+
+            payroll_status = existing_payroll.status if existing_payroll else 'not_processed'
+            payroll_id = str(existing_payroll.id) if existing_payroll else None
+
+            total_due += gross_pay
+            total_hours += hours_worked
+
+            dashboard.append({
+                'staff_id': str(staff.id),
+                'employee_id': staff.employee_id,
+                'first_name': staff.first_name,
+                'last_name': staff.last_name,
+                'position': staff.position or '',
+                'payment_mode': payment_mode,
+                'hourly_rate': float(hourly_rate),
+                'monthly_salary': float(monthly_salary),
+                'hours_worked': float(hours_worked),
+                'days_worked': days_worked,
+                'regular_hours': float(regular_hours),
+                'overtime_hours': float(overtime_hours),
+                'gross_pay': float(gross_pay),
+                'net_pay': float(gross_pay),  # No deductions for now
+                'payroll_status': payroll_status,
+                'payroll_id': payroll_id,
+                'bank_name': staff.bank_name or '',
+                'bank_account_number': staff.bank_account_number or '',
+                'bank_account_name': staff.bank_account_name or '',
+            })
+
+        return {
+            'success': True,
+            'period_start': period_start.isoformat(),
+            'period_end': period_end.isoformat(),
+            'total_staff': len(dashboard),
+            'total_due': float(total_due),
+            'total_hours': float(total_hours),
+            'staff': dashboard
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching payroll dashboard: {str(e)}")
+
+
+@router.get('/payroll/entries')
+async def list_payroll_entries(
+    status: Optional[str] = None,
+    session: AsyncSession = Depends(get_session)
+):
+    """List all payroll entries with staff details, optionally filtered by status"""
+    try:
+        q = select(PayrollEntry).order_by(PayrollEntry.created_at.desc())
+        if status:
+            q = q.where(PayrollEntry.status == status)
+        result = await session.execute(q)
+        entries = result.scalars().all()
+
+        entries_list = []
+        for entry in entries:
+            staff_res = await session.execute(select(Staff).where(Staff.id == entry.staff_id))
+            staff = staff_res.scalars().first()
+            entries_list.append({
+                'id': str(entry.id),
+                'staff_id': str(entry.staff_id),
+                'employee_id': staff.employee_id if staff else '',
+                'staff_name': f"{staff.first_name} {staff.last_name}" if staff else 'Unknown',
+                'position': staff.position if staff else '',
+                'pay_period_start': entry.pay_period_start.isoformat(),
+                'pay_period_end': entry.pay_period_end.isoformat(),
+                'regular_hours': float(entry.regular_hours),
+                'overtime_hours': float(entry.overtime_hours),
+                'gross_pay': float(entry.gross_pay),
+                'deductions': float(entry.deductions),
+                'net_pay': float(entry.net_pay),
+                'status': entry.status,
+                'created_at': entry.created_at.isoformat(),
+            })
+        return {'success': True, 'entries': entries_list}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching payroll entries: {str(e)}")
+
+
+@router.post('/payroll/bulk-calculate')
+async def bulk_calculate_payroll(
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    session: AsyncSession = Depends(get_session)
+):
+    """Calculate payroll for ALL active staff for a given period. Uses each staff member's actual rates."""
+    try:
+        result = await session.execute(select(Staff).where(Staff.is_active == True))
+        all_staff = result.scalars().all()
+
+        processed = []
+        skipped = []
+        standard_hours = Decimal('160')
+        overtime_multiplier = Decimal('1.5')
+
+        for staff in all_staff:
+            # Check if already processed
+            existing_q = select(PayrollEntry).where(
+                PayrollEntry.staff_id == staff.id,
+                PayrollEntry.pay_period_start == period_start,
+                PayrollEntry.pay_period_end == period_end,
+            )
+            existing_res = await session.execute(existing_q)
+            if existing_res.scalars().first():
+                skipped.append({
+                    'staff_id': str(staff.id),
+                    'employee_id': staff.employee_id,
+                    'name': f"{staff.first_name} {staff.last_name}",
+                    'reason': 'Already processed for this period'
+                })
+                continue
+
+            # Sum attendance
+            att_q = select(func.coalesce(func.sum(Attendance.hours_worked), 0)).where(
+                Attendance.staff_id == staff.id,
+                func.date(Attendance.clock_in) >= period_start,
+                func.date(Attendance.clock_in) <= period_end,
+                Attendance.status == 'completed'
+            )
+            att_res = await session.execute(att_q)
+            total_hours_dec = Decimal(str(att_res.scalar_one() or 0))
+
+            regular_hours = min(total_hours_dec, standard_hours)
+            overtime_hours = max(Decimal('0'), total_hours_dec - standard_hours)
+
+            payment_mode = staff.payment_mode or 'monthly'
+            hourly_rate = Decimal(str(staff.hourly_rate or 0))
+            monthly_salary = Decimal(str(staff.monthly_salary or 0))
+
+            if payment_mode == 'hourly':
+                gross_pay = (regular_hours * hourly_rate) + (overtime_hours * hourly_rate * overtime_multiplier)
+            else:
+                if monthly_salary > 0 and standard_hours > 0:
+                    equiv_hourly = monthly_salary / standard_hours
+                    gross_pay = monthly_salary + (overtime_hours * equiv_hourly * overtime_multiplier)
+                else:
+                    gross_pay = monthly_salary
+
+            deductions = Decimal('0')
+            net_pay = gross_pay - deductions
+
+            payroll = PayrollEntry(
+                staff_id=staff.id,
+                pay_period_start=period_start,
+                pay_period_end=period_end,
+                regular_hours=regular_hours,
+                overtime_hours=overtime_hours,
+                gross_pay=gross_pay,
+                deductions=deductions,
+                net_pay=net_pay,
+                status='draft'
+            )
+            session.add(payroll)
+            await session.flush()
+
+            processed.append({
+                'payroll_id': str(payroll.id),
+                'staff_id': str(staff.id),
+                'employee_id': staff.employee_id,
+                'name': f"{staff.first_name} {staff.last_name}",
+                'gross_pay': float(gross_pay),
+                'net_pay': float(net_pay),
+            })
+
+        await session.commit()
+        return {
+            'success': True,
+            'period_start': period_start.isoformat(),
+            'period_end': period_end.isoformat(),
+            'processed_count': len(processed),
+            'skipped_count': len(skipped),
+            'processed': processed,
+            'skipped': skipped,
+        }
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error bulk calculating payroll: {str(e)}")
+
+
+@router.put('/payroll/entries/{payroll_id}/status')
+async def update_payroll_status(
+    payroll_id: UUID,
+    new_status: str = Query(..., regex='^(draft|approved|paid)$'),
+    session: AsyncSession = Depends(get_session)
+):
+    """Update the status of a payroll entry (draft -> approved -> paid)"""
+    try:
+        result = await session.execute(select(PayrollEntry).where(PayrollEntry.id == payroll_id))
+        entry = result.scalars().first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Payroll entry not found")
+        entry.status = new_status
+        await session.commit()
+        await session.refresh(entry)
+        return {
+            'success': True,
+            'message': f'Payroll entry status updated to {new_status}',
+            'id': str(entry.id),
+            'status': entry.status,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Error updating status: {str(e)}")
+
+
+# Also update the existing calculate endpoint to use staff's actual rates
+@router.post('/payroll/calculate-v2', response_model=PayrollEntrySchema)
+async def calculate_payroll_v2(pay_data: PayrollEntryCreate, session: AsyncSession = Depends(get_session)):
+    """Calculate payroll for a single staff member using their actual configured rates"""
+    try:
+        staff_result = await session.execute(select(Staff).where(Staff.id == pay_data.staff_id))
+        staff = staff_result.scalars().first()
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff not found")
+
+        # Sum attendance hours
+        att_q = select(func.coalesce(func.sum(Attendance.hours_worked), 0)).where(
+            Attendance.staff_id == pay_data.staff_id,
+            func.date(Attendance.clock_in) >= pay_data.pay_period_start,
+            func.date(Attendance.clock_in) <= pay_data.pay_period_end,
+            Attendance.status == 'completed'
+        )
+        att_res = await session.execute(att_q)
+        total_hours = Decimal(str(att_res.scalar_one() or 0))
+
+        standard_hours = Decimal('160')
+        overtime_multiplier = Decimal('1.5')
+        regular_hours = min(total_hours, standard_hours)
+        overtime_hours = max(Decimal('0'), total_hours - standard_hours)
+
+        payment_mode = staff.payment_mode or 'monthly'
+        hourly_rate = Decimal(str(staff.hourly_rate or 0))
+        monthly_salary = Decimal(str(staff.monthly_salary or 0))
+
+        if payment_mode == 'hourly':
+            gross_pay = (regular_hours * hourly_rate) + (overtime_hours * hourly_rate * overtime_multiplier)
+        else:
+            if monthly_salary > 0 and standard_hours > 0:
+                equiv_hourly = monthly_salary / standard_hours
+                gross_pay = monthly_salary + (overtime_hours * equiv_hourly * overtime_multiplier)
+            else:
+                gross_pay = monthly_salary
+
+        deductions = Decimal('0')
+        net_pay = gross_pay - deductions
+
+        payroll = PayrollEntry(
+            staff_id=pay_data.staff_id,
+            pay_period_start=pay_data.pay_period_start,
+            pay_period_end=pay_data.pay_period_end,
+            regular_hours=regular_hours,
+            overtime_hours=overtime_hours,
+            gross_pay=gross_pay,
+            deductions=deductions,
+            net_pay=net_pay,
+            status='draft'
+        )
+        session.add(payroll)
+        await session.commit()
+        await session.refresh(payroll)
+        return payroll
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Error calculating payroll: {str(e)}")
+
+
+# Enhanced payslip PDF with actual staff rates
+@router.get('/payslip/{payroll_id}/pdf-v2')
+async def generate_enhanced_payslip_pdf(payroll_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Generate an enhanced PDF payslip that uses the staff's actual configured rates"""
+    try:
+        result = await session.execute(select(PayrollEntry).where(PayrollEntry.id == payroll_id))
+        payroll = result.scalars().first()
+        if not payroll:
+            raise HTTPException(status_code=404, detail="Payroll entry not found")
+
+        staff_result = await session.execute(select(Staff).where(Staff.id == payroll.staff_id))
+        staff = staff_result.scalars().first()
+
+        payment_mode = staff.payment_mode or 'monthly'
+        hourly_rate = Decimal(str(staff.hourly_rate or 0))
+        monthly_salary = Decimal(str(staff.monthly_salary or 0))
+        standard_hours = Decimal('160')
+        overtime_multiplier = Decimal('1.5')
+
+        # Build PDF
+        buffer = BytesIO()
+        p = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+
+        # Company Logo
+        logo_paths = [
+            '/app/company-logo.png',
+            '/app/frontend/build/company-logo.png',
+            os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
+        ]
+        logo_path = None
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+        if logo_path:
+            p.drawImage(logo_path, 40, height - 90, width=80, height=80, preserveAspectRatio=True)
+
+        # Header
+        p.setFont('Helvetica-Bold', 16)
+        p.drawString(140, height - 50, 'BONNESANTE MEDICALS')
+        p.setFont('Helvetica', 10)
+        p.drawString(140, height - 65, 'AstroBSM StockMaster ERP - Payslip')
+
+        # Divider line
+        y = height - 100
+        p.line(40, y, width - 40, y)
+
+        # Employee Info section
+        y -= 25
+        p.setFont('Helvetica-Bold', 11)
+        p.drawString(40, y, 'EMPLOYEE DETAILS')
+        y -= 20
+        p.setFont('Helvetica', 10)
+        p.drawString(60, y, f'Name: {staff.first_name} {staff.last_name}')
+        p.drawString(300, y, f'Employee ID: {staff.employee_id}')
+        y -= 16
+        p.drawString(60, y, f'Position: {staff.position or "N/A"}')
+        p.drawString(300, y, f'Payment Mode: {payment_mode.title()}')
+        y -= 16
+        p.drawString(60, y, f'Pay Period: {payroll.pay_period_start} to {payroll.pay_period_end}')
+        if payment_mode == 'hourly':
+            p.drawString(300, y, f'Rate: N{hourly_rate:,.2f}/hr')
+        else:
+            p.drawString(300, y, f'Monthly Salary: N{monthly_salary:,.2f}')
+
+        # Divider
+        y -= 15
+        p.line(40, y, width - 40, y)
+
+        # Earnings section
+        y -= 25
+        p.setFont('Helvetica-Bold', 11)
+        p.drawString(40, y, 'EARNINGS')
+
+        # Table header
+        y -= 20
+        p.setFont('Helvetica-Bold', 9)
+        p.drawString(60, y, 'Description')
+        p.drawString(260, y, 'Hours')
+        p.drawString(340, y, 'Rate')
+        p.drawString(430, y, 'Amount (N)')
+        y -= 3
+        p.line(60, y, width - 40, y)
+
+        p.setFont('Helvetica', 10)
+        y -= 18
+
+        if payment_mode == 'hourly':
+            p.drawString(60, y, 'Regular Hours')
+            p.drawString(260, y, f'{payroll.regular_hours:.1f}')
+            p.drawString(340, y, f'N{hourly_rate:,.2f}')
+            regular_amount = payroll.regular_hours * hourly_rate
+            p.drawString(430, y, f'N{regular_amount:,.2f}')
+            y -= 18
+            ot_rate = hourly_rate * overtime_multiplier
+            p.drawString(60, y, 'Overtime Hours (1.5x)')
+            p.drawString(260, y, f'{payroll.overtime_hours:.1f}')
+            p.drawString(340, y, f'N{ot_rate:,.2f}')
+            overtime_amount = payroll.overtime_hours * ot_rate
+            p.drawString(430, y, f'N{overtime_amount:,.2f}')
+        else:
+            p.drawString(60, y, 'Monthly Salary')
+            p.drawString(260, y, '-')
+            p.drawString(340, y, '-')
+            p.drawString(430, y, f'N{monthly_salary:,.2f}')
+            y -= 18
+            if payroll.overtime_hours > 0 and monthly_salary > 0:
+                equiv_hourly = monthly_salary / standard_hours
+                ot_rate = equiv_hourly * overtime_multiplier
+                p.drawString(60, y, 'Overtime Hours (1.5x)')
+                p.drawString(260, y, f'{payroll.overtime_hours:.1f}')
+                p.drawString(340, y, f'N{ot_rate:,.2f}')
+                overtime_amount = payroll.overtime_hours * ot_rate
+                p.drawString(430, y, f'N{overtime_amount:,.2f}')
+
+        # Totals
+        y -= 10
+        p.line(60, y, width - 40, y)
+        y -= 18
+        p.setFont('Helvetica-Bold', 10)
+        p.drawString(60, y, 'Gross Pay')
+        p.drawString(430, y, f'N{payroll.gross_pay:,.2f}')
+        y -= 18
+        p.setFont('Helvetica', 10)
+        p.drawString(60, y, 'Deductions')
+        p.drawString(430, y, f'N{payroll.deductions:,.2f}')
+        y -= 5
+        p.line(60, y, width - 40, y)
+        y -= 20
+        p.setFont('Helvetica-Bold', 13)
+        p.drawString(60, y, 'NET PAY')
+        p.drawString(420, y, f'N{payroll.net_pay:,.2f}')
+
+        # Bank Details section
+        y -= 40
+        p.line(40, y + 10, width - 40, y + 10)
+        p.setFont('Helvetica-Bold', 11)
+        p.drawString(40, y, 'BANK DETAILS')
+        y -= 20
+        p.setFont('Helvetica', 10)
+        p.drawString(60, y, f'Bank: {staff.bank_name or "N/A"}')
+        y -= 16
+        p.drawString(60, y, f'Account Name: {staff.bank_account_name or "N/A"}')
+        y -= 16
+        p.drawString(60, y, f'Account Number: {staff.bank_account_number or "N/A"}')
+
+        # Footer
+        y -= 40
+        p.line(40, y + 10, width - 40, y + 10)
+        p.setFont('Helvetica', 8)
+        p.drawString(40, y, f'Generated on {datetime.now().strftime("%Y-%m-%d %H:%M")} | Status: {payroll.status.upper()} | Payroll ID: {payroll.id}')
+        p.drawString(40, y - 12, 'This is a computer-generated document. No signature required.')
+
+        p.showPage()
+        p.save()
+        buffer.seek(0)
+
+        filename = f"payslip_{staff.employee_id}_{payroll.pay_period_start}_{payroll.pay_period_end}.pdf"
+        return StreamingResponse(buffer, media_type='application/pdf', headers={
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating payslip PDF: {str(e)}")
+
+
 # Birthday notification endpoint
 @router.get('/birthdays/upcoming')
 async def get_upcoming_birthdays(
