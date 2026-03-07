@@ -154,6 +154,13 @@ function AppMain({ currentUser = null }) {
   const [ptReminderMsg, setPtReminderMsg] = useState(null);
   const [ptPaymentForm, setPtPaymentForm] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
 
+  // Legacy / Previous Debts state
+  const [legacyDebts, setLegacyDebts] = useState([]);
+  const [legacyDebtsSummary, setLegacyDebtsSummary] = useState(null);
+  const [legacyDebtDetail, setLegacyDebtDetail] = useState(null);
+  const [legacyDebtForm, setLegacyDebtForm] = useState({ customer_id: '', description: '', original_amount: '', amount_already_paid: '0', debt_date: '', due_date: '', notes: '' });
+  const [legacyPaymentForm, setLegacyPaymentForm] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
+
   // Procurement Module state
   const [procView, setProcView] = useState('dashboard');
   const [procDashboard, setProcDashboard] = useState(null);
@@ -372,7 +379,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'machinesEquipment') { fetchMachines(); fetchMachinesDashboard(); }
     if (activeModule === 'marketing') { fetchMktDashboard(); fetchMktPlans(); fetchMktLogs(); fetchMktProposals(); fetchMktProducts(); }
     if (activeModule === 'hrCustomerCare') { fetchHrDashboard(); fetchHrStaff(); fetchHrPerformance(); fetchHrProducts(); fetchHrSalesOrders(); fetchHrCustomers(); fetchHrAttendance(); }
-    if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); }
+    if (activeModule === 'paymentTracking') { fetchPtReconciliation(); fetchPtInvoices(); fetchPtDebtors(); fetchPtReminders(); fetchLegacyDebts(); }
     if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
     if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogManifests(); fetchLogAnalytics(); }
     if (activeModule === 'transfers') { fetchTransfers(); fetchTransferSummary(); }
@@ -693,6 +700,63 @@ function AppMain({ currentUser = null }) {
   }
   async function fetchPtReminderMsg(customerId) {
     try { const r = await fetch(`/api/payment-tracking/debtors/${customerId}/reminder`); if(r.ok) setPtReminderMsg(await r.json()); } catch(e) { console.error(e); }
+  }
+
+  // ===================== LEGACY / PREVIOUS DEBTS =====================
+  async function fetchLegacyDebts() { try { const r = await fetch('/api/legacy-debts/'); if(r.ok) { const d = await r.json(); setLegacyDebts(d.debts||[]); setLegacyDebtsSummary(d.summary||null); } } catch(e) { console.error(e); }}
+  async function fetchLegacyDebtDetail(debtId) { try { const r = await fetch(`/api/legacy-debts/${debtId}`); if(r.ok) setLegacyDebtDetail(await r.json()); } catch(e) { console.error(e); }}
+  async function createLegacyDebt() {
+    try {
+      setLoading(true);
+      const payload = { ...legacyDebtForm, original_amount: parseFloat(legacyDebtForm.original_amount), amount_already_paid: parseFloat(legacyDebtForm.amount_already_paid || '0') };
+      if(!payload.customer_id || !payload.description || !payload.original_amount || !payload.debt_date) { notify('Please fill in customer, description, amount and debt date', 'error'); return; }
+      const token = localStorage.getItem('token');
+      const r = await fetch('/api/legacy-debts/', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Previous debt ${d.debt_number} recorded successfully!`, 'success');
+      setLegacyDebtForm({ customer_id: '', description: '', original_amount: '', amount_already_paid: '0', debt_date: '', due_date: '', notes: '' });
+      fetchLegacyDebts(); fetchPtDebtors(); fetchPtReconciliation();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function recordLegacyPayment(debtId) {
+    try {
+      setLoading(true);
+      const payload = { ...legacyPaymentForm, amount: parseFloat(legacyPaymentForm.amount) };
+      if(!payload.amount || payload.amount <= 0) { notify('Enter a valid amount', 'error'); return; }
+      const r = await fetch(`/api/legacy-debts/${debtId}/payments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Failed');
+      notify(`Payment of ${formatCurrency(payload.amount)} recorded!`, 'success');
+      setLegacyPaymentForm({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
+      fetchLegacyDebtDetail(debtId); fetchLegacyDebts(); fetchPtDebtors(); fetchPtReconciliation();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deleteLegacyPayment(paymentId, debtId) {
+    if(!window.confirm('Delete this payment? This will recalculate the debt balance.')) return;
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/legacy-debts/payments/${paymentId}`, { method: 'DELETE' });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('Payment deleted', 'success');
+      if(debtId) fetchLegacyDebtDetail(debtId);
+      fetchLegacyDebts(); fetchPtDebtors(); fetchPtReconciliation();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
+  }
+  async function deleteLegacyDebt(debtId) {
+    if(!window.confirm('Delete this previous debt and all its payments? This cannot be undone.')) return;
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/legacy-debts/${debtId}`, { method: 'DELETE' });
+      if(!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Failed'); }
+      notify('Previous debt deleted', 'success');
+      setPtView('legacyDebts'); setLegacyDebtDetail(null);
+      fetchLegacyDebts(); fetchPtDebtors(); fetchPtReconciliation();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
   }
 
   // ===================== PROCUREMENT MODULE =====================
@@ -5782,7 +5846,7 @@ function AppMain({ currentUser = null }) {
                 <h2>Payments & Debt Reconciliation</h2>
               </div>
               <div className="module-actions">
-                {[{k:'dashboard',l:'Dashboard'},{k:'invoices',l:'Invoices'},{k:'debtors',l:'Debtors'},{k:'reminders',l:'Overdue'}].map(v => (
+                {[{k:'dashboard',l:'Dashboard'},{k:'invoices',l:'Invoices'},{k:'debtors',l:'Debtors'},{k:'legacyDebts',l:'Previous Debts'},{k:'reminders',l:'Overdue'}].map(v => (
                   <button key={v.k} className={`btn ${ptView===v.k?'btn-primary':'btn-secondary'}`} onClick={() => setPtView(v.k)} style={{marginRight:6}}>
                     {v.l}
                   </button>
@@ -6091,6 +6155,29 @@ function AppMain({ currentUser = null }) {
                     ))}
                   </tbody></table></div>
                 ) : <p style={{color:'#888'}}>No payments recorded</p>}
+
+                {/* LEGACY / PREVIOUS DEBTS IN DEBTOR VIEW */}
+                {ptSelectedDebtor.legacy_debts && ptSelectedDebtor.legacy_debts.length > 0 && (
+                  <div style={{marginTop:24}}>
+                    <h4 style={{color:'#8e44ad'}}>Previous / Outstanding Debts</h4>
+                    <div className="table-responsive" style={{marginBottom:20}}><table className="data-table"><thead><tr>
+                      <th>Debt #</th><th>Description</th><th>Date</th><th>Original</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th>
+                    </tr></thead><tbody>
+                      {ptSelectedDebtor.legacy_debts.map(ld => (
+                        <tr key={ld.id} style={{background: ld.status === 'paid' ? '#f0fff0' : '#fdf5ff'}}>
+                          <td><strong>{ld.debt_number}</strong></td>
+                          <td>{ld.description}</td>
+                          <td>{ld.debt_date}</td>
+                          <td>{formatCurrency(ld.original_amount)}</td>
+                          <td style={{color:'#27ae60'}}>{formatCurrency(ld.paid_amount||0)}</td>
+                          <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency((ld.original_amount||0)-(ld.paid_amount||0))}</td>
+                          <td><span style={{background: ld.status==='paid'?'#27ae60':ld.status==='partial'?'#f39c12':'#e74c3c', color:'#fff', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600}}>{(ld.status||'unpaid').toUpperCase()}</span></td>
+                          <td><button className="btn btn-sm btn-primary" onClick={() => { setPtView('legacyDebtDetail'); fetchLegacyDebtDetail(ld.id); }}>Pay / View</button></td>
+                        </tr>
+                      ))}
+                    </tbody></table></div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -6181,6 +6268,217 @@ function AppMain({ currentUser = null }) {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ========== PREVIOUS / LEGACY DEBTS LIST ========== */}
+            {ptView === 'legacyDebts' && (
+              <div>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}}>
+                  <h3 style={{margin:0}}>Previous / Outstanding Debts ({legacyDebts.length})</h3>
+                  <button className="btn btn-primary" onClick={() => setPtView('addLegacyDebt')}>+ Record Previous Debt</button>
+                </div>
+
+                {legacyDebtsSummary && (
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:16,marginBottom:20}}>
+                    <div style={{background:'linear-gradient(135deg,#8e44ad,#9b59b6)',padding:16,borderRadius:10,textAlign:'center',color:'#fff'}}>
+                      <div style={{fontSize:22,fontWeight:700}}>{legacyDebtsSummary.total_debts || 0}</div><div style={{fontSize:12,opacity:.8}}>Total Previous Debts</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg,#2c3e50,#34495e)',padding:16,borderRadius:10,textAlign:'center',color:'#fff'}}>
+                      <div style={{fontSize:22,fontWeight:700}}>{formatCurrency(legacyDebtsSummary.total_original || 0)}</div><div style={{fontSize:12,opacity:.8}}>Total Amount Owed</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg,#27ae60,#2ecc71)',padding:16,borderRadius:10,textAlign:'center',color:'#fff'}}>
+                      <div style={{fontSize:22,fontWeight:700}}>{formatCurrency(legacyDebtsSummary.total_paid || 0)}</div><div style={{fontSize:12,opacity:.8}}>Total Paid</div>
+                    </div>
+                    <div style={{background:'linear-gradient(135deg,#e74c3c,#c0392b)',padding:16,borderRadius:10,textAlign:'center',color:'#fff'}}>
+                      <div style={{fontSize:22,fontWeight:700}}>{formatCurrency(legacyDebtsSummary.total_balance || 0)}</div><div style={{fontSize:12,opacity:.8}}>Outstanding Balance</div>
+                    </div>
+                  </div>
+                )}
+
+                {legacyDebts.length === 0 ? (
+                  <div style={{background:'#f8f9fa',padding:40,borderRadius:8,textAlign:'center',color:'#888'}}>
+                    <p style={{fontSize:16,marginBottom:12}}>No previous debts recorded yet.</p>
+                    <p>Click "Record Previous Debt" to add debts that existed before this system was set up.</p>
+                  </div>
+                ) : (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>Debt #</th><th>Customer</th><th>Description</th><th>Debt Date</th><th>Original Amount</th><th>Paid</th><th>Balance</th><th>Status</th><th>Actions</th>
+                  </tr></thead><tbody>
+                    {legacyDebts.map(d => (
+                      <tr key={d.id} style={{background: d.status === 'paid' ? '#f0fff0' : d.status === 'partial' ? '#fff8e1' : '#fff5f5'}}>
+                        <td><strong>{d.debt_number}</strong></td>
+                        <td>{d.customer_name || 'Unknown'}</td>
+                        <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.description}</td>
+                        <td>{d.debt_date}</td>
+                        <td>{formatCurrency(d.original_amount)}</td>
+                        <td style={{color:'#27ae60'}}>{formatCurrency(d.paid_amount||0)}</td>
+                        <td style={{color:'#e74c3c',fontWeight:700}}>{formatCurrency(d.balance||0)}</td>
+                        <td><span style={{background: d.status==='paid'?'#27ae60':d.status==='partial'?'#f39c12':'#e74c3c', color:'#fff', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600}}>{(d.status||'unpaid').toUpperCase()}</span></td>
+                        <td style={{whiteSpace:'nowrap'}}>
+                          <button className="btn btn-sm btn-primary" onClick={() => { setPtView('legacyDebtDetail'); fetchLegacyDebtDetail(d.id); }} style={{marginRight:4}}>View / Pay</button>
+                          <button className="btn btn-sm" onClick={() => deleteLegacyDebt(d.id)} style={{background:'#e74c3c',color:'#fff',border:'none'}}>Delete</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                )}
+              </div>
+            )}
+
+            {/* ========== ADD NEW PREVIOUS DEBT FORM ========== */}
+            {ptView === 'addLegacyDebt' && (
+              <div>
+                <button className="btn btn-secondary" onClick={() => setPtView('legacyDebts')} style={{marginBottom:16}}>Back to Previous Debts</button>
+                <div style={{background:'#fff',padding:24,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',maxWidth:700}}>
+                  <h3 style={{marginTop:0,color:'#8e44ad'}}>Record Previous / Outstanding Debt</h3>
+                  <p style={{color:'#888',fontSize:13,marginBottom:20}}>Use this form to record debts that existed before this system was set up, or any outstanding debts that are not linked to a system invoice.</p>
+                  <form onSubmit={(e) => { e.preventDefault(); createLegacyDebt(); }}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                      <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                        <label>Customer *</label>
+                        <select value={legacyDebtForm.customer_id} onChange={(e) => setLegacyDebtForm(f => ({...f, customer_id: e.target.value}))} required style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}}>
+                          <option value="">Select customer</option>
+                          {(data.customers||[]).map(c => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` (${c.phone})` : ''}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                        <label>Description / Reason for Debt *</label>
+                        <textarea value={legacyDebtForm.description} onChange={(e) => setLegacyDebtForm(f => ({...f, description: e.target.value}))} required rows={3} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="e.g., Outstanding balance from previous transactions, goods supplied in 2023..." />
+                      </div>
+                      <div className="form-group">
+                        <label>Original Amount Owed (Naira) *</label>
+                        <input type="number" step="0.01" min="0" value={legacyDebtForm.original_amount} onChange={(e) => setLegacyDebtForm(f => ({...f, original_amount: e.target.value}))} required style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="0.00" />
+                      </div>
+                      <div className="form-group">
+                        <label>Amount Already Paid</label>
+                        <input type="number" step="0.01" min="0" value={legacyDebtForm.amount_already_paid} onChange={(e) => setLegacyDebtForm(f => ({...f, amount_already_paid: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="0.00" />
+                        <small style={{color:'#888'}}>If the customer has already made partial payment towards this debt</small>
+                      </div>
+                      <div className="form-group">
+                        <label>Debt Date *</label>
+                        <input type="date" value={legacyDebtForm.debt_date} onChange={(e) => setLegacyDebtForm(f => ({...f, debt_date: e.target.value}))} required style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} />
+                        <small style={{color:'#888'}}>When was this debt originally incurred?</small>
+                      </div>
+                      <div className="form-group">
+                        <label>Due Date</label>
+                        <input type="date" value={legacyDebtForm.due_date} onChange={(e) => setLegacyDebtForm(f => ({...f, due_date: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} />
+                      </div>
+                      <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                        <label>Notes</label>
+                        <textarea value={legacyDebtForm.notes} onChange={(e) => setLegacyDebtForm(f => ({...f, notes: e.target.value}))} rows={2} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="Any additional notes..." />
+                      </div>
+                    </div>
+                    {legacyDebtForm.original_amount && parseFloat(legacyDebtForm.original_amount) > 0 && (
+                      <div style={{background:'#f8f9fa',padding:16,borderRadius:8,marginTop:16,marginBottom:16}}>
+                        <strong>Summary:</strong> Debt of {formatCurrency(parseFloat(legacyDebtForm.original_amount)||0)}
+                        {parseFloat(legacyDebtForm.amount_already_paid) > 0 && ` with ${formatCurrency(parseFloat(legacyDebtForm.amount_already_paid))} already paid`}
+                        {parseFloat(legacyDebtForm.amount_already_paid) > 0 && ` = ${formatCurrency((parseFloat(legacyDebtForm.original_amount)||0) - (parseFloat(legacyDebtForm.amount_already_paid)||0))} outstanding`}
+                      </div>
+                    )}
+                    <button type="submit" className="btn btn-primary" disabled={loading} style={{padding:'10px 32px',fontSize:15}}>
+                      {loading ? 'Saving...' : 'Record Previous Debt'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* ========== LEGACY DEBT DETAIL + PAYMENT ========== */}
+            {ptView === 'legacyDebtDetail' && legacyDebtDetail && (
+              <div>
+                <button className="btn btn-secondary" onClick={() => { setPtView('legacyDebts'); setLegacyDebtDetail(null); }} style={{marginBottom:16}}>Back to Previous Debts</button>
+
+                <div style={{background:'#fff',padding:20,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',marginBottom:20}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
+                    <div>
+                      <h3 style={{margin:0,color:'#8e44ad'}}>Previous Debt {legacyDebtDetail.debt_number}</h3>
+                      <p style={{margin:'6px 0 0',fontSize:14,color:'#555'}}><strong>Customer:</strong> {legacyDebtDetail.customer_name || 'Unknown'}</p>
+                      <p style={{margin:'4px 0',fontSize:13,color:'#888'}}>{legacyDebtDetail.description}</p>
+                      <p style={{margin:'4px 0',fontSize:12,color:'#aaa'}}>Debt Date: {legacyDebtDetail.debt_date}{legacyDebtDetail.due_date ? ` | Due: ${legacyDebtDetail.due_date}` : ''}</p>
+                      {legacyDebtDetail.notes && <p style={{margin:'4px 0',fontSize:12,color:'#aaa',fontStyle:'italic'}}>Notes: {legacyDebtDetail.notes}</p>}
+                    </div>
+                    <div style={{display:'flex',gap:8}}>
+                      <span style={{background: legacyDebtDetail.status==='paid'?'#27ae60':legacyDebtDetail.status==='partial'?'#f39c12':'#e74c3c', color:'#fff', padding:'6px 16px', borderRadius:20, fontSize:13, fontWeight:600}}>{(legacyDebtDetail.status||'unpaid').toUpperCase()}</span>
+                      <button className="btn btn-sm" onClick={() => deleteLegacyDebt(legacyDebtDetail.id)} style={{background:'#e74c3c',color:'#fff',border:'none'}}>Delete Debt</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:16,marginBottom:20}}>
+                  <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                    <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(legacyDebtDetail.original_amount)}</div><div style={{color:'#888',fontSize:12}}>Original Amount</div>
+                  </div>
+                  <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                    <div style={{fontSize:22,fontWeight:700,color:'#27ae60'}}>{formatCurrency(legacyDebtDetail.paid_amount||0)}</div><div style={{color:'#888',fontSize:12}}>Total Paid</div>
+                  </div>
+                  <div style={{background:'#fff',padding:16,borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,.1)',textAlign:'center'}}>
+                    <div style={{fontSize:22,fontWeight:700,color:'#e74c3c'}}>{formatCurrency(legacyDebtDetail.balance||0)}</div><div style={{color:'#888',fontSize:12}}>Outstanding Balance</div>
+                  </div>
+                </div>
+
+                {/* RECORD PAYMENT FORM */}
+                {legacyDebtDetail.status !== 'paid' && (
+                  <div style={{background:'#f0f7ff',padding:20,borderRadius:8,marginBottom:20,border:'1px solid #d0e3ff'}}>
+                    <h4 style={{marginTop:0,color:'#2c3e50'}}>Record Payment Against This Debt</h4>
+                    <form onSubmit={(e) => { e.preventDefault(); recordLegacyPayment(legacyDebtDetail.id); }} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,alignItems:'end'}}>
+                      <div className="form-group" style={{margin:0}}>
+                        <label style={{fontSize:12}}>Amount (Naira) *</label>
+                        <input type="number" step="0.01" min="0.01" max={legacyDebtDetail.balance||999999999} value={legacyPaymentForm.amount} onChange={(e) => setLegacyPaymentForm(f => ({...f, amount: e.target.value}))} required style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="0.00" />
+                      </div>
+                      <div className="form-group" style={{margin:0}}>
+                        <label style={{fontSize:12}}>Payment Method</label>
+                        <select value={legacyPaymentForm.payment_method} onChange={(e) => setLegacyPaymentForm(f => ({...f, payment_method: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}}>
+                          <option value="bank_transfer">Bank Transfer</option>
+                          <option value="cash">Cash</option>
+                          <option value="pos">POS</option>
+                          <option value="cheque">Cheque</option>
+                          <option value="mobile_money">Mobile Money</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div className="form-group" style={{margin:0}}>
+                        <label style={{fontSize:12}}>Payment Date</label>
+                        <input type="date" value={legacyPaymentForm.payment_date} onChange={(e) => setLegacyPaymentForm(f => ({...f, payment_date: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} />
+                      </div>
+                      <div className="form-group" style={{margin:0}}>
+                        <label style={{fontSize:12}}>Reference / Receipt #</label>
+                        <input type="text" value={legacyPaymentForm.reference} onChange={(e) => setLegacyPaymentForm(f => ({...f, reference: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="Ref..." />
+                      </div>
+                      <div className="form-group" style={{margin:0}}>
+                        <label style={{fontSize:12}}>Notes</label>
+                        <input type="text" value={legacyPaymentForm.notes} onChange={(e) => setLegacyPaymentForm(f => ({...f, notes: e.target.value}))} style={{width:'100%',padding:8,borderRadius:4,border:'1px solid #ddd'}} placeholder="Notes..." />
+                      </div>
+                      <button type="submit" className="btn btn-primary" disabled={loading} style={{height:38}}>
+                        {loading ? 'Recording...' : 'Record Payment'}
+                      </button>
+                    </form>
+                    <p style={{margin:'12px 0 0',fontSize:12,color:'#888'}}>
+                      Please send evidence of payment via WhatsApp to +234 702 575 5406 for confirmation.
+                    </p>
+                  </div>
+                )}
+
+                {/* PAYMENT HISTORY */}
+                <h4>Payment History</h4>
+                {legacyDebtDetail.payments && legacyDebtDetail.payments.length > 0 ? (
+                  <div className="table-responsive"><table className="data-table"><thead><tr>
+                    <th>#</th><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th><th>Running Balance</th><th>Action</th>
+                  </tr></thead><tbody>
+                    {legacyDebtDetail.payments.map((p, i) => (
+                      <tr key={p.id}>
+                        <td>{i+1}</td>
+                        <td>{p.payment_date}</td>
+                        <td style={{color:'#27ae60',fontWeight:600}}>{formatCurrency(p.amount)}</td>
+                        <td style={{textTransform:'capitalize'}}>{(p.payment_method||'').replace(/_/g,' ')}</td>
+                        <td>{p.reference || '-'}</td>
+                        <td style={{fontSize:12,color:'#888'}}>{p.notes || '-'}</td>
+                        <td style={{fontWeight:600}}>{p.running_balance !== undefined ? formatCurrency(p.running_balance) : '-'}</td>
+                        <td><button className="btn btn-sm" onClick={() => deleteLegacyPayment(p.id, legacyDebtDetail.id)} style={{background:'#e74c3c',color:'#fff',border:'none',fontSize:11}}>Delete</button></td>
+                      </tr>
+                    ))}
+                  </tbody></table></div>
+                ) : <p style={{color:'#888'}}>No payments recorded yet for this debt.</p>}
               </div>
             )}
 

@@ -474,14 +474,26 @@ async def delete_payment(
         raise HTTPException(status_code=500, detail=f"Error deleting payment: {str(e)}")
 
 
+# ─── HELPER: Check if legacy_debts table exists ─────────────────────────────
+async def _legacy_debts_table_exists(session: AsyncSession) -> bool:
+    try:
+        check = await session.execute(text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'legacy_debts')"
+        ))
+        return check.scalar() or False
+    except Exception:
+        return False
+
+
 # ─── DEBTORS DASHBOARD ──────────────────────────────────────────────────────
 @router.get('/debtors')
 async def get_debtors_dashboard(
     session: AsyncSession = Depends(get_session)
 ):
-    """Get all customers with outstanding balances (debtors dashboard)"""
+    """Get all customers with outstanding balances (debtors dashboard) - includes legacy debts"""
     try:
-        sql = text("""
+        # Invoice-based debts
+        inv_sql = text("""
             SELECT 
                 c.id as customer_id, c.name as customer_name, c.phone, c.email, c.address,
                 COUNT(DISTINCT i.id) as total_invoices,
@@ -499,39 +511,107 @@ async def get_debtors_dashboard(
             HAVING COALESCE(SUM(i.total_amount), 0) - COALESCE(SUM(
                 (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.invoice_id = i.id)
             ), 0) > 0.01
-            ORDER BY (COALESCE(SUM(i.total_amount), 0) - COALESCE(SUM(
-                (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.invoice_id = i.id)
-            ), 0)) DESC
         """)
-        result = await session.execute(sql)
-        rows = result.fetchall()
+        inv_result = await session.execute(inv_sql)
+        inv_rows = inv_result.fetchall()
 
-        debtors = []
-        total_outstanding = 0
-        for r in rows:
+        # Build a dict keyed by customer_id
+        debtors_map = {}
+        for r in inv_rows:
+            cid = str(r.customer_id)
             total_inv = float(r.total_invoiced or 0)
             total_pd = float(r.total_paid or 0)
             balance = total_inv - total_pd
-            total_outstanding += balance
-
             is_overdue = r.earliest_due_date and r.earliest_due_date < datetime.now(timezone.utc)
             days_overdue = (datetime.now(timezone.utc) - r.earliest_due_date).days if is_overdue else 0
 
-            debtors.append({
-                "customer_id": str(r.customer_id),
+            debtors_map[cid] = {
+                "customer_id": cid,
                 "customer_name": r.customer_name,
                 "phone": r.phone,
                 "email": r.email,
                 "address": r.address,
-                "total_invoices": r.total_invoices,
+                "invoice_count": r.total_invoices,
                 "total_invoiced": total_inv,
                 "total_paid": total_pd,
                 "balance": balance,
+                "legacy_debt_count": 0,
+                "legacy_debt_total": 0,
+                "legacy_debt_paid": 0,
+                "legacy_debt_balance": 0,
                 "is_overdue": bool(is_overdue),
                 "days_overdue": max(days_overdue, 0),
                 "earliest_due_date": r.earliest_due_date.isoformat() if r.earliest_due_date else None,
                 "last_invoice_date": r.last_invoice_date.isoformat() if r.last_invoice_date else None,
-            })
+            }
+
+        # Legacy debts (if table exists)
+        has_legacy = await _legacy_debts_table_exists(session)
+        if has_legacy:
+            ld_sql = text("""
+                SELECT 
+                    c.id as customer_id, c.name as customer_name, c.phone, c.email, c.address,
+                    COUNT(DISTINCT ld.id) as legacy_count,
+                    COALESCE(SUM(ld.original_amount), 0) as legacy_total,
+                    COALESCE(SUM(
+                        (SELECT COALESCE(SUM(ldp.amount), 0) FROM legacy_debt_payments ldp WHERE ldp.legacy_debt_id = ld.id)
+                    ), 0) as legacy_paid,
+                    MIN(ld.due_date) as legacy_earliest_due
+                FROM customers c
+                JOIN legacy_debts ld ON ld.customer_id = c.id
+                WHERE ld.status != 'paid'
+                GROUP BY c.id, c.name, c.phone, c.email, c.address
+                HAVING COALESCE(SUM(ld.original_amount), 0) - COALESCE(SUM(
+                    (SELECT COALESCE(SUM(ldp.amount), 0) FROM legacy_debt_payments ldp WHERE ldp.legacy_debt_id = ld.id)
+                ), 0) > 0.01
+            """)
+            ld_result = await session.execute(ld_sql)
+
+            for r in ld_result.fetchall():
+                cid = str(r.customer_id)
+                ld_total = float(r.legacy_total or 0)
+                ld_paid = float(r.legacy_paid or 0)
+                ld_balance = ld_total - ld_paid
+                ld_overdue = r.legacy_earliest_due and r.legacy_earliest_due < datetime.now(timezone.utc).date()
+                ld_days = (datetime.now(timezone.utc).date() - r.legacy_earliest_due).days if ld_overdue else 0
+
+                if cid in debtors_map:
+                    # Merge with existing invoice debtor
+                    debtors_map[cid]["legacy_debt_count"] = r.legacy_count
+                    debtors_map[cid]["legacy_debt_total"] = ld_total
+                    debtors_map[cid]["legacy_debt_paid"] = ld_paid
+                    debtors_map[cid]["legacy_debt_balance"] = ld_balance
+                    debtors_map[cid]["total_invoiced"] += ld_total
+                    debtors_map[cid]["total_paid"] += ld_paid
+                    debtors_map[cid]["balance"] += ld_balance
+                    if ld_overdue and ld_days > debtors_map[cid]["days_overdue"]:
+                        debtors_map[cid]["is_overdue"] = True
+                        debtors_map[cid]["days_overdue"] = ld_days
+                else:
+                    # Customer only has legacy debts, no invoices
+                    debtors_map[cid] = {
+                        "customer_id": cid,
+                        "customer_name": r.customer_name,
+                        "phone": r.phone,
+                        "email": r.email,
+                        "address": r.address,
+                        "invoice_count": 0,
+                        "total_invoiced": ld_total,
+                        "total_paid": ld_paid,
+                        "balance": ld_balance,
+                        "legacy_debt_count": r.legacy_count,
+                        "legacy_debt_total": ld_total,
+                        "legacy_debt_paid": ld_paid,
+                        "legacy_debt_balance": ld_balance,
+                        "is_overdue": bool(ld_overdue),
+                        "days_overdue": max(ld_days, 0),
+                        "earliest_due_date": r.legacy_earliest_due.isoformat() if r.legacy_earliest_due else None,
+                        "last_invoice_date": None,
+                    }
+
+        # Sort by balance descending
+        debtors = sorted(debtors_map.values(), key=lambda d: d["balance"], reverse=True)
+        total_outstanding = sum(d["balance"] for d in debtors)
 
         return {
             "debtors": debtors,
@@ -548,7 +628,7 @@ async def get_customer_debt_detail(
     customer_id: UUID,
     session: AsyncSession = Depends(get_session)
 ):
-    """Full debt detail for a customer: all invoices, all payments, balances, timeline"""
+    """Full debt detail for a customer: all invoices, legacy debts, all payments, balances, timeline"""
     try:
         # Customer info
         cust_result = await session.execute(select(Customer).where(Customer.id == customer_id))
@@ -590,10 +670,12 @@ async def get_customer_debt_detail(
                 "invoice_date": r.invoice_date.isoformat() if r.invoice_date else None,
                 "due_date": r.due_date.isoformat() if r.due_date else None,
                 "total_amount": total,
+                "paid_amount": paid,
                 "total_paid": paid,
                 "balance": max(balance, 0),
                 "status": r.status,
                 "is_overdue": r.due_date and r.due_date < datetime.now(timezone.utc) and balance > 0,
+                "debt_type": "invoice",
             })
 
         # All payments by this customer (across all invoices)
@@ -613,10 +695,80 @@ async def get_customer_debt_detail(
                 "payment_method": r.payment_method, "amount": float(r.amount),
                 "payment_date": r.payment_date.isoformat() if r.payment_date else None,
                 "reference": r.reference, "notes": r.notes,
+                "debt_type": "invoice",
             } for r in pay_result.fetchall()
         ]
 
+        # Legacy debts for this customer
+        legacy_debts = []
+        legacy_payments = []
+        has_legacy = await _legacy_debts_table_exists(session)
+        if has_legacy:
+            ld_sql = text("""
+                SELECT ld.id, ld.debt_number, ld.description, ld.original_amount, ld.debt_date,
+                       ld.due_date, ld.status, ld.notes,
+                       COALESCE(SUM(ldp.amount), 0) as total_paid
+                FROM legacy_debts ld
+                LEFT JOIN legacy_debt_payments ldp ON ldp.legacy_debt_id = ld.id
+                WHERE ld.customer_id = :customer_id
+                GROUP BY ld.id, ld.debt_number, ld.description, ld.original_amount,
+                         ld.debt_date, ld.due_date, ld.status, ld.notes
+                ORDER BY ld.debt_date DESC
+            """)
+            ld_result = await session.execute(ld_sql, {"customer_id": str(customer_id)})
+
+            for r in ld_result.fetchall():
+                total = float(r.original_amount or 0)
+                paid = float(r.total_paid or 0)
+                balance = total - paid
+                grand_total += total
+                grand_paid += paid
+
+                is_overdue = r.due_date and r.due_date < datetime.now(timezone.utc).date() and balance > 0.01
+
+                legacy_debts.append({
+                    "id": str(r.id),
+                    "debt_number": r.debt_number,
+                    "description": r.description,
+                    "original_amount": total,
+                    "total_amount": total,
+                    "paid_amount": paid,
+                    "total_paid": paid,
+                    "balance": max(balance, 0),
+                    "debt_date": r.debt_date.isoformat() if r.debt_date else None,
+                    "due_date": r.due_date.isoformat() if r.due_date else None,
+                    "status": r.status,
+                    "notes": r.notes or '',
+                    "is_overdue": bool(is_overdue),
+                    "debt_type": "legacy",
+                })
+
+            # Legacy debt payments
+            ldp_sql = text("""
+                SELECT ldp.id, ldp.legacy_debt_id, ldp.amount, ldp.payment_method,
+                       ldp.payment_date, ldp.reference, ldp.notes, ld.debt_number
+                FROM legacy_debt_payments ldp
+                JOIN legacy_debts ld ON ld.id = ldp.legacy_debt_id
+                WHERE ld.customer_id = :customer_id
+                ORDER BY ldp.payment_date ASC
+            """)
+            ldp_result = await session.execute(ldp_sql, {"customer_id": str(customer_id)})
+            legacy_payments = [
+                {
+                    "id": str(r.id), "legacy_debt_id": str(r.legacy_debt_id),
+                    "invoice_number": r.debt_number,
+                    "payment_method": r.payment_method, "amount": float(r.amount),
+                    "payment_date": r.payment_date.isoformat() if r.payment_date else None,
+                    "reference": r.reference or '', "notes": r.notes or '',
+                    "debt_type": "legacy",
+                } for r in ldp_result.fetchall()
+            ]
+
         grand_balance = grand_total - grand_paid
+
+        # Merge all payments sorted by date
+        all_payments = payments + legacy_payments
+        all_payments.sort(key=lambda p: p.get("payment_date") or "")
 
         return {
             "customer": {
@@ -628,10 +780,12 @@ async def get_customer_debt_detail(
                 "total_paid": grand_paid,
                 "total_balance": max(grand_balance, 0),
                 "invoice_count": len(invoices),
-                "payment_count": len(payments),
+                "legacy_debt_count": len(legacy_debts),
+                "payment_count": len(all_payments),
             },
             "invoices": invoices,
-            "payments": payments,
+            "legacy_debts": legacy_debts,
+            "payments": all_payments,
         }
     except HTTPException:
         raise
@@ -645,7 +799,7 @@ async def generate_reminder_message(
     customer_id: UUID,
     session: AsyncSession = Depends(get_session)
 ):
-    """Generate a WhatsApp debt reminder message with full breakdown and item details"""
+    """Generate a WhatsApp debt reminder message with full breakdown and item details - includes legacy debts"""
     try:
         import urllib.parse
         from datetime import datetime as dt_now
@@ -673,7 +827,26 @@ async def generate_reminder_message(
         inv_result = await session.execute(inv_sql, {"customer_id": str(customer_id)})
         rows = inv_result.fetchall()
 
-        if not rows:
+        # Get legacy debts for this customer
+        legacy_rows = []
+        has_legacy = await _legacy_debts_table_exists(session)
+        if has_legacy:
+            ld_sql = text("""
+                SELECT ld.id, ld.debt_number, ld.description, ld.original_amount,
+                       ld.debt_date, ld.due_date,
+                       COALESCE(SUM(ldp.amount), 0) as total_paid
+                FROM legacy_debts ld
+                LEFT JOIN legacy_debt_payments ldp ON ldp.legacy_debt_id = ld.id
+                WHERE ld.customer_id = :customer_id AND ld.status != 'paid'
+                GROUP BY ld.id, ld.debt_number, ld.description, ld.original_amount,
+                         ld.debt_date, ld.due_date
+                HAVING (ld.original_amount - COALESCE(SUM(ldp.amount), 0)) > 0.01
+                ORDER BY ld.debt_date ASC
+            """)
+            ld_result = await session.execute(ld_sql, {"customer_id": str(customer_id)})
+            legacy_rows = ld_result.fetchall()
+
+        if not rows and not legacy_rows:
             return {
                 "message": "No outstanding debt for this customer.",
                 "whatsapp_message": None,
@@ -705,15 +878,56 @@ async def generate_reminder_message(
         lines.append("")
         lines.append("We hope you are doing well! We truly value your partnership with *Bonnesante Medicals* and appreciate your continued patronage.")
         lines.append("")
-        lines.append("We are writing to kindly bring to your attention the following outstanding invoice(s) on your account. We understand that oversights happen, so this is just a gentle reminder to help keep your records up to date.")
+        lines.append("We are writing to kindly bring to your attention the following outstanding balance(s) on your account. We understand that oversights happen, so this is just a gentle reminder to help keep your records up to date.")
         lines.append("")
-        lines.append("*ACCOUNT STATEMENT - OUTSTANDING INVOICES*")
+        lines.append("*ACCOUNT STATEMENT - OUTSTANDING BALANCES*")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
         grand_total = 0
         grand_paid = 0
         overdue_count = 0
         today = dt_now.utcnow().date()
+
+        # ── LEGACY / PREVIOUS DEBTS SECTION ──
+        if legacy_rows:
+            lines.append("")
+            lines.append("*PREVIOUS / OUTSTANDING DEBTS*")
+            lines.append("─────────────────────────────")
+
+            for r in legacy_rows:
+                total = float(r.original_amount or 0)
+                paid = float(r.total_paid or 0)
+                balance = total - paid
+                grand_total += total
+                grand_paid += paid
+
+                debt_date = r.debt_date.strftime('%d %b %Y') if r.debt_date else 'N/A'
+                due_date_str = r.due_date.strftime('%d %b %Y') if r.due_date else 'N/A'
+                is_overdue = r.due_date and r.due_date < today
+                if is_overdue:
+                    overdue_count += 1
+                    days_overdue = (today - r.due_date).days
+
+                lines.append("")
+                lines.append(f"Previous Debt: *{r.debt_number}*")
+                lines.append(f"Description: {r.description}")
+                lines.append(f"Date: {debt_date}")
+                if r.due_date:
+                    lines.append(f"Due Date: {due_date_str}")
+                if is_overdue:
+                    lines.append(f"Status: Overdue by {days_overdue} day(s)")
+
+                lines.append(f"Original Amount: NGN {total:,.2f}")
+                if paid > 0:
+                    lines.append(f"Amount Paid (Thank you!): NGN {paid:,.2f}")
+                lines.append(f"*Outstanding Balance: NGN {balance:,.2f}*")
+                lines.append("───────────────────────────")
+
+        # ── INVOICE-BASED DEBTS SECTION ──
+        if rows:
+            lines.append("")
+            lines.append("*INVOICES*")
+            lines.append("─────────────────────────────")
 
         for r in rows:
             total = float(r.total_amount or 0)
@@ -761,7 +975,7 @@ async def generate_reminder_message(
 
         # Payment urgency note (friendly)
         if overdue_count > 0:
-            lines.append(f"We noticed {overdue_count} invoice(s) {'is' if overdue_count == 1 else 'are'} past the due date. We would be grateful if you could kindly arrange payment at your earliest convenience to keep your account in good standing.")
+            lines.append(f"We noticed {overdue_count} item(s) {'is' if overdue_count == 1 else 'are'} past the due date. We would be grateful if you could kindly arrange payment at your earliest convenience to keep your account in good standing.")
             lines.append("")
 
         lines.append("For your convenience, payment can be made to any of the following accounts:")
@@ -774,7 +988,7 @@ async def generate_reminder_message(
         lines.append("Account Name: Bonnesante Medicals")
         lines.append("Account Number: 1379643548")
         lines.append("")
-        lines.append("Please kindly include the invoice number as your payment reference so we can update your account promptly.")
+        lines.append("Please kindly include the invoice/debt reference number as your payment reference so we can update your account promptly.")
         lines.append("")
         lines.append("After making payment, kindly send evidence of payment via WhatsApp to: *+234 702 575 5406*")
         lines.append("")
@@ -808,6 +1022,7 @@ async def generate_reminder_message(
             "customer_phone": cust.phone,
             "total_balance": grand_balance,
             "invoice_count": len(rows),
+            "legacy_debt_count": len(legacy_rows),
             "message": message_text,
             "whatsapp_message": message_text,
             "whatsapp_url": whatsapp_url,
@@ -816,7 +1031,7 @@ async def generate_reminder_message(
                 "total_paid": grand_paid,
                 "outstanding_balance": grand_balance,
                 "overdue_invoices": overdue_count,
-                "total_invoices": len(rows),
+                "total_invoices": len(rows) + len(legacy_rows),
             },
         }
     except HTTPException:
@@ -885,7 +1100,7 @@ async def get_overdue_reminders(
 async def payment_reconciliation(
     session: AsyncSession = Depends(get_session)
 ):
-    """Overall payment reconciliation summary"""
+    """Overall payment reconciliation summary (includes legacy debts)"""
     try:
         sql = text("""
             SELECT
@@ -907,16 +1122,42 @@ async def payment_reconciliation(
         total_invoiced = float(r.grand_total_invoiced or 0)
         total_paid = float(r.grand_total_paid or 0)
 
+        # Add legacy debts to the reconciliation
+        legacy_total = 0
+        legacy_paid = 0
+        legacy_count = 0
+        has_legacy = await _legacy_debts_table_exists(session)
+        if has_legacy:
+            ld_sql = text("""
+                SELECT 
+                    COUNT(*) as ld_count,
+                    COALESCE(SUM(original_amount), 0) as ld_total,
+                    COALESCE(SUM(paid_amount), 0) as ld_paid
+                FROM legacy_debts
+            """)
+            ld_result = await session.execute(ld_sql)
+            ld_r = ld_result.fetchone()
+            legacy_count = ld_r.ld_count or 0
+            legacy_total = float(ld_r.ld_total or 0)
+            legacy_paid = float(ld_r.ld_paid or 0)
+
+        combined_invoiced = total_invoiced + legacy_total
+        combined_paid = total_paid + legacy_paid
+
         return {
-            "total_invoices": r.total_invoices or 0,
-            "total_invoiced": total_invoiced,
-            "total_paid": total_paid,
-            "total_outstanding": total_invoiced - total_paid,
+            "total_invoices": (r.total_invoices or 0) + legacy_count,
+            "total_invoiced": combined_invoiced,
+            "total_paid": combined_paid,
+            "total_outstanding": combined_invoiced - combined_paid,
             "fully_paid": r.fully_paid_invoices or 0,
             "partially_paid": r.partially_paid_invoices or 0,
             "unpaid": r.unpaid_invoices or 0,
             "overdue": r.overdue_invoices or 0,
-            "collection_rate": round((total_paid / total_invoiced * 100) if total_invoiced > 0 else 0, 1),
+            "collection_rate": round((combined_paid / combined_invoiced * 100) if combined_invoiced > 0 else 0, 1),
+            "legacy_debts": legacy_count,
+            "legacy_total": legacy_total,
+            "legacy_paid": legacy_paid,
+            "legacy_balance": legacy_total - legacy_paid,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching reconciliation: {str(e)}")
