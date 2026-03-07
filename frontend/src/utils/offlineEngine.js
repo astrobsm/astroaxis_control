@@ -272,7 +272,9 @@ export async function initOfflineEngine() {
     if (cachePath.endsWith('/pdf') || cachePath.endsWith('.pdf') || cachePath.includes('/pdf?') ||
         cachePath.endsWith('/download') || cachePath.includes('/download?') ||
         cachePath.endsWith('/printout') || cachePath.includes('/printout?') ||
-        cachePath.includes('/generate-doc')) {
+        cachePath.includes('/generate-doc') || cachePath.includes('/generate-invoice') ||
+        cachePath.includes('/generate-receipt') || cachePath.includes('/invoice') ||
+        cachePath.includes('/receipt')) {
       return _originalFetch(input, init);
     }
 

@@ -1563,9 +1563,9 @@ function AppMain({ currentUser = null }) {
   // Download Invoice
   async function downloadInvoice(orderId) {
     try {
-      const url = `/api/sales/orders/${orderId}/invoice?t=${Date.now()}`;
+      const url = `/api/sales/orders/${orderId}/generate-invoice`;
       console.log('Fetching invoice from:', url);
-      const response = await fetch(url);
+      const response = await fetch(url, { method: 'POST' });
       console.log('Invoice response status:', response.status);
       if (!response.ok) {
         const error = await response.json();
@@ -1592,9 +1592,9 @@ function AppMain({ currentUser = null }) {
   // Download Receipt
   async function downloadReceipt(orderId) {
     try {
-      const url = `/api/sales/orders/${orderId}/receipt?t=${Date.now()}`;
+      const url = `/api/sales/orders/${orderId}/generate-receipt`;
       console.log('Fetching receipt from:', url);
-      const response = await fetch(url);
+      const response = await fetch(url, { method: 'POST' });
       console.log('Receipt response status:', response.status);
       if (!response.ok) {
         const error = await response.json();

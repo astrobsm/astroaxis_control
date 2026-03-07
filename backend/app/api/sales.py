@@ -880,6 +880,7 @@ async def mark_order_paid(
 
 
 @router.get('/orders/{order_id}/receipt')
+@router.post('/orders/{order_id}/generate-receipt')
 async def generate_receipt(
     order_id: UUID,
     session: AsyncSession = Depends(get_session)
@@ -1001,6 +1002,7 @@ async def generate_receipt(
 
 
 @router.get('/orders/{order_id}/invoice')
+@router.post('/orders/{order_id}/generate-invoice')
 async def generate_invoice(
     order_id: UUID,
     session: AsyncSession = Depends(get_session)
