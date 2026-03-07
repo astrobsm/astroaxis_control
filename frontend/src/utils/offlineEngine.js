@@ -35,7 +35,6 @@ const CRITICAL_ENDPOINTS = [
   '/api/procurement/invoices',
   '/api/procurement/expenses',
   '/api/logistics/dashboard',
-  '/api/logistics/deliveries',
   '/api/logistics/analytics',
   '/api/marketing/dashboard',
   '/api/marketing/plans',

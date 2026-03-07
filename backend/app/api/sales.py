@@ -673,7 +673,9 @@ async def generate_invoice_pdf(
         Account Name: Bonnesante Medicals<br/>
         Account Number: 1379643548<br/>
         <br/>
-        Please reference invoice number in payment description.
+        Please reference invoice number in payment description.<br/>
+        <br/>
+        <b><font color="green">After making payment, kindly send evidence of payment via WhatsApp to: +234 702 575 5406</font></b>
         """
         story.append(Paragraph(payment_info, styles['Normal']))
         story.append(Spacer(1, 0.3*inch))
@@ -981,6 +983,14 @@ async def generate_receipt(
         elements.append(table)
         elements.append(Spacer(1, 30))
         
+        # WhatsApp payment evidence notice
+        whatsapp_notice = Paragraph(
+            '<b><font color="green">After making payment, kindly send evidence of payment via WhatsApp to: +234 702 575 5406</font></b>',
+            styles['Normal']
+        )
+        elements.append(whatsapp_notice)
+        elements.append(Spacer(1, 12))
+        
         # Footer
         footer = Paragraph('Thank you for your business!<br/><i>This is a computer-generated receipt.</i>', styles['Normal'])
         elements.append(footer)
@@ -1116,7 +1126,9 @@ async def generate_invoice(
         <br/>
         <b>Bank: MONIEPOINT MICROFINANCE BANK</b><br/>
         Account No: 8259518195<br/>
-        Account Name: BONNESANTE MEDICALS
+        Account Name: BONNESANTE MEDICALS<br/>
+        <br/>
+        <b><font color="green">After making payment, kindly send evidence of payment via WhatsApp to: +234 702 575 5406</font></b>
         """
         elements.append(Paragraph(payment_terms, styles['Normal']))
         elements.append(Spacer(1, 20))

@@ -776,6 +776,8 @@ async def generate_reminder_message(
         lines.append("")
         lines.append("Please kindly include the invoice number as your payment reference so we can update your account promptly.")
         lines.append("")
+        lines.append("After making payment, kindly send evidence of payment via WhatsApp to: *+234 702 575 5406*")
+        lines.append("")
         lines.append("If you have already made this payment, please disregard this message and accept our sincere apologies for any inconvenience. We would also appreciate it if you could share the payment receipt so we can reconcile your account.")
         lines.append("")
         lines.append("Should you have any questions or need to discuss a payment arrangement, please do not hesitate to reach out. We are always happy to assist!")
