@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from typing import Optional
-from datetime import date, datetime
+from datetime import date, datetime, time as time_type
 
 from app.db import get_session
 
@@ -268,8 +268,8 @@ async def create_log(data: dict, session: AsyncSession = Depends(get_session)):
     """), {
         "staff_id": data.get('marketer_staff_id') or None,
         "log_date": ld,
-        "start_time": data.get('start_time') or None,
-        "end_time": data.get('end_time') or None,
+        "start_time": datetime.strptime(data['start_time'], '%H:%M').time() if isinstance(data.get('start_time'), str) and data.get('start_time') else (data.get('start_time') if isinstance(data.get('start_time'), time_type) else None),
+        "end_time": datetime.strptime(data['end_time'], '%H:%M').time() if isinstance(data.get('end_time'), str) and data.get('end_time') else (data.get('end_time') if isinstance(data.get('end_time'), time_type) else None),
         "location_visited": data.get('location_visited', ''),
         "customer_contacted": data.get('customer_contacted', ''),
         "contact_type": data.get('contact_type', 'visit'),

@@ -8,7 +8,7 @@ Logistics & Delivery Tracking Module - Batch Manifest Workflow
 """
 from uuid import UUID
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_type
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -147,9 +147,18 @@ async def create_manifest(data: dict, session: AsyncSession = Depends(get_sessio
                 (:mn, :dd, :lo, :vd, :dn, :dp, :tm, :tc, :ac, :tot, :status, :notes)
             RETURNING id, manifest_number
         """)
+        # Convert delivery_date string to date object for asyncpg
+        dd_raw = data.get('delivery_date', '')
+        if isinstance(dd_raw, str) and dd_raw:
+            dd_val = date_type.fromisoformat(dd_raw)
+        elif isinstance(dd_raw, date_type):
+            dd_val = dd_raw
+        else:
+            dd_val = datetime.now(timezone.utc).date()
+
         result = await session.execute(sql, {
             'mn': mf_num,
-            'dd': data.get('delivery_date', datetime.now(timezone.utc).date().isoformat()),
+            'dd': dd_val,
             'lo': data.get('logistics_officer', ''),
             'vd': data.get('vehicle_details', ''),
             'dn': data.get('driver_name', ''),

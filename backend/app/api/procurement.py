@@ -8,7 +8,7 @@ Procurement & Purchase Requests Module
 """
 from uuid import UUID
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_type
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -179,7 +179,14 @@ async def create_purchase_request(data: dict, session: AsyncSession = Depends(ge
                  :vn, :vc, :vp, :ve, :edd, :notes)
             RETURNING id, request_number, status, created_at
         """)
-        edd = data.get('expected_delivery_date')
+        edd_raw = data.get('expected_delivery_date')
+        # Convert date string to date object for asyncpg
+        if isinstance(edd_raw, str) and edd_raw:
+            edd_val = date_type.fromisoformat(edd_raw)
+        elif isinstance(edd_raw, date_type):
+            edd_val = edd_raw
+        else:
+            edd_val = None
         result = await session.execute(sql, {
             'rn': req_num, 'rb': data.get('requested_by', ''),
             'dept': data.get('department', ''), 'cat': data.get('category', 'general'),
@@ -188,7 +195,7 @@ async def create_purchase_request(data: dict, session: AsyncSession = Depends(ge
             'cost': total_est, 'vn': data.get('vendor_name', ''),
             'vc': data.get('vendor_contact', ''), 'vp': data.get('vendor_phone', ''),
             've': data.get('vendor_email', ''),
-            'edd': edd if edd else None, 'notes': data.get('notes', '')
+            'edd': edd_val, 'notes': data.get('notes', '')
         })
         row = result.fetchone()
         req_id = str(row.id)
@@ -402,7 +409,7 @@ async def create_purchase_order(data: dict, session: AsyncSession = Depends(get_
             'vp': data.get('vendor_phone', ''),
             've': data.get('vendor_email', ''),
             'va': data.get('vendor_address', ''),
-            'ed': data.get('expected_delivery') or None,
+            'ed': date_type.fromisoformat(data['expected_delivery']) if isinstance(data.get('expected_delivery'), str) and data.get('expected_delivery') else (data.get('expected_delivery') if isinstance(data.get('expected_delivery'), date_type) else None),
             'sub': subtotal, 'tax': tax, 'ship': shipping, 'total': total,
             'notes': data.get('notes', ''), 'cb': data.get('created_by', '')
         })
@@ -643,8 +650,8 @@ async def create_purchase_invoice(data: dict, session: AsyncSession = Depends(ge
             "inv_num": data.get('invoice_number', ''),
             "po_id": data.get('po_id') or None,
             "vn": data.get('vendor_name', ''),
-            "inv_date": data.get('invoice_date', datetime.now(timezone.utc).date().isoformat()),
-            "due": data.get('due_date') or None,
+            "inv_date": date_type.fromisoformat(data['invoice_date']) if isinstance(data.get('invoice_date'), str) and data.get('invoice_date') else (data.get('invoice_date') if isinstance(data.get('invoice_date'), date_type) else datetime.now(timezone.utc).date()),
+            "due": date_type.fromisoformat(data['due_date']) if isinstance(data.get('due_date'), str) and data.get('due_date') else (data.get('due_date') if isinstance(data.get('due_date'), date_type) else None),
             "sub": subtotal, "tax": tax, "total": total,
             "cat": data.get('category', 'general'),
             "desc": data.get('description', ''),
@@ -710,7 +717,7 @@ async def create_expense(data: dict, session: AsyncSession = Depends(get_session
             "amt": float(data.get('amount', 0)),
             "pm": data.get('payment_method', ''),
             "pr": data.get('payment_reference', ''),
-            "pd": data.get('payment_date', datetime.now(timezone.utc).date().isoformat()),
+            "pd": date_type.fromisoformat(data['payment_date']) if isinstance(data.get('payment_date'), str) and data.get('payment_date') else (data.get('payment_date') if isinstance(data.get('payment_date'), date_type) else datetime.now(timezone.utc).date()),
             "recv": data.get('recipient', ''),
             "ab": data.get('approved_by', ''),
             "sid": data.get('staff_id') or None,

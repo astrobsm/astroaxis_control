@@ -134,7 +134,8 @@ if frontend_build_path.exists():
                     "Service-Worker-Allowed": "/"
                 }
             )
-        return {"error": "Service Worker not found"}
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("// Service Worker not found", media_type="application/javascript", status_code=404)
     
     @app.get("/{filename}.png")
     async def serve_images(filename: str):
