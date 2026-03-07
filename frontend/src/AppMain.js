@@ -5926,7 +5926,7 @@ function AppMain({ currentUser = null }) {
                     <h3 style={{marginTop:0}}>Recent Manifests</h3>
                     <table className="data-table"><thead><tr><th>Manifest #</th><th>Officer</th><th>Date</th><th>Customers</th><th>Cost</th><th>Status</th></tr></thead>
                     <tbody>{logDashboard.recent_manifests.map((d,i) => (
-                      <tr key={i} style={{cursor:'pointer'}} onClick={()=>{fetchLogManifestDetail(d.manifest_number.replace('MF-',''));setLogView('manifests');}}>
+                      <tr key={i} style={{cursor:'pointer'}} onClick={()=>{fetchLogManifestDetail(d.id);setLogView('manifests');}}>
                         <td style={{color:'#667eea',fontWeight:600}}>{d.manifest_number}</td><td>{d.logistics_officer}</td>
                         <td>{d.delivery_date}</td><td>{d.customer_count}</td>
                         <td>{formatCurrency(d.total_cost)}</td>

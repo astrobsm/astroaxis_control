@@ -661,13 +661,14 @@ async def logistics_dashboard(session: AsyncSession = Depends(get_session)):
         ]
 
         rq = await session.execute(text("""
-            SELECT dm.manifest_number, dm.logistics_officer, dm.delivery_date,
+            SELECT dm.id, dm.manifest_number, dm.logistics_officer, dm.delivery_date,
                 dm.total_cost, dm.status,
                 (SELECT COUNT(*) FROM manifest_customers WHERE manifest_id = dm.id) as customer_count
             FROM delivery_manifests dm ORDER BY dm.created_at DESC LIMIT 5
         """))
         stats['recent_manifests'] = [
             {
+                "id": str(r.id),
                 "manifest_number": r.manifest_number,
                 "logistics_officer": r.logistics_officer,
                 "delivery_date": str(r.delivery_date) if r.delivery_date else None,
