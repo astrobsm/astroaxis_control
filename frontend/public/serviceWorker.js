@@ -57,6 +57,12 @@ self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests
   if (url.origin !== self.location.origin) return;
 
+  // Skip PDF and binary file downloads - let them go directly to network
+  if (url.pathname.endsWith('/pdf') || url.pathname.endsWith('.pdf') ||
+      event.request.headers.get('Accept')?.includes('application/pdf')) {
+    return;
+  }
+
   // Navigation (HTML pages)
   if (event.request.mode === 'navigate') {
     event.respondWith(
