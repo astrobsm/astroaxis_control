@@ -271,7 +271,8 @@ export async function initOfflineEngine() {
     // Skip PDF/binary downloads - don't intercept or cache these
     if (cachePath.endsWith('/pdf') || cachePath.endsWith('.pdf') || cachePath.includes('/pdf?') ||
         cachePath.endsWith('/download') || cachePath.includes('/download?') ||
-        cachePath.endsWith('/printout') || cachePath.includes('/printout?')) {
+        cachePath.endsWith('/printout') || cachePath.includes('/printout?') ||
+        cachePath.includes('/generate-doc')) {
       return _originalFetch(input, init);
     }
 

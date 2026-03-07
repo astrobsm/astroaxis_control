@@ -442,6 +442,7 @@ async def update_manifest_cost(manifest_id: UUID, data: dict, session: AsyncSess
 @router.get('/manifests/{manifest_id}/pdf')
 @router.get('/manifests/{manifest_id}/download')
 @router.get('/manifests/{manifest_id}/printout')
+@router.post('/manifests/{manifest_id}/generate-doc')
 async def generate_manifest_pdf(manifest_id: UUID, session: AsyncSession = Depends(get_session)):
     """Generate a printable PDF delivery manifest with signature lines."""
     try:
