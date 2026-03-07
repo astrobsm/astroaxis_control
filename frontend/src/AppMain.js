@@ -200,6 +200,28 @@ function AppMain({ currentUser = null }) {
   const [showTransferForm, setShowTransferForm] = useState(false);
   const [transferLoading, setTransferLoading] = useState(false);
 
+  // Returned Products Module state
+  const [returnsList, setReturnsList] = useState([]);
+  const [returnsSummary, setReturnsSummary] = useState({ total_returns: 0, total_quantity_returned: 0, pending_refunds: 0, total_refund_amount: 0, today_returns: 0, condition_breakdown: {} });
+  const [returnForm, setReturnForm] = useState({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '' });
+  const [showReturnForm, setShowReturnForm] = useState(false);
+  const [returnLoading, setReturnLoading] = useState(false);
+  const [editingReturn, setEditingReturn] = useState(null);
+
+  // Damaged Product Transfers Module state
+  const [damagedTransfersList, setDamagedTransfersList] = useState([]);
+  const [damagedTransfersSummary, setDamagedTransfersSummary] = useState({ total_transfers: 0, pending: 0, dispatched: 0, received: 0, total_quantity: 0 });
+  const [damagedTransferForm, setDamagedTransferForm] = useState({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', raw_material_id: '', quantity: '', damage_type: '', damage_reason: '', action_taken: '', notes: '' });
+  const [showDamagedTransferForm, setShowDamagedTransferForm] = useState(false);
+  const [damagedTransferLoading, setDamagedTransferLoading] = useState(false);
+
+  // Receive Transfers Module state
+  const [receiveTransfersList, setReceiveTransfersList] = useState([]);
+  const [receiveTransfersSummary, setReceiveTransfersSummary] = useState({ pending_damaged_transfers: 0, received_damaged_transfers: 0, regular_completed_transfers: 0, pending_receipt_quantity: 0, total_all_transfers: 0 });
+  const [receiveLoading, setReceiveLoading] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(null);
+  const [receiveForm, setReceiveForm] = useState({ receipt_notes: '', receipt_condition: 'as_expected' });
+
   // Logistics Module state (Batch Manifest Workflow)
   const [logView, setLogView] = useState('dashboard');
   const [logDashboard, setLogDashboard] = useState(null);
@@ -354,6 +376,9 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'procurement') { fetchProcDashboard(); fetchProcRequests(); fetchProcOrders(); fetchProcInvoices(); fetchProcExpenses(); }
     if (activeModule === 'logistics') { fetchLogDashboard(); fetchLogManifests(); fetchLogAnalytics(); }
     if (activeModule === 'transfers') { fetchTransfers(); fetchTransferSummary(); }
+    if (activeModule === 'returns') { fetchReturns(); fetchReturnsSummary(); }
+    if (activeModule === 'damagedTransfers') { fetchDamagedTransfers(); fetchDamagedTransfersSummary(); }
+    if (activeModule === 'receiveTransfers') { fetchReceiveTransfers(); fetchReceiveTransfersSummary(); }
     if (activeModule === 'salaryPayroll') { fetchPayrollDashboard(); fetchPayrollEntries(); }
   }, [activeModule]);
 
@@ -517,6 +542,36 @@ function AppMain({ currentUser = null }) {
   async function fetchTransferSummary() {
     try { const r = await fetch('/api/transfers/summary'); const d = await r.json(); setTransferSummary(d); }
     catch(e) { console.error('fetchTransferSummary error', e); }
+  }
+
+  // ===== RETURNS FETCHERS =====
+  async function fetchReturns() {
+    try { const r = await fetch('/api/returns/'); const d = await r.json(); setReturnsList(Array.isArray(d) ? d : []); }
+    catch(e) { console.error('fetchReturns error', e); }
+  }
+  async function fetchReturnsSummary() {
+    try { const r = await fetch('/api/returns/summary'); const d = await r.json(); setReturnsSummary(d); }
+    catch(e) { console.error('fetchReturnsSummary error', e); }
+  }
+
+  // ===== DAMAGED TRANSFERS FETCHERS =====
+  async function fetchDamagedTransfers() {
+    try { const r = await fetch('/api/damaged-transfers/'); const d = await r.json(); setDamagedTransfersList(Array.isArray(d) ? d : []); }
+    catch(e) { console.error('fetchDamagedTransfers error', e); }
+  }
+  async function fetchDamagedTransfersSummary() {
+    try { const r = await fetch('/api/damaged-transfers/summary'); const d = await r.json(); setDamagedTransfersSummary(d); }
+    catch(e) { console.error('fetchDamagedTransfersSummary error', e); }
+  }
+
+  // ===== RECEIVE TRANSFERS FETCHERS =====
+  async function fetchReceiveTransfers() {
+    try { const r = await fetch('/api/receive-transfers/'); const d = await r.json(); setReceiveTransfersList(Array.isArray(d) ? d : []); }
+    catch(e) { console.error('fetchReceiveTransfers error', e); }
+  }
+  async function fetchReceiveTransfersSummary() {
+    try { const r = await fetch('/api/receive-transfers/summary'); const d = await r.json(); setReceiveTransfersSummary(d); }
+    catch(e) { console.error('fetchReceiveTransfersSummary error', e); }
   }
 
   // ===== MARKETING FETCHERS =====
@@ -2422,7 +2477,7 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
+          {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
             // Admin always sees everything
             if (!currentUser || currentUser.role === 'admin') return true;
             // Dashboard always visible
@@ -2433,7 +2488,7 @@ function AppMain({ currentUser = null }) {
             return false;
           }).map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -3554,6 +3609,657 @@ function AppMain({ currentUser = null }) {
                   ))}
                   {transfersList.length === 0 && (
                     <tr><td colSpan="9" style={{textAlign:'center',padding:30,color:'#aaa'}}>No transfers yet. Click "New Transfer" to move products between warehouses.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ============ RETURNED PRODUCTS MODULE ============ */}
+        {activeModule === 'returns' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Returned Products</h2>
+              </div>
+              <button onClick={() => { setShowReturnForm(true); setEditingReturn(null); setReturnForm({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '' }); }} className="btn btn-primary">Record Return</button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="stats-cards" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:24}}>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#f093fb 0%,#f5576c 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{returnsSummary.total_returns}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Returns</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#667eea 0%,#764ba2 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{returnsSummary.total_quantity_returned.toLocaleString()}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Qty Returned</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#fa709a 0%,#fee140 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{returnsSummary.pending_refunds}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Pending Refunds</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{returnsSummary.today_returns}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Today's Returns</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{Number(returnsSummary.total_refund_amount).toLocaleString('en-NG', {style:'currency',currency:'NGN'})}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Refunded</div>
+              </div>
+            </div>
+
+            {/* Condition Breakdown */}
+            {returnsSummary.condition_breakdown && Object.keys(returnsSummary.condition_breakdown).length > 0 && (
+              <div style={{display:'flex',gap:12,marginBottom:20,flexWrap:'wrap'}}>
+                {Object.entries(returnsSummary.condition_breakdown).map(([cond, count]) => (
+                  <span key={cond} style={{background: cond === 'good' ? '#e8f5e9' : cond === 'damaged' ? '#fce4ec' : cond === 'defective' ? '#fff3e0' : '#f3e5f5', color: cond === 'good' ? '#2e7d32' : cond === 'damaged' ? '#c62828' : cond === 'defective' ? '#e65100' : '#6a1b9a', padding:'6px 14px',borderRadius:20,fontSize:12,fontWeight:600}}>
+                    {cond.charAt(0).toUpperCase() + cond.slice(1)}: {count}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Return Form Modal */}
+            {showReturnForm && (
+              <div className="modal-overlay">
+                <div className="modal" style={{maxWidth:650}}>
+                  <div className="modal-header">
+                    <div className="modal-header-left"><img src="/company-logo.png" alt="AstroBSM" className="modal-logo" onError={(e) => { e.target.style.display = 'none'; }}/><h3>{editingReturn ? 'Update Return' : 'Record Product Return'}</h3></div>
+                    <button className="modal-close" onClick={() => setShowReturnForm(false)}>x</button>
+                  </div>
+                  <div className="modal-content">
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      setReturnLoading(true);
+                      try {
+                        const token = localStorage.getItem('access_token');
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                        if (editingReturn) {
+                          // Update existing return
+                          const res = await fetch(`/api/returns/${editingReturn.id}`, {
+                            method: 'PUT', headers,
+                            body: JSON.stringify({
+                              refund_status: returnForm.refund_status || undefined,
+                              refund_amount: returnForm.refund_amount ? parseFloat(returnForm.refund_amount) : undefined,
+                              notes: returnForm.notes || undefined,
+                              return_condition: returnForm.return_condition || undefined,
+                            })
+                          });
+                          const d = await res.json();
+                          if (!res.ok) throw new Error(d.detail || 'Update failed');
+                          notify(d.message || 'Return updated', 'success');
+                        } else {
+                          // Create new return
+                          const res = await fetch('/api/returns/', {
+                            method: 'POST', headers,
+                            body: JSON.stringify({
+                              warehouse_id: returnForm.warehouse_id,
+                              product_id: returnForm.product_id,
+                              sales_order_id: returnForm.sales_order_id || null,
+                              customer_id: returnForm.customer_id || null,
+                              quantity: parseFloat(returnForm.quantity),
+                              return_reason: returnForm.return_reason,
+                              return_condition: returnForm.return_condition,
+                              refund_amount: returnForm.refund_amount ? parseFloat(returnForm.refund_amount) : null,
+                              notes: returnForm.notes || null
+                            })
+                          });
+                          const d = await res.json();
+                          if (!res.ok) throw new Error(d.detail || 'Failed to record return');
+                          notify(d.message, 'success');
+                        }
+                        setShowReturnForm(false);
+                        setEditingReturn(null);
+                        fetchReturns();
+                        fetchReturnsSummary();
+                      } catch (err) { notify(err.message, 'error'); }
+                      finally { setReturnLoading(false); }
+                    }}>
+                      {!editingReturn && (<>
+                        <div className="form-row">
+                          <div className="form-group">
+                            <label>Warehouse *</label>
+                            <select value={returnForm.warehouse_id} onChange={(e) => setReturnForm(f => ({...f, warehouse_id: e.target.value}))} required>
+                              <option value="">Select warehouse</option>
+                              {(data.warehouses||[]).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="form-group">
+                            <label>Product *</label>
+                            <select value={returnForm.product_id} onChange={(e) => setReturnForm(f => ({...f, product_id: e.target.value}))} required>
+                              <option value="">Select product</option>
+                              {(data.products||[]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="form-row">
+                          <div className="form-group">
+                            <label>Customer</label>
+                            <select value={returnForm.customer_id} onChange={(e) => setReturnForm(f => ({...f, customer_id: e.target.value}))}>
+                              <option value="">Select customer (optional)</option>
+                              {(data.customers||[]).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="form-group">
+                            <label>Quantity *</label>
+                            <input type="number" step="0.01" min="0.01" value={returnForm.quantity} onChange={(e) => setReturnForm(f => ({...f, quantity: e.target.value}))} required placeholder="Enter quantity"/>
+                          </div>
+                        </div>
+                      </>)}
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Return Condition *</label>
+                          <select value={returnForm.return_condition} onChange={(e) => setReturnForm(f => ({...f, return_condition: e.target.value}))} required>
+                            <option value="good">Good (Restockable)</option>
+                            <option value="damaged">Damaged</option>
+                            <option value="defective">Defective</option>
+                            <option value="expired">Expired</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Refund Amount</label>
+                          <input type="number" step="0.01" min="0" value={returnForm.refund_amount} onChange={(e) => setReturnForm(f => ({...f, refund_amount: e.target.value}))} placeholder="0.00"/>
+                        </div>
+                      </div>
+                      {!editingReturn && (
+                        <div className="form-group">
+                          <label>Reason for Return *</label>
+                          <select value={returnForm.return_reason} onChange={(e) => setReturnForm(f => ({...f, return_reason: e.target.value}))} required>
+                            <option value="">Select reason</option>
+                            <option value="Product Defect">Product Defect</option>
+                            <option value="Wrong Product Delivered">Wrong Product Delivered</option>
+                            <option value="Customer Changed Mind">Customer Changed Mind</option>
+                            <option value="Product Expired">Product Expired</option>
+                            <option value="Damaged During Delivery">Damaged During Delivery</option>
+                            <option value="Quality Below Expectation">Quality Below Expectation</option>
+                            <option value="Excess Stock Return">Excess Stock Return</option>
+                            <option value="Recalled Product">Recalled Product</option>
+                            <option value="Other">Other (specify in notes)</option>
+                          </select>
+                        </div>
+                      )}
+                      {editingReturn && (
+                        <div className="form-group">
+                          <label>Refund Status</label>
+                          <select value={returnForm.refund_status || ''} onChange={(e) => setReturnForm(f => ({...f, refund_status: e.target.value}))}>
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="processed">Processed</option>
+                            <option value="rejected">Rejected</option>
+                          </select>
+                        </div>
+                      )}
+                      <div className="form-group">
+                        <label>Notes</label>
+                        <textarea rows="2" value={returnForm.notes} onChange={(e) => setReturnForm(f => ({...f, notes: e.target.value}))} placeholder="Additional details, action taken..."/>
+                      </div>
+                      <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={() => { setShowReturnForm(false); setEditingReturn(null); }}>Cancel</button>
+                        <button type="submit" className="btn btn-primary" disabled={returnLoading}>{returnLoading ? 'Processing...' : editingReturn ? 'Update Return' : 'Record Return'}</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Returns Table */}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Product</th>
+                    <th>Warehouse</th>
+                    <th>Customer</th>
+                    <th>Qty</th>
+                    <th>Reason</th>
+                    <th>Condition</th>
+                    <th>Refund Status</th>
+                    <th>Refund Amt</th>
+                    <th>Processed By</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {returnsList.map(r => (
+                    <tr key={r.id}>
+                      <td>{r.return_date ? new Date(r.return_date).toLocaleDateString() : 'N/A'}</td>
+                      <td>{r.product_name} <span style={{fontSize:10,color:'#999'}}>({r.product_sku})</span></td>
+                      <td>{r.warehouse_name}</td>
+                      <td>{r.customer_name || '-'}</td>
+                      <td style={{fontWeight:600}}>{r.quantity.toLocaleString()}</td>
+                      <td><span style={{background:'#fff3e0',color:'#e65100',padding:'2px 8px',borderRadius:12,fontSize:11}}>{r.return_reason}</span></td>
+                      <td><span style={{background: r.return_condition === 'good' ? '#e8f5e9' : '#fce4ec', color: r.return_condition === 'good' ? '#2e7d32' : '#c62828', padding:'2px 8px',borderRadius:12,fontSize:11,fontWeight:600}}>{r.return_condition}</span></td>
+                      <td><span className={`status ${r.refund_status}`} style={{fontSize:11}}>{r.refund_status}</span></td>
+                      <td>{r.refund_amount ? Number(r.refund_amount).toLocaleString('en-NG', {style:'currency',currency:'NGN'}) : '-'}</td>
+                      <td>{r.processed_by_name || '-'}</td>
+                      <td>
+                        <button className="btn btn-sm" style={{fontSize:10,padding:'3px 8px',marginRight:4}} onClick={() => {
+                          setEditingReturn(r);
+                          setReturnForm({ ...returnForm, return_condition: r.return_condition, refund_status: r.refund_status, refund_amount: r.refund_amount || '', notes: r.notes || '' });
+                          setShowReturnForm(true);
+                        }}>Edit</button>
+                        <button className="btn btn-sm" style={{fontSize:10,padding:'3px 8px',background:'#ef5350',color:'#fff'}} onClick={async () => {
+                          if (!window.confirm('Delete this return record?')) return;
+                          try {
+                            const token = localStorage.getItem('access_token');
+                            const headers = {};
+                            if (token) headers['Authorization'] = `Bearer ${token}`;
+                            const res = await fetch(`/api/returns/${r.id}`, { method: 'DELETE', headers });
+                            if (!res.ok) throw new Error('Delete failed');
+                            notify('Return deleted', 'success');
+                            fetchReturns(); fetchReturnsSummary();
+                          } catch(err) { notify(err.message, 'error'); }
+                        }}>Del</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {returnsList.length === 0 && (
+                    <tr><td colSpan="11" style={{textAlign:'center',padding:30,color:'#aaa'}}>No returns recorded yet. Click "Record Return" to log a product return.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ============ DAMAGED PRODUCT TRANSFERS MODULE ============ */}
+        {activeModule === 'damagedTransfers' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Damaged Product Transfers</h2>
+              </div>
+              <button onClick={() => { setShowDamagedTransferForm(true); setDamagedTransferForm({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', raw_material_id: '', quantity: '', damage_type: '', damage_reason: '', action_taken: '', notes: '' }); }} className="btn btn-primary">New Damaged Transfer</button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="stats-cards" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:24}}>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#f093fb 0%,#f5576c 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{damagedTransfersSummary.total_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Damaged Transfers</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#fa709a 0%,#fee140 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{damagedTransfersSummary.pending}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Pending</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#667eea 0%,#764ba2 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{damagedTransfersSummary.dispatched}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Dispatched</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{damagedTransfersSummary.received}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Received</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{damagedTransfersSummary.total_quantity.toLocaleString()}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total Units</div>
+              </div>
+            </div>
+
+            {/* Damaged Transfer Form Modal */}
+            {showDamagedTransferForm && (
+              <div className="modal-overlay">
+                <div className="modal" style={{maxWidth:650}}>
+                  <div className="modal-header">
+                    <div className="modal-header-left"><img src="/company-logo.png" alt="AstroBSM" className="modal-logo" onError={(e) => { e.target.style.display = 'none'; }}/><h3>Transfer Damaged Product</h3></div>
+                    <button className="modal-close" onClick={() => setShowDamagedTransferForm(false)}>x</button>
+                  </div>
+                  <div className="modal-content">
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      setDamagedTransferLoading(true);
+                      try {
+                        const token = localStorage.getItem('access_token');
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (token) headers['Authorization'] = `Bearer ${token}`;
+                        const res = await fetch('/api/damaged-transfers/', {
+                          method: 'POST', headers,
+                          body: JSON.stringify({
+                            from_warehouse_id: damagedTransferForm.from_warehouse_id,
+                            to_warehouse_id: damagedTransferForm.to_warehouse_id,
+                            product_id: damagedTransferForm.product_id || null,
+                            raw_material_id: damagedTransferForm.raw_material_id || null,
+                            quantity: parseFloat(damagedTransferForm.quantity),
+                            damage_type: damagedTransferForm.damage_type,
+                            damage_reason: damagedTransferForm.damage_reason,
+                            action_taken: damagedTransferForm.action_taken,
+                            notes: damagedTransferForm.notes || null
+                          })
+                        });
+                        const d = await res.json();
+                        if (!res.ok) throw new Error(d.detail || 'Transfer failed');
+                        notify(d.message, 'success');
+                        setShowDamagedTransferForm(false);
+                        fetchDamagedTransfers();
+                        fetchDamagedTransfersSummary();
+                      } catch (err) { notify(err.message, 'error'); }
+                      finally { setDamagedTransferLoading(false); }
+                    }}>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Source Warehouse *</label>
+                          <select value={damagedTransferForm.from_warehouse_id} onChange={(e) => setDamagedTransferForm(f => ({...f, from_warehouse_id: e.target.value}))} required>
+                            <option value="">Select source warehouse</option>
+                            {(data.warehouses||[]).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Destination Warehouse *</label>
+                          <select value={damagedTransferForm.to_warehouse_id} onChange={(e) => setDamagedTransferForm(f => ({...f, to_warehouse_id: e.target.value}))} required>
+                            <option value="">Select destination</option>
+                            {(data.warehouses||[]).filter(w => w.id !== damagedTransferForm.from_warehouse_id).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Product</label>
+                          <select value={damagedTransferForm.product_id} onChange={(e) => setDamagedTransferForm(f => ({...f, product_id: e.target.value, raw_material_id: ''}))}>
+                            <option value="">Select product (or raw material below)</option>
+                            {(data.products||[]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Raw Material</label>
+                          <select value={damagedTransferForm.raw_material_id} onChange={(e) => setDamagedTransferForm(f => ({...f, raw_material_id: e.target.value, product_id: ''}))}>
+                            <option value="">Select raw material (or product above)</option>
+                            {(data.rawMaterials||[]).map(rm => <option key={rm.id} value={rm.id}>{rm.name} ({rm.sku})</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Quantity *</label>
+                          <input type="number" step="0.01" min="0.01" value={damagedTransferForm.quantity} onChange={(e) => setDamagedTransferForm(f => ({...f, quantity: e.target.value}))} required placeholder="Enter quantity"/>
+                        </div>
+                        <div className="form-group">
+                          <label>Damage Type *</label>
+                          <select value={damagedTransferForm.damage_type} onChange={(e) => setDamagedTransferForm(f => ({...f, damage_type: e.target.value}))} required>
+                            <option value="">Select damage type</option>
+                            <option value="Physical Damage">Physical Damage</option>
+                            <option value="Water Damage">Water Damage</option>
+                            <option value="Expired">Expired</option>
+                            <option value="Manufacturing Defect">Manufacturing Defect</option>
+                            <option value="Contamination">Contamination</option>
+                            <option value="Packaging Damage">Packaging Damage</option>
+                            <option value="Heat Damage">Heat Damage</option>
+                            <option value="Pest Damage">Pest Damage</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label>Damage Reason / Description *</label>
+                        <textarea rows="2" value={damagedTransferForm.damage_reason} onChange={(e) => setDamagedTransferForm(f => ({...f, damage_reason: e.target.value}))} required placeholder="Describe the damage in detail..."/>
+                      </div>
+                      <div className="form-group">
+                        <label>Action Taken</label>
+                        <select value={damagedTransferForm.action_taken} onChange={(e) => setDamagedTransferForm(f => ({...f, action_taken: e.target.value}))}>
+                          <option value="">Select action taken</option>
+                          <option value="Quarantine for Inspection">Quarantine for Inspection</option>
+                          <option value="Return to Supplier">Return to Supplier</option>
+                          <option value="Send for Repair">Send for Repair</option>
+                          <option value="Transfer to Disposal">Transfer to Disposal</option>
+                          <option value="Repackaging Required">Repackaging Required</option>
+                          <option value="Discount Sale">Discount Sale</option>
+                          <option value="Write Off">Write Off</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Notes</label>
+                        <textarea rows="2" value={damagedTransferForm.notes} onChange={(e) => setDamagedTransferForm(f => ({...f, notes: e.target.value}))} placeholder="Additional notes..."/>
+                      </div>
+                      <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={() => setShowDamagedTransferForm(false)}>Cancel</button>
+                        <button type="submit" className="btn btn-primary" disabled={damagedTransferLoading}>{damagedTransferLoading ? 'Processing...' : 'Create Damaged Transfer'}</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Damaged Transfers Table */}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Transfer #</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Damage Type</th>
+                    <th>Action Taken</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {damagedTransfersList.map(t => (
+                    <tr key={t.id}>
+                      <td style={{fontWeight:600,color:'#f5576c'}}>{t.transfer_number}</td>
+                      <td>{t.from_warehouse_name}</td>
+                      <td>{t.to_warehouse_name}</td>
+                      <td>{t.product_name} {t.product_sku && <span style={{fontSize:10,color:'#999'}}>({t.product_sku})</span>}</td>
+                      <td style={{fontWeight:600}}>{t.quantity.toLocaleString()}</td>
+                      <td><span style={{background:'#fce4ec',color:'#c62828',padding:'2px 8px',borderRadius:12,fontSize:11}}>{t.damage_type}</span></td>
+                      <td>{t.action_taken || '-'}</td>
+                      <td><span style={{
+                        background: t.status === 'pending' ? '#fff3e0' : t.status === 'dispatched' ? '#e3f2fd' : t.status === 'received' ? '#e8f5e9' : '#fce4ec',
+                        color: t.status === 'pending' ? '#e65100' : t.status === 'dispatched' ? '#1565c0' : t.status === 'received' ? '#2e7d32' : '#c62828',
+                        padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:600
+                      }}>{t.status.toUpperCase()}</span></td>
+                      <td>{t.created_at ? new Date(t.created_at).toLocaleDateString() : 'N/A'}</td>
+                      <td>
+                        {t.status === 'pending' && (
+                          <button className="btn btn-sm" style={{fontSize:10,padding:'3px 8px',background:'#1565c0',color:'#fff'}} onClick={async () => {
+                            try {
+                              const token = localStorage.getItem('access_token');
+                              const headers = { 'Content-Type': 'application/json' };
+                              if (token) headers['Authorization'] = `Bearer ${token}`;
+                              const res = await fetch(`/api/damaged-transfers/${t.id}/dispatch`, { method: 'POST', headers });
+                              const d = await res.json();
+                              if (!res.ok) throw new Error(d.detail || 'Dispatch failed');
+                              notify(d.message, 'success');
+                              fetchDamagedTransfers(); fetchDamagedTransfersSummary();
+                            } catch(err) { notify(err.message, 'error'); }
+                          }}>Dispatch</button>
+                        )}
+                        {(t.status === 'pending' || t.status === 'dispatched') && (
+                          <button className="btn btn-sm" style={{fontSize:10,padding:'3px 8px',background:'#2e7d32',color:'#fff',marginLeft:4}} onClick={async () => {
+                            if (!window.confirm('Confirm receipt of this damaged transfer?')) return;
+                            try {
+                              const token = localStorage.getItem('access_token');
+                              const headers = { 'Content-Type': 'application/json' };
+                              if (token) headers['Authorization'] = `Bearer ${token}`;
+                              const res = await fetch(`/api/damaged-transfers/${t.id}/receive`, {
+                                method: 'POST', headers,
+                                body: JSON.stringify({ receipt_notes: '', receipt_condition: 'as_expected' })
+                              });
+                              const d = await res.json();
+                              if (!res.ok) throw new Error(d.detail || 'Receive failed');
+                              notify(d.message, 'success');
+                              fetchDamagedTransfers(); fetchDamagedTransfersSummary();
+                            } catch(err) { notify(err.message, 'error'); }
+                          }}>Receive</button>
+                        )}
+                        {t.status === 'received' && <span style={{fontSize:10,color:'#2e7d32',fontWeight:600}}>Completed</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {damagedTransfersList.length === 0 && (
+                    <tr><td colSpan="10" style={{textAlign:'center',padding:30,color:'#aaa'}}>No damaged transfers yet. Click "New Damaged Transfer" to move damaged products between warehouses.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ============ RECEIVE TRANSFERS MODULE ============ */}
+        {activeModule === 'receiveTransfers' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Receive Transfers</h2>
+              </div>
+              <button onClick={() => { fetchReceiveTransfers(); fetchReceiveTransfersSummary(); }} className="btn btn-primary">Refresh</button>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="stats-cards" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:24}}>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#fa709a 0%,#fee140 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{receiveTransfersSummary.pending_damaged_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Awaiting Receipt</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{receiveTransfersSummary.received_damaged_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Received (Damaged)</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#667eea 0%,#764ba2 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{receiveTransfersSummary.regular_completed_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Regular Transfers</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{receiveTransfersSummary.pending_receipt_quantity.toLocaleString()}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Units Awaiting</div>
+              </div>
+              <div className="stat-card" style={{background:'linear-gradient(135deg,#f093fb 0%,#f5576c 100%)',color:'#fff',borderRadius:12,padding:20}}>
+                <div style={{fontSize:28,fontWeight:700}}>{receiveTransfersSummary.total_all_transfers}</div>
+                <div style={{fontSize:13,opacity:0.85}}>Total All Transfers</div>
+              </div>
+            </div>
+
+            {/* Receive Modal */}
+            {showReceiveModal && (
+              <div className="modal-overlay">
+                <div className="modal" style={{maxWidth:500}}>
+                  <div className="modal-header">
+                    <div className="modal-header-left"><img src="/company-logo.png" alt="AstroBSM" className="modal-logo" onError={(e) => { e.target.style.display = 'none'; }}/><h3>Confirm Receipt</h3></div>
+                    <button className="modal-close" onClick={() => setShowReceiveModal(null)}>x</button>
+                  </div>
+                  <div className="modal-content">
+                    <p style={{marginBottom:12}}><strong>Transfer:</strong> {showReceiveModal.transfer_number}</p>
+                    <p style={{marginBottom:12}}><strong>Product:</strong> {showReceiveModal.product_name} x {showReceiveModal.quantity}</p>
+                    <p style={{marginBottom:16}}><strong>From:</strong> {showReceiveModal.from_warehouse_name} <strong>To:</strong> {showReceiveModal.to_warehouse_name}</p>
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      setReceiveLoading(true);
+                      try {
+                        const token = localStorage.getItem('access_token');
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (token) headers['Authorization'] = `Bearer ${token}`;
+                        const res = await fetch(`/api/receive-transfers/${showReceiveModal.id}/receive`, {
+                          method: 'POST', headers,
+                          body: JSON.stringify(receiveForm)
+                        });
+                        const d = await res.json();
+                        if (!res.ok) throw new Error(d.detail || 'Receive failed');
+                        notify(d.message, 'success');
+                        setShowReceiveModal(null);
+                        setReceiveForm({ receipt_notes: '', receipt_condition: 'as_expected' });
+                        fetchReceiveTransfers(); fetchReceiveTransfersSummary();
+                      } catch(err) { notify(err.message, 'error'); }
+                      finally { setReceiveLoading(false); }
+                    }}>
+                      <div className="form-group">
+                        <label>Receipt Condition</label>
+                        <select value={receiveForm.receipt_condition} onChange={(e) => setReceiveForm(f => ({...f, receipt_condition: e.target.value}))}>
+                          <option value="as_expected">As Expected</option>
+                          <option value="minor_additional_damage">Minor Additional Damage</option>
+                          <option value="major_additional_damage">Major Additional Damage</option>
+                          <option value="quantity_mismatch">Quantity Mismatch</option>
+                          <option value="wrong_product">Wrong Product</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Receipt Notes</label>
+                        <textarea rows="3" value={receiveForm.receipt_notes} onChange={(e) => setReceiveForm(f => ({...f, receipt_notes: e.target.value}))} placeholder="Notes about the received items..."/>
+                      </div>
+                      <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={() => setShowReceiveModal(null)}>Cancel</button>
+                        <button type="submit" className="btn btn-primary" disabled={receiveLoading}>{receiveLoading ? 'Processing...' : 'Confirm Receipt'}</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Filter: Show pending first */}
+            <div style={{marginBottom:12}}>
+              <span style={{fontSize:12,color:'#888',fontStyle:'italic'}}>Transfers awaiting receipt are shown first. Use the "Receive" button to confirm receipt of damaged transfers.</span>
+            </div>
+
+            {/* Receive Transfers Table */}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Transfer #</th>
+                    <th>Type</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Damage Type</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                    <th>Received</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {receiveTransfersList.sort((a,b) => {
+                    // Pending/dispatched first, then received, then completed
+                    const order = { pending: 0, dispatched: 1, received: 2, completed: 3 };
+                    return (order[a.status] || 9) - (order[b.status] || 9);
+                  }).map(t => (
+                    <tr key={`${t.transfer_type}-${t.id}`} style={{background: t.can_receive ? '#fffde7' : undefined}}>
+                      <td style={{fontWeight:600,color: t.transfer_type === 'damaged' ? '#f5576c' : '#667eea'}}>{t.transfer_number}</td>
+                      <td><span style={{
+                        background: t.transfer_type === 'damaged' ? '#fce4ec' : '#e8eaf6',
+                        color: t.transfer_type === 'damaged' ? '#c62828' : '#283593',
+                        padding:'2px 8px',borderRadius:12,fontSize:10,fontWeight:600
+                      }}>{t.transfer_type === 'damaged' ? 'DAMAGED' : 'REGULAR'}</span></td>
+                      <td>{t.from_warehouse_name}</td>
+                      <td>{t.to_warehouse_name}</td>
+                      <td>{t.product_name} {t.product_sku && <span style={{fontSize:10,color:'#999'}}>({t.product_sku})</span>}</td>
+                      <td style={{fontWeight:600}}>{t.quantity.toLocaleString()}</td>
+                      <td>{t.damage_type !== 'N/A' ? <span style={{background:'#fce4ec',color:'#c62828',padding:'2px 8px',borderRadius:12,fontSize:11}}>{t.damage_type}</span> : '-'}</td>
+                      <td><span style={{
+                        background: t.status === 'pending' ? '#fff3e0' : t.status === 'dispatched' ? '#e3f2fd' : t.status === 'received' ? '#e8f5e9' : '#e8f5e9',
+                        color: t.status === 'pending' ? '#e65100' : t.status === 'dispatched' ? '#1565c0' : '#2e7d32',
+                        padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:600
+                      }}>{t.status.toUpperCase()}</span></td>
+                      <td>{t.created_at ? new Date(t.created_at).toLocaleDateString() : 'N/A'}</td>
+                      <td>{t.received_at ? new Date(t.received_at).toLocaleDateString() : '-'}</td>
+                      <td>
+                        {t.can_receive ? (
+                          <button className="btn btn-sm" style={{fontSize:10,padding:'4px 10px',background:'linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)',color:'#fff',border:'none',borderRadius:6,fontWeight:600}} onClick={() => {
+                            setShowReceiveModal(t);
+                            setReceiveForm({ receipt_notes: '', receipt_condition: 'as_expected' });
+                          }}>Receive</button>
+                        ) : (
+                          <span style={{fontSize:10,color:'#999'}}>{t.status === 'received' ? 'Received' : 'Complete'}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {receiveTransfersList.length === 0 && (
+                    <tr><td colSpan="11" style={{textAlign:'center',padding:30,color:'#aaa'}}>No transfers found. Transfers from the "Transfers" and "Damaged Transfers" modules will appear here.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -6555,9 +7261,9 @@ function AppMain({ currentUser = null }) {
                         <tr style={{background:'#f1f3f5'}}>
                           <th style={{padding:'10px 8px',textAlign:'left',position:'sticky',left:0,background:'#f1f3f5',zIndex:2,minWidth:180,borderBottom:'2px solid #dee2e6'}}>User</th>
                           <th style={{padding:'10px 4px',textAlign:'center',fontSize:10,borderBottom:'2px solid #dee2e6',minWidth:30}} title="Select All">All</th>
-                          {['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(mod => (
+                          {['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].map(mod => (
                             <th key={mod} style={{padding:'10px 4px',textAlign:'center',fontSize:9,textTransform:'uppercase',letterSpacing:0.3,borderBottom:'2px solid #dee2e6',minWidth:65,whiteSpace:'nowrap'}}>
-                              {mod === 'rawMaterials' ? 'Raw Mat.' : mod === 'stockManagement' ? 'Stock Mgt' : mod === 'productionCompletions' ? 'Prod.Comp' : mod === 'machinesEquipment' ? 'Machines' : mod === 'transfers' ? 'Transfers' : mod === 'paymentTracking' ? 'Pay & Debt' : mod === 'hrCustomerCare' ? 'HR/CustCare' : mod === 'userManagement' ? 'User Mgt' : mod.charAt(0).toUpperCase() + mod.slice(1)}
+                              {mod === 'rawMaterials' ? 'Raw Mat.' : mod === 'stockManagement' ? 'Stock Mgt' : mod === 'productionCompletions' ? 'Prod.Comp' : mod === 'machinesEquipment' ? 'Machines' : mod === 'transfers' ? 'Transfers' : mod === 'returns' ? 'Returns' : mod === 'damagedTransfers' ? 'Dmg Trans' : mod === 'receiveTransfers' ? 'Receive' : mod === 'paymentTracking' ? 'Pay & Debt' : mod === 'hrCustomerCare' ? 'HR/CustCare' : mod === 'userManagement' ? 'User Mgt' : mod.charAt(0).toUpperCase() + mod.slice(1)}
                             </th>
                           ))}
                           <th style={{padding:'10px 8px',borderBottom:'2px solid #dee2e6'}}>Save</th>
@@ -6566,7 +7272,7 @@ function AppMain({ currentUser = null }) {
                       <tbody>
                         {moduleAccessData.filter(u => u.is_active).map((u, idx) => {
                           const isAdmin = u.role === 'admin';
-                          const mods = ['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'];
+                          const mods = ['staff','attendance','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'];
                           const allChecked = mods.every(m => u.modules[m]);
                           return (
                             <tr key={u.user_id} style={{background: idx%2===0?'#fff':'#fafbfc', opacity: isAdmin ? 0.6 : 1}}>
