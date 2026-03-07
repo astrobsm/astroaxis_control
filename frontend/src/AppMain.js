@@ -18,6 +18,8 @@ function AppMain({ currentUser = null }) {
   // Offline-first sync status
   const [offlineStatus, setOfflineStatus] = useState({ online: navigator.onLine, pendingCount: 0, lastFullSync: null, syncing: false });
   const [pullProgress, setPullProgress] = useState(null); // { done, total, current }
+  const [syncBarExpanded, setSyncBarExpanded] = useState(true); // auto-collapse sync bar
+  const syncBarTimerRef = useRef(null);
 
   // Backend data cache
   const [data, setData] = useState({
@@ -280,6 +282,18 @@ function AppMain({ currentUser = null }) {
     const unsub = subscribeOffline(setOfflineStatus);
     return unsub;
   }, []);
+
+  // Auto-collapse sync bar after 3s when online with no pending changes
+  useEffect(() => {
+    if (syncBarTimerRef.current) clearTimeout(syncBarTimerRef.current);
+    if (offlineStatus.online && offlineStatus.pendingCount === 0 && !offlineStatus.syncing && !pullProgress) {
+      syncBarTimerRef.current = setTimeout(() => setSyncBarExpanded(false), 3000);
+    } else {
+      // Keep expanded when offline, syncing, or has pending changes
+      setSyncBarExpanded(true);
+    }
+    return () => { if (syncBarTimerRef.current) clearTimeout(syncBarTimerRef.current); };
+  }, [offlineStatus.online, offlineStatus.pendingCount, offlineStatus.syncing, pullProgress]);
 
   // Pull from Cloud handler
   const handlePullFromCloud = useCallback(async () => {
@@ -2341,15 +2355,30 @@ function AppMain({ currentUser = null }) {
         />
       )}
 
-      {/* Offline Sync Status Bar */}
-      <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
-        background: offlineStatus.online ? (offlineStatus.pendingCount > 0 ? '#f59e0b' : '#10b981') : '#ef4444',
-        color: 'white', padding: '6px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        fontSize: '12px', fontWeight: 600, gap: '12px', minHeight: '32px',
-        transition: 'background 0.3s'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      {/* Offline Sync Status Bar - auto-collapses when online with no pending changes */}
+      <div
+        onMouseEnter={() => setSyncBarExpanded(true)}
+        onMouseLeave={() => {
+          if (offlineStatus.online && offlineStatus.pendingCount === 0 && !offlineStatus.syncing && !pullProgress) {
+            setSyncBarExpanded(false);
+          }
+        }}
+        style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: offlineStatus.online ? (offlineStatus.pendingCount > 0 ? '#f59e0b' : '#10b981') : '#ef4444',
+          color: 'white',
+          padding: syncBarExpanded ? '6px 16px' : '0 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          fontSize: '12px', fontWeight: 600, gap: '12px',
+          height: syncBarExpanded ? '32px' : '4px',
+          minHeight: syncBarExpanded ? '32px' : '4px',
+          overflow: 'hidden',
+          transition: 'height 0.3s ease, min-height 0.3s ease, padding 0.3s ease, background 0.3s ease',
+          cursor: syncBarExpanded ? 'default' : 'pointer'
+        }}
+        onClick={() => { if (!syncBarExpanded) setSyncBarExpanded(true); }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', opacity: syncBarExpanded ? 1 : 0, transition: 'opacity 0.2s ease' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: offlineStatus.online ? '#fff' : '#fca5a5', display: 'inline-block', animation: offlineStatus.syncing ? 'pulse 1s infinite' : 'none' }} />
           <span>{offlineStatus.online ? (offlineStatus.syncing ? 'SYNCING...' : 'ONLINE') : 'OFFLINE MODE'}</span>
           {offlineStatus.pendingCount > 0 && (
@@ -2361,7 +2390,7 @@ function AppMain({ currentUser = null }) {
             <span style={{ opacity: 0.8 }}>Last sync: {new Date(offlineStatus.lastFullSync).toLocaleString()}</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', opacity: syncBarExpanded ? 1 : 0, transition: 'opacity 0.2s ease' }}>
           {offlineStatus.online && offlineStatus.pendingCount > 0 && (
             <button onClick={handleSyncNow} disabled={offlineStatus.syncing} style={{
               padding: '3px 12px', background: 'rgba(255,255,255,0.25)', color: '#fff',
@@ -2377,8 +2406,8 @@ function AppMain({ currentUser = null }) {
         </div>
       </div>
 
-      {/* Spacer for fixed sync bar */}
-      <div style={{ height: '32px', flexShrink: 0 }} />
+      {/* Dynamic spacer for sync bar */}
+      <div style={{ height: syncBarExpanded ? '32px' : '4px', flexShrink: 0, transition: 'height 0.3s ease' }} />
 
       {/* Vertical Sidebar Navigation */}
       <aside className={`sidebar ${sidebarVisible ? 'visible' : 'hidden'}`}>
