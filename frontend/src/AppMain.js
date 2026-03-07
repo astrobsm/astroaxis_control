@@ -792,7 +792,7 @@ function AppMain({ currentUser = null }) {
   async function downloadManifestPdf(manifestId, manifestNumber) {
     try {
       notify('Generating PDF...', 'info');
-      const res = await fetch(`/api/logistics/manifests/${manifestId}/download`);
+      const res = await fetch(`/api/logistics/manifests/${manifestId}/printout`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `Server returned ${res.status}`);
