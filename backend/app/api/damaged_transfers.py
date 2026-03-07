@@ -37,15 +37,20 @@ CREATE TABLE IF NOT EXISTS damaged_product_transfers (
     received_at TIMESTAMP WITH TIME ZONE,
     receipt_notes TEXT,
     receipt_condition VARCHAR(100)
-);
-CREATE INDEX IF NOT EXISTS idx_dpt_status ON damaged_product_transfers(status);
-CREATE INDEX IF NOT EXISTS idx_dpt_from ON damaged_product_transfers(from_warehouse_id);
-CREATE INDEX IF NOT EXISTS idx_dpt_to ON damaged_product_transfers(to_warehouse_id);
+)
 """
+
+CREATE_INDEX_SQLS = [
+    "CREATE INDEX IF NOT EXISTS idx_dpt_status ON damaged_product_transfers(status)",
+    "CREATE INDEX IF NOT EXISTS idx_dpt_from ON damaged_product_transfers(from_warehouse_id)",
+    "CREATE INDEX IF NOT EXISTS idx_dpt_to ON damaged_product_transfers(to_warehouse_id)",
+]
 
 
 async def _ensure_table(session: AsyncSession):
     await session.execute(text(CREATE_TABLE_SQL))
+    for idx_sql in CREATE_INDEX_SQLS:
+        await session.execute(text(idx_sql))
     await session.commit()
 
 
