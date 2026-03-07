@@ -59,6 +59,7 @@ self.addEventListener('fetch', (event) => {
 
   // Skip PDF and binary file downloads - let them go directly to network
   if (url.pathname.endsWith('/pdf') || url.pathname.endsWith('.pdf') ||
+      url.pathname.endsWith('/download') ||
       event.request.headers.get('Accept')?.includes('application/pdf')) {
     return;
   }
