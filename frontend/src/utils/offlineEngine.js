@@ -260,6 +260,12 @@ export async function initOfflineEngine() {
       return _originalFetch(input, init);
     }
 
+    // Skip PDF/binary downloads - don't intercept or cache these
+    if (cachePath.endsWith('/pdf') || cachePath.endsWith('.pdf') || cachePath.includes('/pdf?') ||
+        cachePath.endsWith('/download') || cachePath.includes('/download?')) {
+      return _originalFetch(input, init);
+    }
+
     // Normalize URL to path only for caching
     let cachePath = url;
     try {
