@@ -775,6 +775,29 @@ function AppMain({ currentUser = null }) {
     } catch(e) { notify(`Error: ${e.message}`, 'error'); }
   }
 
+  async function downloadManifestPdf(manifestId, manifestNumber) {
+    try {
+      notify('Generating PDF...', 'info');
+      const res = await fetch(`/api/logistics/manifests/${manifestId}/pdf`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server returned ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Manifest-${manifestNumber || manifestId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      notify('Manifest PDF downloaded', 'success');
+    } catch (e) {
+      notify(`PDF error: ${e.message}`, 'error');
+    }
+  }
+
   async function fetchFinancialData() {
     try {
       setLoading(true);
@@ -6046,7 +6069,7 @@ function AppMain({ currentUser = null }) {
                         <td style={{fontWeight:600}}>{formatCurrency(m.total_cost)}</td>
                         <td><span style={{padding:'2px 10px',borderRadius:12,fontSize:11,fontWeight:600,background:m.status==='completed'?'#27ae60':m.status==='in_transit'||m.status==='dispatched'?'#3498db':m.status==='preparing'?'#f39c12':'#95a5a6',color:'#fff'}}>{m.status.replace('_',' ').toUpperCase()}</span></td>
                         <td style={{display:'flex',gap:4}}>
-                          <button className="btn btn-secondary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>window.open(`/api/logistics/manifests/${m.id}/pdf`,'_blank')}>PDF</button>
+                          <button className="btn btn-secondary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>downloadManifestPdf(m.id, m.manifest_number)}>PDF</button>
                           {m.status==='preparing' && <button className="btn btn-primary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>updateManifestStatus(m.id,'dispatched')}>Dispatch</button>}
                         </td>
                       </tr>
@@ -6062,7 +6085,7 @@ function AppMain({ currentUser = null }) {
               <div style={{background:'#fff',padding:24,borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,.08)'}}>
                 <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
                   <button className="btn btn-secondary" onClick={()=>setLogSelectedManifest(null)}>Back to List</button>
-                  <button className="btn btn-primary" style={{fontSize:12}} onClick={()=>window.open(`/api/logistics/manifests/${logSelectedManifest.id}/pdf`,'_blank')}>Download PDF</button>
+                  <button className="btn btn-primary" style={{fontSize:12}} onClick={()=>downloadManifestPdf(logSelectedManifest.id, logSelectedManifest.manifest_number)}>Download PDF</button>
                   {logSelectedManifest.status==='preparing' && <button className="btn btn-primary" style={{background:'#27ae60',borderColor:'#27ae60',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'dispatched')}>Mark Dispatched</button>}
                   {logSelectedManifest.status==='dispatched' && <button className="btn btn-primary" style={{background:'#3498db',borderColor:'#3498db',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'in_transit')}>Mark In Transit</button>}
                 </div>
