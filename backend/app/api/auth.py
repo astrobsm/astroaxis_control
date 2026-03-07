@@ -81,7 +81,7 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_sessi
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff"]
+    valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff", "warehouse_logistics"]
     if user_data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
     
@@ -589,7 +589,7 @@ class UpdateRoleRequest(BaseModel):
 @router.put("/users/{user_id}/role")
 async def update_user_role(user_id: UUID, body: UpdateRoleRequest, db: AsyncSession = Depends(get_session)):
     """Update a user's role"""
-    valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff"]
+    valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff", "warehouse_logistics"]
     if body.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
     try:

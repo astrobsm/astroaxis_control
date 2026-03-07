@@ -22,7 +22,7 @@ class User(Base):
     email = sa.Column(sa.String(255), unique=True, nullable=False, index=True)
     full_name = sa.Column(sa.String(255), nullable=False)
     hashed_password = sa.Column(sa.String(255), nullable=False)
-    role = sa.Column(sa.String(50), nullable=False, default='customer_care')  # admin, sales_staff, marketer, customer_care, production_staff
+    role = sa.Column(sa.String(50), nullable=False, default='customer_care')  # admin, sales_staff, marketer, customer_care, production_staff, warehouse_logistics
     is_active = sa.Column(sa.Boolean, default=True)
     is_locked = sa.Column(sa.Boolean, default=False)
     failed_login_attempts = sa.Column(sa.Integer, default=0)

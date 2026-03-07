@@ -210,8 +210,8 @@ function AppMain({ currentUser = null }) {
     logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0],
     vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle',
     transport_cost: '', additional_charges: '0', notes: '',
-    customers: [{ customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '',
-      items: [{ product_name: '', sku: '', quantity: '1', unit: 'each' }] }]
+    customers: [{ customer_id: '', customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '',
+      items: [{ product_id: '', product_name: '', sku: '', quantity: '1', unit: 'each' }] }]
   });
 
   // Form models
@@ -744,7 +744,7 @@ function AppMain({ currentUser = null }) {
       const d = await r.json();
       if(!r.ok) throw new Error(d.detail || 'Failed');
       notify(`Manifest ${d.manifest_number} created with ${payload.customers.length} customer(s)! Cost: ${formatCurrency(d.total_cost)}`, 'success');
-      setLogManifestForm({ logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0], vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle', transport_cost: '', additional_charges: '0', notes: '', customers: [{ customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '', items: [{ product_name: '', sku: '', quantity: '1', unit: 'each' }] }] });
+      setLogManifestForm({ logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0], vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle', transport_cost: '', additional_charges: '0', notes: '', customers: [{ customer_id: '', customer_name: '', customer_phone: '', delivery_address: '', city: '', state: '', items: [{ product_id: '', product_name: '', sku: '', quantity: '1', unit: 'each' }] }] });
       setLogView('manifests');
       fetchLogManifests(); fetchLogDashboard(); fetchLogAnalytics();
     } catch(e) { notify(`Error: ${e.message}`, 'error'); } finally { setLoading(false); }
@@ -5924,7 +5924,12 @@ function AppMain({ currentUser = null }) {
                   <div style={{background:'#f8f9fa',padding:16,borderRadius:8,marginBottom:20}}>
                     <h4 style={{marginTop:0,color:'#667eea'}}>Trip Details</h4>
                     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16}}>
-                      <div><label className="form-label">Logistics Officer *</label><input className="form-input" required value={logManifestForm.logistics_officer} onChange={e=>setLogManifestForm(p=>({...p,logistics_officer:e.target.value}))}/></div>
+                      <div><label className="form-label">Logistics Officer *</label>
+                        <select className="form-input" required value={logManifestForm.logistics_officer} onChange={e=>setLogManifestForm(p=>({...p,logistics_officer:e.target.value}))}>
+                          <option value="">-- Select Logistics Officer --</option>
+                          {(data.staff||[]).map(s=>(<option key={s.id} value={`${s.first_name} ${s.last_name}`}>{s.first_name} {s.last_name} ({s.employee_id})</option>))}
+                        </select>
+                      </div>
                       <div><label className="form-label">Delivery Date *</label><input className="form-input" type="date" required value={logManifestForm.delivery_date} onChange={e=>setLogManifestForm(p=>({...p,delivery_date:e.target.value}))}/></div>
                       <div><label className="form-label">Transport Mode</label>
                         <select className="form-input" value={logManifestForm.transport_mode} onChange={e=>setLogManifestForm(p=>({...p,transport_mode:e.target.value}))}>
@@ -5954,7 +5959,21 @@ function AppMain({ currentUser = null }) {
                         )}
                       </div>
                       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-                        <div><label className="form-label" style={{fontSize:12}}>Customer Name *</label><input className="form-input" required value={cust.customer_name} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].customer_name=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                        <div><label className="form-label" style={{fontSize:12}}>Customer Name *</label>
+                          <select className="form-input" required value={cust.customer_id||''} onChange={e=>{
+                            const custs=[...logManifestForm.customers];
+                            const selectedCustomer=(data.customers||[]).find(c=>c.id===e.target.value);
+                            if(selectedCustomer){
+                              custs[ci]={...custs[ci], customer_id:selectedCustomer.id, customer_name:selectedCustomer.name, customer_phone:selectedCustomer.phone||'', delivery_address:selectedCustomer.address||'', city:selectedCustomer.city||'', state:selectedCustomer.state||''};
+                            } else {
+                              custs[ci]={...custs[ci], customer_id:'', customer_name:'', customer_phone:'', delivery_address:'', city:'', state:''};
+                            }
+                            setLogManifestForm(p=>({...p,customers:custs}));
+                          }}>
+                            <option value="">-- Select Customer --</option>
+                            {(data.customers||[]).map(c=>(<option key={c.id} value={c.id}>{c.name}{c.phone ? ` (${c.phone})` : ''}</option>))}
+                          </select>
+                        </div>
                         <div><label className="form-label" style={{fontSize:12}}>Phone</label><input className="form-input" value={cust.customer_phone} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].customer_phone=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
                         <div style={{gridColumn:'1/-1'}}><label className="form-label" style={{fontSize:12}}>Delivery Address *</label><input className="form-input" required value={cust.delivery_address} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].delivery_address=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
                         <div><label className="form-label" style={{fontSize:12}}>City</label><input className="form-input" value={cust.city} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].city=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
@@ -5964,19 +5983,33 @@ function AppMain({ currentUser = null }) {
                         <label className="form-label" style={{fontSize:12,fontWeight:600}}>Items for this customer:</label>
                         {cust.items.map((item, ii) => (
                           <div key={ii} style={{display:'grid',gridTemplateColumns:'2fr 1fr 80px 80px 40px',gap:8,marginBottom:6,alignItems:'end'}}>
-                            <div><input className="form-input" placeholder="Product Name *" required value={item.product_name} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].product_name=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
-                            <div><input className="form-input" placeholder="SKU" value={item.sku} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].sku=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
+                            <div>
+                              <select className="form-input" required value={item.product_id||''} onChange={e=>{
+                                const custs=[...logManifestForm.customers];
+                                const selectedProduct=(data.products||[]).find(pr=>pr.id===e.target.value);
+                                if(selectedProduct){
+                                  custs[ci].items[ii]={...custs[ci].items[ii], product_id:selectedProduct.id, product_name:selectedProduct.name, sku:selectedProduct.sku||''};
+                                } else {
+                                  custs[ci].items[ii]={...custs[ci].items[ii], product_id:'', product_name:'', sku:''};
+                                }
+                                setLogManifestForm(p=>({...p,customers:custs}));
+                              }}>
+                                <option value="">-- Select Product --</option>
+                                {(data.products||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(pr=>(<option key={pr.id} value={pr.id}>{pr.name}{pr.sku ? ` (${pr.sku})` : ''}</option>))}
+                              </select>
+                            </div>
+                            <div><input className="form-input" placeholder="SKU" readOnly value={item.sku} style={{background:'#f0f0f0'}}/></div>
                             <div><input className="form-input" type="number" min="1" placeholder="Qty" value={item.quantity} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].quantity=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
                             <div><input className="form-input" placeholder="Unit" value={item.unit} onChange={e=>{const custs=[...logManifestForm.customers];custs[ci].items[ii].unit=e.target.value;setLogManifestForm(p=>({...p,customers:custs}));}}/></div>
                             <button type="button" style={{background:'#e74c3c',color:'#fff',border:'none',borderRadius:6,padding:'6px',cursor:'pointer',fontSize:12}} onClick={()=>{
                               const custs=[...logManifestForm.customers];custs[ci].items=custs[ci].items.filter((_,i)=>i!==ii);
-                              if(custs[ci].items.length===0) custs[ci].items=[{product_name:'',sku:'',quantity:'1',unit:'each'}];
+                              if(custs[ci].items.length===0) custs[ci].items=[{product_id:'',product_name:'',sku:'',quantity:'1',unit:'each'}];
                               setLogManifestForm(p=>({...p,customers:custs}));
                             }}>X</button>
                           </div>
                         ))}
                         <button type="button" className="btn btn-secondary" style={{fontSize:11,padding:'4px 10px',marginTop:4}} onClick={()=>{
-                          const custs=[...logManifestForm.customers];custs[ci].items.push({product_name:'',sku:'',quantity:'1',unit:'each'});
+                          const custs=[...logManifestForm.customers];custs[ci].items.push({product_id:'',product_name:'',sku:'',quantity:'1',unit:'each'});
                           setLogManifestForm(p=>({...p,customers:custs}));
                         }}>+ Add Item</button>
                       </div>
@@ -5984,7 +6017,7 @@ function AppMain({ currentUser = null }) {
                   ))}
 
                   <button type="button" className="btn btn-secondary" style={{marginBottom:20,background:'#667eea',color:'#fff',border:'none'}} onClick={()=>{
-                    setLogManifestForm(p=>({...p, customers: [...p.customers, {customer_name:'',customer_phone:'',delivery_address:'',city:'',state:'',items:[{product_name:'',sku:'',quantity:'1',unit:'each'}]}]}));
+                    setLogManifestForm(p=>({...p, customers: [...p.customers, {customer_id:'',customer_name:'',customer_phone:'',delivery_address:'',city:'',state:'',items:[{product_id:'',product_name:'',sku:'',quantity:'1',unit:'each'}]}]}));
                   }}>+ Add Another Customer</button>
 
                   <div style={{display:'flex',gap:8}}>
@@ -6154,8 +6187,8 @@ function AppMain({ currentUser = null }) {
             if (umFilter === 'inactive') return !u.is_active && matchesSearch;
             return matchesSearch;
           });
-          const roleLabels = { admin: 'Administrator', sales_staff: 'Sales Staff', marketer: 'Marketer', customer_care: 'Customer Care', production_staff: 'Production Staff' };
-          const roleColors = { admin: '#e74c3c', sales_staff: '#3498db', marketer: '#9b59b6', customer_care: '#2ecc71', production_staff: '#f39c12' };
+          const roleLabels = { admin: 'Administrator', sales_staff: 'Sales Staff', marketer: 'Marketer', customer_care: 'Customer Care', production_staff: 'Production Staff', warehouse_logistics: 'Warehouse/Logistics' };
+          const roleColors = { admin: '#e74c3c', sales_staff: '#3498db', marketer: '#9b59b6', customer_care: '#2ecc71', production_staff: '#f39c12', warehouse_logistics: '#e67e22' };
 
           const handleApprove = async (userId) => {
             try { const r = await fetch(`/api/auth/users/${userId}/approve`, {method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.detail||'Failed'); notify(d.message,'success'); fetchData('users'); } catch(e) { notify(e.message,'error'); }
@@ -6272,6 +6305,7 @@ function AppMain({ currentUser = null }) {
                               <option value="marketer">Marketer</option>
                               <option value="customer_care">Customer Care</option>
                               <option value="production_staff">Production Staff</option>
+                              <option value="warehouse_logistics">Warehouse/Logistics</option>
                             </select>
                           ) : (
                             <span onClick={()=>setUmEditingRole(u.id)} style={{display:'inline-block',padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:700,background:roleColors[u.role]||'#95a5a6',color:'#fff',cursor:'pointer',letterSpacing:.3}} title="Click to change role">
