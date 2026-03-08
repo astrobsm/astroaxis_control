@@ -1253,10 +1253,10 @@ async def generate_enhanced_payslip_pdf(payroll_id: UUID, session: AsyncSession 
 # Birthday notification endpoint
 @router.get('/birthdays/upcoming')
 async def get_upcoming_birthdays(
-    days_ahead: int = Query(7, ge=1, le=30, description="Number of days to look ahead"),
+    days_ahead: int = Query(30, ge=1, le=365, description="Number of days to look ahead (up to 365)"),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get staff with birthdays in the next N days"""
+    """Get staff with birthdays in the next N days (up to 365)"""
     try:
         today = date.today()
         

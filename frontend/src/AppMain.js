@@ -416,7 +416,7 @@ function AppMain({ currentUser = null }) {
 
   async function fetchUpcomingBirthdays() {
     try {
-      const res = await fetch('/api/staff/birthdays/upcoming?days_ahead=30');
+      const res = await fetch('/api/staff/birthdays/upcoming?days_ahead=365');
       if (res.ok) {
         const result = await res.json();
         // Backend returns {success, count, birthdays: [...]} - extract the array
@@ -5919,11 +5919,11 @@ function AppMain({ currentUser = null }) {
                 </div>
                 {hrDashboard.upcoming_birthdays && hrDashboard.upcoming_birthdays.length > 0 && (
                   <div style={{background:'#fff3cd',borderRadius:8,padding:16,marginBottom:24}}>
-                    <h3 style={{marginBottom:12,color:'#856404'}}>Upcoming Birthdays (Next 14 Days)</h3>
+                    <h3 style={{marginBottom:12,color:'#856404'}}>Upcoming Birthdays ({hrDashboard.upcoming_birthdays.length} staff)</h3>
                     <div style={{display:'flex',flexWrap:'wrap',gap:12}}>
                       {hrDashboard.upcoming_birthdays.map((b,i) => (
-                        <div key={i} style={{background:'#fff',borderRadius:8,padding:'8px 16px',boxShadow:'0 1px 3px rgba(0,0,0,.1)'}}>
-                          <strong>{b.first_name} {b.last_name}</strong><br /><small>{b.date_of_birth} - {b.position||'Staff'}</small>
+                        <div key={i} style={{background:b.is_today?'linear-gradient(135deg,#ff6b6b,#ee5a24)':'#fff',borderRadius:8,padding:'8px 16px',boxShadow:'0 1px 3px rgba(0,0,0,.1)',color:b.is_today?'#fff':'#333'}}>
+                          <strong>{b.is_today ? '🎉 ' : '🎂 '}{b.first_name} {b.last_name}</strong><br /><small>{b.is_today ? 'Birthday Today!' : `in ${b.days_until} day${b.days_until>1?'s':''}`} - {b.position||'Staff'}</small>
                         </div>
                       ))}
                     </div>

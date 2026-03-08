@@ -57,27 +57,29 @@ async def hr_dashboard(session: AsyncSession = Depends(get_session)):
     ))
     pending_orders = r6.scalar_one()
 
-    # Upcoming birthdays (14 days) - return list
+    # Upcoming birthdays - fetch all staff with DOB, compute days_until in Python
     r7 = await session.execute(text("""
         SELECT first_name, last_name, date_of_birth, position FROM staff 
-        WHERE date_of_birth IS NOT NULL 
-        AND (
-            (EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM CURRENT_DATE) 
-             AND EXTRACT(DAY FROM date_of_birth) >= EXTRACT(DAY FROM CURRENT_DATE)
-             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE) + 14)
-            OR
-            (EXTRACT(MONTH FROM date_of_birth) = EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '14 days')
-             AND EXTRACT(DAY FROM date_of_birth) <= EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '14 days'))
-        )
-        ORDER BY EXTRACT(MONTH FROM date_of_birth), EXTRACT(DAY FROM date_of_birth)
+        WHERE date_of_birth IS NOT NULL AND is_active = true
+        ORDER BY first_name
     """))
+    from datetime import date as _date
+    _today = _date.today()
     upcoming_birthdays = []
     for b in r7.fetchall():
-        upcoming_birthdays.append({
-            "first_name": b.first_name, "last_name": b.last_name,
-            "date_of_birth": str(b.date_of_birth) if b.date_of_birth else '',
-            "position": b.position or 'Staff',
-        })
+        if b.date_of_birth:
+            bday_this_year = b.date_of_birth.replace(year=_today.year)
+            if bday_this_year < _today:
+                bday_this_year = b.date_of_birth.replace(year=_today.year + 1)
+            days_until = (bday_this_year - _today).days
+            upcoming_birthdays.append({
+                "first_name": b.first_name, "last_name": b.last_name,
+                "date_of_birth": str(b.date_of_birth) if b.date_of_birth else '',
+                "position": b.position or 'Staff',
+                "days_until": days_until,
+                "is_today": days_until == 0,
+            })
+    upcoming_birthdays.sort(key=lambda x: x['days_until'])
 
     return {
         "total_staff": total_staff,
