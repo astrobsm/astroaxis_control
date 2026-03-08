@@ -478,10 +478,11 @@ async def generate_manifest_pdf(manifest_id: UUID, session: AsyncSession = Depen
     """Generate a printable PDF delivery manifest with signature lines."""
     try:
         from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
         from reportlab.lib import colors
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
 
         r = (await session.execute(
             text("SELECT * FROM delivery_manifests WHERE id = :id"),
@@ -495,121 +496,176 @@ async def generate_manifest_pdf(manifest_id: UUID, session: AsyncSession = Depen
             {"mid": str(manifest_id)}
         )).fetchall()
 
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=30)
-        styles = getSampleStyleSheet()
-        story = []
-
-        logo_paths = ['/app/company-logo.png', '/app/frontend/build/company-logo.png',
-                      os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')]
-        for path in logo_paths:
-            if os.path.exists(path):
-                story.append(Image(path, width=1.2*inch, height=1.2*inch))
-                story.append(Spacer(1, 6))
-                break
-
-        story.append(Paragraph("BONNESANTE MEDICALS", styles['Title']))
-        story.append(Paragraph(
-            "NO 6B PEACE AVENUE/17A ISUOFIA STREET, FEDERAL HOUSING ESTATE TRANS EKULU, ENUGU<br/>"
-            "Phone: +234 707 679 3866, +234 901 283 5413 | Email: astrobsm@gmail.com",
-            styles['Normal']
-        ))
-        story.append(Spacer(1, 12))
-        story.append(Paragraph(f"<b>DELIVERY MANIFEST: {r.manifest_number}</b>", styles['Heading2']))
-        story.append(Spacer(1, 8))
-
-        info_data = [
-            ['Delivery Date:', str(r.delivery_date), 'Manifest #:', r.manifest_number],
-            ['Logistics Officer:', r.logistics_officer or 'N/A', 'Vehicle:', r.vehicle_details or 'N/A'],
-            ['Driver:', f"{r.driver_name or 'N/A'} ({r.driver_phone or 'N/A'})", 'Transport Mode:', (r.transport_mode or 'vehicle').title()],
-            ['Transport Cost:', f"NGN {float(r.transport_cost or 0):,.2f}", 'Status:', r.status.upper()],
-        ]
-        info_table = Table(info_data, colWidths=[1.4*inch, 2.3*inch, 1.2*inch, 2.3*inch])
-        info_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ]))
-        story.append(info_table)
-        story.append(Spacer(1, 16))
-
-        for idx, c in enumerate(custs, 1):
-            story.append(Paragraph(f"<b>Customer {idx}: {c.customer_name}</b>", styles['Heading3']))
-            cust_info = f"Phone: {c.customer_phone or 'N/A'} | Address: {c.delivery_address or 'N/A'}"
-            if c.city:
-                cust_info += f", {c.city}"
-            if c.state:
-                cust_info += f", {c.state}"
-            story.append(Paragraph(cust_info, styles['Normal']))
-            story.append(Spacer(1, 4))
-
+        # Pre-fetch all items for each customer to reuse across both copies
+        custs_items = {}
+        for c in custs:
             items = (await session.execute(
                 text("SELECT * FROM manifest_items WHERE manifest_customer_id = :mcid ORDER BY created_at"),
                 {"mcid": str(c.id)}
             )).fetchall()
+            custs_items[str(c.id)] = items
 
-            item_data = [['#', 'Product', 'SKU', 'Qty', 'Unit']]
-            for i, it in enumerate(items, 1):
-                item_data.append([str(i), it.product_name, it.sku or '-', str(float(it.quantity)), it.unit or 'each'])
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=30)
+        styles = getSampleStyleSheet()
 
-            if items:
-                it_table = Table(item_data, colWidths=[0.4*inch, 3*inch, 1.2*inch, 0.8*inch, 0.8*inch])
-                it_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
-                    ('TOPPADDING', (0, 0), (-1, -1), 4),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                ]))
-                story.append(it_table)
+        # Custom style for copy label
+        copy_label_style = ParagraphStyle(
+            'CopyLabel', parent=styles['Normal'],
+            fontSize=12, fontName='Helvetica-Bold',
+            alignment=TA_RIGHT, textColor=colors.HexColor('#667eea'),
+            spaceAfter=4,
+        )
+        copy_banner_style = ParagraphStyle(
+            'CopyBanner', parent=styles['Normal'],
+            fontSize=10, fontName='Helvetica-Bold',
+            alignment=TA_CENTER, textColor=colors.white,
+            backColor=colors.HexColor('#667eea'),
+            spaceBefore=6, spaceAfter=6,
+            leftIndent=0, rightIndent=0,
+            borderPadding=(4, 4, 4, 4),
+        )
 
+        story = []
+
+        # Find logo path once
+        logo_path = None
+        logo_paths = ['/app/company-logo.png', '/app/frontend/build/company-logo.png',
+                      os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')]
+        for path in logo_paths:
+            if os.path.exists(path):
+                logo_path = path
+                break
+
+        # Generate two copies: Merchant's Copy and Customer's Copy
+        copy_labels = ["MERCHANT'S COPY", "CUSTOMER'S COPY"]
+
+        for copy_index, copy_label in enumerate(copy_labels):
+            # Page break before the second copy
+            if copy_index > 0:
+                story.append(PageBreak())
+
+            # Copy label banner at top
+            banner_table = Table(
+                [[copy_label]],
+                colWidths=[7.2 * inch],
+            )
+            banner_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#667eea')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#667eea')),
+            ]))
+            story.append(banner_table)
+            story.append(Spacer(1, 10))
+
+            if logo_path:
+                story.append(Image(logo_path, width=1.2*inch, height=1.2*inch))
+                story.append(Spacer(1, 6))
+
+            story.append(Paragraph("BONNESANTE MEDICALS", styles['Title']))
+            story.append(Paragraph(
+                "NO 6B PEACE AVENUE/17A ISUOFIA STREET, FEDERAL HOUSING ESTATE TRANS EKULU, ENUGU<br/>"
+                "Phone: +234 707 679 3866, +234 901 283 5413 | Email: astrobsm@gmail.com",
+                styles['Normal']
+            ))
+            story.append(Spacer(1, 12))
+            story.append(Paragraph(f"<b>DELIVERY MANIFEST: {r.manifest_number}</b>", styles['Heading2']))
             story.append(Spacer(1, 8))
 
-            if c.status == 'delivered' and c.receiver_name:
-                conf_text = (
-                    f"<b>Delivered</b> | Receiver: {c.receiver_name} "
-                    f"({c.receiver_phone or 'N/A'}) | "
-                    f"Invoice #: {c.physical_invoice_number or 'N/A'} | "
-                    f"Time: {c.delivery_time.strftime('%Y-%m-%d %H:%M') if c.delivery_time else 'N/A'}"
-                )
-                story.append(Paragraph(conf_text, styles['Normal']))
-            else:
-                sig_data = [
-                    ['Physical Invoice #:', '______________________', 'Date/Time:', '______________________'],
-                    ['Receiver Name:', '______________________', 'Receiver Phone:', '______________________'],
-                    ["Receiver's Signature:", '______________________', 'Officer Signature:', '______________________'],
-                ]
-                sig_table = Table(sig_data, colWidths=[1.4*inch, 2.1*inch, 1.3*inch, 2.1*inch])
-                sig_table.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                    ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
-                    ('TOPPADDING', (0, 0), (-1, -1), 6),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ]))
-                story.append(sig_table)
+            info_data = [
+                ['Delivery Date:', str(r.delivery_date), 'Manifest #:', r.manifest_number],
+                ['Logistics Officer:', r.logistics_officer or 'N/A', 'Vehicle:', r.vehicle_details or 'N/A'],
+                ['Driver:', f"{r.driver_name or 'N/A'} ({r.driver_phone or 'N/A'})", 'Transport Mode:', (r.transport_mode or 'vehicle').title()],
+                ['Transport Cost:', f"NGN {float(r.transport_cost or 0):,.2f}", 'Status:', r.status.upper()],
+            ]
+            info_table = Table(info_data, colWidths=[1.4*inch, 2.3*inch, 1.2*inch, 2.3*inch])
+            info_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ]))
+            story.append(info_table)
+            story.append(Spacer(1, 16))
 
-            story.append(Spacer(1, 14))
-            story.append(Table([['']],
-                colWidths=[7.2*inch],
-                style=[('LINEBELOW', (0, 0), (-1, -1), 1, colors.HexColor('#ddd'))]))
-            story.append(Spacer(1, 8))
+            for idx, c in enumerate(custs, 1):
+                story.append(Paragraph(f"<b>Customer {idx}: {c.customer_name}</b>", styles['Heading3']))
+                cust_info = f"Phone: {c.customer_phone or 'N/A'} | Address: {c.delivery_address or 'N/A'}"
+                if c.city:
+                    cust_info += f", {c.city}"
+                if c.state:
+                    cust_info += f", {c.state}"
+                story.append(Paragraph(cust_info, styles['Normal']))
+                story.append(Spacer(1, 4))
 
-        story.append(Spacer(1, 10))
-        story.append(Paragraph(
-            "<i>This is a computer-generated delivery manifest from AstroBSM - Bonnesante Medicals.</i>",
-            styles['Normal']
-        ))
+                items = custs_items[str(c.id)]
+
+                item_data = [['#', 'Product', 'SKU', 'Qty', 'Unit']]
+                for i, it in enumerate(items, 1):
+                    item_data.append([str(i), it.product_name, it.sku or '-', str(float(it.quantity)), it.unit or 'each'])
+
+                if items:
+                    it_table = Table(item_data, colWidths=[0.4*inch, 3*inch, 1.2*inch, 0.8*inch, 0.8*inch])
+                    it_table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 9),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+                        ('TOPPADDING', (0, 0), (-1, -1), 4),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                    ]))
+                    story.append(it_table)
+
+                story.append(Spacer(1, 8))
+
+                if c.status == 'delivered' and c.receiver_name:
+                    conf_text = (
+                        f"<b>Delivered</b> | Receiver: {c.receiver_name} "
+                        f"({c.receiver_phone or 'N/A'}) | "
+                        f"Invoice #: {c.physical_invoice_number or 'N/A'} | "
+                        f"Time: {c.delivery_time.strftime('%Y-%m-%d %H:%M') if c.delivery_time else 'N/A'}"
+                    )
+                    story.append(Paragraph(conf_text, styles['Normal']))
+                else:
+                    sig_data = [
+                        ['Physical Invoice #:', '______________________', 'Date/Time:', '______________________'],
+                        ['Receiver Name:', '______________________', 'Receiver Phone:', '______________________'],
+                        ["Receiver's Signature:", '______________________', 'Officer Signature:', '______________________'],
+                    ]
+                    sig_table = Table(sig_data, colWidths=[1.4*inch, 2.1*inch, 1.3*inch, 2.1*inch])
+                    sig_table.setStyle(TableStyle([
+                        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 9),
+                        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+                        ('TOPPADDING', (0, 0), (-1, -1), 6),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ]))
+                    story.append(sig_table)
+
+                story.append(Spacer(1, 14))
+                story.append(Table([['']],
+                    colWidths=[7.2*inch],
+                    style=[('LINEBELOW', (0, 0), (-1, -1), 1, colors.HexColor('#ddd'))]))
+                story.append(Spacer(1, 8))
+
+            story.append(Spacer(1, 10))
+            story.append(Paragraph(
+                f"<i>This is a computer-generated delivery manifest from AstroBSM - Bonnesante Medicals. ({copy_label})</i>",
+                styles['Normal']
+            ))
 
         doc.build(story)
         buffer.seek(0)
