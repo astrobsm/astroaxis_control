@@ -730,17 +730,21 @@ async def process_order_and_deduct_stock(
         if order.status == 'completed':
             raise HTTPException(status_code=400, detail="Order already processed")
         
-        # Get active warehouse
-        warehouse_result = await session.execute(
-            select(Warehouse).where(Warehouse.is_active == True)
-        )
-        warehouse = warehouse_result.scalars().first()
-        if not warehouse:
-            warehouse_result = await session.execute(select(Warehouse))
+        # Use the warehouse from the sales order itself
+        if order.warehouse_id:
+            warehouse_result = await session.execute(
+                select(Warehouse).where(Warehouse.id == order.warehouse_id)
+            )
+            warehouse = warehouse_result.scalars().first()
+        else:
+            # Fallback: get first active warehouse
+            warehouse_result = await session.execute(
+                select(Warehouse).where(Warehouse.is_active == True)
+            )
             warehouse = warehouse_result.scalars().first()
         
         if not warehouse:
-            raise HTTPException(status_code=404, detail="No warehouse found")
+            raise HTTPException(status_code=404, detail="No warehouse found for this order")
         
         # Process each line item
         low_stock_items = []

@@ -3481,6 +3481,7 @@ function AppMain({ currentUser = null }) {
                 <h2>Sales Orders</h2>
               </div>
               <button onClick={() => openForm('salesOrder')} className="btn btn-primary">ž• New Sales Order</button>
+              <button onClick={() => { setActiveModule('logistics'); }} className="btn btn-secondary" style={{marginLeft:8}}>Manifest</button>
             </div>
             <div className="table-container">
               <table className="data-table">
