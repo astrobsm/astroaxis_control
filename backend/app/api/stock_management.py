@@ -207,6 +207,7 @@ async def get_product_stock_levels(
                 'reserved_stock': 0,
                 'available_stock': current_stock,
                 'reorder_level': reorder_level,
+                'product_unit': row.product_unit or '',
                 'available_units': available_units,
                 'is_low_stock': is_low_stock,
                 'updated_at': row.updated_at.isoformat() if row.updated_at else None

@@ -2431,20 +2431,20 @@ function AppMain({ currentUser = null }) {
             </thead>
             <tbody>
               ${levels.map(l => {
-                const units = l.available_units || l.product_unit || '';
-                const unitLabel = units ? ' ' + units.split(', ')[0] : '';
+                const stockUnit = l.product_unit || '';
+                const unitLabel = stockUnit ? ' ' + stockUnit : '';
                 return `
                 <tr class="${l.is_low_stock ? 'low-stock-row' : ''}">
                   <td>${l.product_name}</td>
                   <td>${l.product_sku}</td>
                   <td>${l.warehouse_name}</td>
-                  <td><span style="background:#e8eaf6;color:#3949ab;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">${units || 'N/A'}</span></td>
+                  <td><span style="background:#e8eaf6;color:#3949ab;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">${stockUnit || 'N/A'}</span></td>
                   <td>${l.current_stock}${unitLabel}</td>
                   <td>${l.reserved_stock}${unitLabel}</td>
                   <td><strong>${l.available_stock}${unitLabel}</strong></td>
                   <td>${l.reorder_level}${unitLabel}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
-                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product','${(units||'').replace(/'/g, "\\'")}')"
+                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product','${(stockUnit||'').replace(/'/g, "\\'")}')"
                     style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
               `}).join('')}
