@@ -2364,6 +2364,38 @@ function AppMain({ currentUser = null }) {
     }
   }
 
+  // Admin stock level adjustment
+  async function adminAdjustStockLevel(stockLevelId, itemName, currentStock, type = 'product') {
+    const isAdmin = !currentUser || currentUser.role === 'admin';
+    if (!isAdmin) { notify('Only administrators can adjust stock levels', 'error'); return; }
+    const newVal = prompt(`Adjust stock for: ${itemName}\nCurrent Stock: ${currentStock}\n\nEnter new stock level:`, currentStock);
+    if (newVal === null) return;
+    const newStock = parseFloat(newVal);
+    if (isNaN(newStock) || newStock < 0) { notify('Please enter a valid non-negative number', 'error'); return; }
+    const reason = prompt('Reason for adjustment (optional):');
+    try {
+      setLoading(true);
+      const res = await fetch('/api/stock-management/adjust-stock-level', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_level_id: stockLevelId, new_stock: newStock, reason: reason || '' })
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed to adjust stock'); }
+      const result = await res.json();
+      notify(result.message, 'success');
+      // Refresh the view
+      if (type === 'product') viewProductStockLevels(false);
+      else viewRawMaterialStockLevels(false);
+    } catch (e) {
+      notify(`Stock adjustment error: ${e.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Expose to window for dangerouslySetInnerHTML onclick
+  window.adminAdjustStockLevel = adminAdjustStockLevel;
+
   // View product stock levels
   async function viewProductStockLevels(lowStockOnly = false) {
     try {
@@ -2372,6 +2404,7 @@ function AppMain({ currentUser = null }) {
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to fetch product stock levels');
       const levels = await res.json();
+      const isAdmin = !currentUser || currentUser.role === 'admin';
       
       let html = `
         <div class="stock-levels-section">
@@ -2387,6 +2420,7 @@ function AppMain({ currentUser = null }) {
                 <th>Available</th>
                 <th>Reorder Level</th>
                 <th>Status</th>
+                ${isAdmin ? '<th>Action</th>' : ''}
               </tr>
             </thead>
             <tbody>
@@ -2400,6 +2434,7 @@ function AppMain({ currentUser = null }) {
                   <td><strong>${l.available_stock}</strong></td>
                   <td>${l.reorder_level}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
+                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product')" style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
               `).join('')}
             </tbody>
@@ -2422,6 +2457,7 @@ function AppMain({ currentUser = null }) {
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to fetch raw material stock levels');
       const levels = await res.json();
+      const isAdmin = !currentUser || currentUser.role === 'admin';
       
       let html = `
         <div class="stock-levels-section">
@@ -2438,6 +2474,7 @@ function AppMain({ currentUser = null }) {
                 <th>Unit</th>
                 <th>Reorder Level</th>
                 <th>Status</th>
+                ${isAdmin ? '<th>Action</th>' : ''}
               </tr>
             </thead>
             <tbody>
@@ -2452,6 +2489,7 @@ function AppMain({ currentUser = null }) {
                   <td>${l.unit}</td>
                   <td>${l.reorder_level}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
+                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.raw_material_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'rawmaterial')" style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
               `).join('')}
             </tbody>

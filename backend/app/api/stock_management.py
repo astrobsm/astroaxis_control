@@ -210,6 +210,84 @@ async def get_product_stock_levels(
         raise HTTPException(status_code=500, detail=f"Error fetching product stock levels: {str(e)}")
 
 
+# Admin Stock Level Adjustment
+class StockAdjustmentRequest(BaseModel):
+    stock_level_id: UUID
+    new_stock: float
+    reason: Optional[str] = None
+
+
+@router.put('/adjust-stock-level')
+async def adjust_stock_level(
+    req: StockAdjustmentRequest,
+    session: AsyncSession = Depends(get_session)
+):
+    """Admin-only: Adjust the current stock level for a product."""
+    try:
+        # Fetch existing stock level
+        row = (await session.execute(
+            text("SELECT sl.id, sl.current_stock, sl.product_id, sl.raw_material_id, sl.warehouse_id, "
+                 "COALESCE(p.name, rm.name, 'Unknown') as item_name, "
+                 "COALESCE(p.sku, rm.sku, '') as item_sku "
+                 "FROM stock_levels sl "
+                 "LEFT JOIN products p ON sl.product_id::text = p.id::text "
+                 "LEFT JOIN raw_materials rm ON sl.raw_material_id::text = rm.id::text "
+                 "WHERE sl.id = :slid"),
+            {"slid": str(req.stock_level_id)}
+        )).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Stock level record not found")
+
+        old_stock = float(row.current_stock or 0)
+        adjustment = req.new_stock - old_stock
+
+        # Update stock level
+        await session.execute(
+            text("UPDATE stock_levels SET current_stock = :ns, updated_at = NOW() WHERE id = :slid"),
+            {"ns": req.new_stock, "slid": str(req.stock_level_id)}
+        )
+
+        # Record a stock movement for audit trail
+        import uuid as uuid_mod
+        movement_type = 'IN' if adjustment >= 0 else 'OUT'
+        mov_params = {
+            "id": str(uuid_mod.uuid4()),
+            "warehouse_id": str(row.warehouse_id),
+            "quantity": abs(adjustment),
+            "unit_cost": 0,
+            "movement_type": movement_type,
+            "reference": f"ADMIN-ADJUSTMENT",
+            "notes": f"Admin stock adjustment for {row.item_name} ({row.item_sku}): {old_stock} -> {req.new_stock}. Reason: {req.reason or 'N/A'}",
+        }
+        if row.product_id:
+            mov_params["product_id"] = str(row.product_id)
+            mov_params["raw_material_id"] = None
+        else:
+            mov_params["raw_material_id"] = str(row.raw_material_id)
+            mov_params["product_id"] = None
+
+        await session.execute(
+            text("INSERT INTO stock_movements (id, warehouse_id, product_id, raw_material_id, quantity, unit_cost, movement_type, reference, notes) "
+                 "VALUES (:id, :warehouse_id, :product_id, :raw_material_id, :quantity, :unit_cost, :movement_type, :reference, :notes)"),
+            mov_params
+        )
+
+        await session.commit()
+        return {
+            "message": f"Stock adjusted for {row.item_name}: {old_stock} -> {req.new_stock} (change: {'+' if adjustment >= 0 else ''}{adjustment})",
+            "item_name": row.item_name,
+            "old_stock": old_stock,
+            "new_stock": req.new_stock,
+            "adjustment": adjustment
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error adjusting stock level: {str(e)}")
+
+
 # Get Raw Material Stock Levels
 @router.get('/raw-material-levels')
 async def get_raw_material_stock_levels(
