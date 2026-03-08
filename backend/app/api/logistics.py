@@ -439,6 +439,37 @@ async def update_manifest_cost(manifest_id: UUID, data: dict, session: AsyncSess
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete('/manifests/{manifest_id}')
+async def delete_manifest(manifest_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Permanently delete a delivery manifest and all related records (admin only)."""
+    try:
+        # Check manifest exists
+        check = await session.execute(text("SELECT id, manifest_number FROM delivery_manifests WHERE id = :id"), {"id": str(manifest_id)})
+        row = check.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Manifest not found")
+        manifest_number = row.manifest_number
+
+        # Delete in FK dependency order: manifest_items -> manifest_customers -> delivery_manifest
+        # Get all manifest_customer ids
+        mc_result = await session.execute(text("SELECT id FROM manifest_customers WHERE manifest_id = :mid"), {"mid": str(manifest_id)})
+        mc_ids = [r.id for r in mc_result.fetchall()]
+
+        if mc_ids:
+            for mc_id in mc_ids:
+                await session.execute(text("DELETE FROM manifest_items WHERE manifest_customer_id = :mcid"), {"mcid": mc_id})
+            await session.execute(text("DELETE FROM manifest_customers WHERE manifest_id = :mid"), {"mid": str(manifest_id)})
+
+        await session.execute(text("DELETE FROM delivery_manifests WHERE id = :id"), {"id": str(manifest_id)})
+        await session.commit()
+        return {"message": f"Manifest {manifest_number} permanently deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get('/manifests/{manifest_id}/pdf')
 @router.get('/manifests/{manifest_id}/download')
 @router.get('/manifests/{manifest_id}/printout')

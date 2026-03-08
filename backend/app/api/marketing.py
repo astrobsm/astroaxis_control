@@ -236,6 +236,58 @@ async def update_plan(plan_id: str, data: dict, session: AsyncSession = Depends(
     await session.commit()
     return {"success": True, "data": _plan_to_dict(row)}
 
+@router.post('/plans/{plan_id}/approve')
+async def approve_plan(plan_id: str, data: dict = {}, session: AsyncSession = Depends(get_session)):
+    """Approve a marketing plan and automatically add its budget to expenses for the month."""
+    # Get plan details
+    result = await session.execute(text(
+        "SELECT * FROM marketing_plans WHERE id = :id"
+    ), {"id": plan_id})
+    plan = result.fetchone()
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+    if plan.status == 'approved':
+        raise HTTPException(400, "Plan is already approved")
+
+    budget = float(plan.budget_requested or 0)
+    budget_approved = float(data.get('budget_approved', budget))
+    manager_notes = data.get('manager_notes', '')
+
+    # Update plan status to approved
+    await session.execute(text("""
+        UPDATE marketing_plans
+        SET status = 'approved', budget_approved = :ba, manager_notes = :mn, updated_at = NOW()
+        WHERE id = :id
+    """), {"id": plan_id, "ba": budget_approved, "mn": manager_notes})
+
+    # Auto-create expense record for the approved marketing budget
+    import uuid as _uuid
+    exp_num = f"EXP-{date.today().strftime('%Y%m%d')}-{str(_uuid.uuid4())[:8].upper()}"
+    await session.execute(text("""
+        INSERT INTO expense_records
+            (expense_number, category, subcategory, description, amount,
+             payment_method, payment_reference, payment_date, recipient, approved_by, notes)
+        VALUES (:en, 'marketing', 'marketing_plan_budget', :desc, :amt,
+                'budget_allocation', :pr, :pd, :recv, :ab, :notes)
+    """), {
+        "en": exp_num,
+        "desc": f"Marketing Plan: {plan.title} ({plan.week_start} to {plan.week_end})",
+        "amt": budget_approved,
+        "pr": f"Plan-{plan_id[:8]}",
+        "pd": date.today(),
+        "recv": 'Marketing Department',
+        "ab": data.get('approved_by', 'Admin'),
+        "notes": f"Auto-generated from approved marketing plan: {plan.title}. Budget requested: {budget}, approved: {budget_approved}"
+    })
+
+    await session.commit()
+    return {
+        "success": True,
+        "message": f"Plan approved. Budget of {budget_approved:,.2f} added to expenses.",
+        "expense_number": exp_num
+    }
+
+
 @router.delete('/plans/{plan_id}')
 async def delete_plan(plan_id: str, session: AsyncSession = Depends(get_session)):
     result = await session.execute(text("DELETE FROM marketing_plans WHERE id = :id RETURNING id"), {"id": plan_id})

@@ -210,7 +210,7 @@ function AppMain({ currentUser = null }) {
   // Returned Products Module state
   const [returnsList, setReturnsList] = useState([]);
   const [returnsSummary, setReturnsSummary] = useState({ total_returns: 0, total_quantity_returned: 0, pending_refunds: 0, total_refund_amount: 0, today_returns: 0, condition_breakdown: {} });
-  const [returnForm, setReturnForm] = useState({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '' });
+  const [returnForm, setReturnForm] = useState({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '', price_type: 'retail' });
   const [showReturnForm, setShowReturnForm] = useState(false);
   const [returnLoading, setReturnLoading] = useState(false);
   const [editingReturn, setEditingReturn] = useState(null);
@@ -905,6 +905,35 @@ function AppMain({ currentUser = null }) {
       notify(d.message, 'success');
       fetchLogManifests(); fetchLogDashboard();
       if(logSelectedManifest) fetchLogManifestDetail(manifestId);
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); }
+  }
+
+  async function deleteManifest(manifestId, manifestNumber) {
+    if (!window.confirm(`Are you sure you want to PERMANENTLY DELETE manifest ${manifestNumber}?\n\nThis action CANNOT be undone.`)) return;
+    try {
+      const r = await fetch(`/api/logistics/manifests/${manifestId}`, { method: 'DELETE' });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || 'Delete failed');
+      notify(d.message, 'success');
+      setLogSelectedManifest(null);
+      fetchLogManifests(); fetchLogDashboard();
+    } catch(e) { notify(`Error: ${e.message}`, 'error'); }
+  }
+
+  async function approveMktPlan(planId, planTitle, budget) {
+    if (!window.confirm(`Approve marketing plan "${planTitle}"?\n\nBudget of \u20A6${Number(budget).toLocaleString()} will be automatically added to expenses.`)) return;
+    try {
+      const token = localStorage.getItem('access_token');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const r = await fetch(`/api/marketing/plans/${planId}/approve`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ budget_approved: budget, approved_by: currentUser?.full_name || 'Admin' })
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.detail || d.message || 'Approval failed');
+      notify(d.message, 'success');
+      fetchMktPlans(); fetchMktDashboard();
     } catch(e) { notify(`Error: ${e.message}`, 'error'); }
   }
 
@@ -3731,7 +3760,7 @@ function AppMain({ currentUser = null }) {
                 <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
                 <h2>Returned Products</h2>
               </div>
-              <button onClick={() => { setShowReturnForm(true); setEditingReturn(null); setReturnForm({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '' }); }} className="btn btn-primary">Record Return</button>
+              <button onClick={() => { setShowReturnForm(true); setEditingReturn(null); setReturnForm({ warehouse_id: '', product_id: '', sales_order_id: '', customer_id: '', quantity: '', return_reason: '', return_condition: 'good', refund_amount: '', notes: '', price_type: 'retail' }); }} className="btn btn-primary">Record Return</button>
             </div>
 
             {/* Summary Cards */}
@@ -3838,7 +3867,14 @@ function AppMain({ currentUser = null }) {
                           </div>
                           <div className="form-group">
                             <label>Product *</label>
-                            <select value={returnForm.product_id} onChange={(e) => setReturnForm(f => ({...f, product_id: e.target.value}))} required>
+                            <select value={returnForm.product_id} onChange={(e) => {
+                              const pid = e.target.value;
+                              const prod = (data.products||[]).find(p=>p.id===pid);
+                              const priceType = returnForm.price_type || 'retail';
+                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              const qty = parseFloat(returnForm.quantity) || 0;
+                              setReturnForm(f => ({...f, product_id: pid, refund_amount: (unitPrice * qty).toFixed(2)}));
+                            }} required>
                               <option value="">Select product</option>
                               {(data.products||[]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>)}
                             </select>
@@ -3854,7 +3890,38 @@ function AppMain({ currentUser = null }) {
                           </div>
                           <div className="form-group">
                             <label>Quantity *</label>
-                            <input type="number" step="0.01" min="0.01" value={returnForm.quantity} onChange={(e) => setReturnForm(f => ({...f, quantity: e.target.value}))} required placeholder="Enter quantity"/>
+                            <input type="number" step="0.01" min="0.01" value={returnForm.quantity} onChange={(e) => {
+                              const qty = parseFloat(e.target.value) || 0;
+                              const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
+                              const priceType = returnForm.price_type || 'retail';
+                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              setReturnForm(f => ({...f, quantity: e.target.value, refund_amount: (unitPrice * qty).toFixed(2)}));
+                            }} required placeholder="Enter quantity"/>
+                          </div>
+                        </div>
+                        <div className="form-row">
+                          <div className="form-group">
+                            <label>Price Type *</label>
+                            <select value={returnForm.price_type || 'retail'} onChange={(e) => {
+                              const priceType = e.target.value;
+                              const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
+                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              const qty = parseFloat(returnForm.quantity) || 0;
+                              setReturnForm(f => ({...f, price_type: priceType, refund_amount: (unitPrice * qty).toFixed(2)}));
+                            }}>
+                              <option value="retail">Retail Price</option>
+                              <option value="wholesale">Wholesale Price</option>
+                            </select>
+                          </div>
+                          <div className="form-group">
+                            <label>Unit Price</label>
+                            <input type="text" readOnly value={(() => {
+                              const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
+                              if (!prod) return '---';
+                              const priceType = returnForm.price_type || 'retail';
+                              const price = priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0);
+                              return `\u20A6${price.toLocaleString()}`;
+                            })()} style={{background:'#f5f5f5',fontWeight:600}}/>
                           </div>
                         </div>
                       </>)}
@@ -3869,8 +3936,8 @@ function AppMain({ currentUser = null }) {
                           </select>
                         </div>
                         <div className="form-group">
-                          <label>Refund Amount</label>
-                          <input type="number" step="0.01" min="0" value={returnForm.refund_amount} onChange={(e) => setReturnForm(f => ({...f, refund_amount: e.target.value}))} placeholder="0.00"/>
+                          <label>Refund Amount (auto-calculated)</label>
+                          <input type="number" step="0.01" min="0" value={returnForm.refund_amount} onChange={(e) => setReturnForm(f => ({...f, refund_amount: e.target.value}))} placeholder="0.00" style={{fontWeight:600,fontSize:15}}/>
                         </div>
                       </div>
                       {!editingReturn && (
@@ -5560,6 +5627,12 @@ function AppMain({ currentUser = null }) {
                       <td><span style={{padding:'2px 8px',borderRadius:12,fontSize:12,fontWeight:600,background: p.status==='approved'?'#d4edda':p.status==='submitted'?'#fff3cd':p.status==='rejected'?'#f8d7da':'#e2e3e5',color: p.status==='approved'?'#155724':p.status==='submitted'?'#856404':p.status==='rejected'?'#721c24':'#383d41'}}>{(p.status||'').toUpperCase()}</span></td>
                       <td>
                         <button className="btn btn-sm btn-secondary" style={{marginRight:4}} onClick={() => { setEditingMktPlan(p); setMktPlanForm({marketer_staff_id:p.marketer_staff_id,week_start:p.week_start,week_end:p.week_end,title:p.title,objectives:p.objectives,target_areas:p.target_areas||'',target_customers:p.target_customers||'',planned_visits:p.planned_visits||'',planned_calls:p.planned_calls||'',budget_requested:p.budget_requested||'',status:p.status||'submitted'}); }}>Edit</button>
+                        {(!currentUser || currentUser.role === 'admin') && p.status === 'submitted' && (
+                          <button className="btn btn-sm" style={{marginRight:4,background:'#27ae60',color:'#fff',border:'none',borderRadius:4,padding:'3px 10px',fontSize:12,cursor:'pointer'}} onClick={() => approveMktPlan(p.id, p.title, p.budget_requested)}>Approve</button>
+                        )}
+                        {(!currentUser || currentUser.role === 'admin') && p.status === 'submitted' && (
+                          <button className="btn btn-sm" style={{marginRight:4,background:'#e74c3c',color:'#fff',border:'none',borderRadius:4,padding:'3px 10px',fontSize:12,cursor:'pointer'}} onClick={async () => { if(!window.confirm('Reject this plan?')) return; try { const r = await fetch(`/api/marketing/plans/${p.id}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'rejected'})}); if(!r.ok) throw new Error('Failed'); notify('Plan rejected','success'); fetchMktPlans(); fetchMktDashboard(); } catch(e) { notify(e.message,'error'); } }}>Reject</button>
+                        )}
                         <button className="btn btn-sm btn-danger" onClick={() => deleteMktPlan(p.id)}>Delete</button>
                       </td>
                     </tr>
@@ -7147,6 +7220,9 @@ function AppMain({ currentUser = null }) {
                         <td style={{display:'flex',gap:4}}>
                           <button className="btn btn-secondary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>downloadManifestPdf(m.id, m.manifest_number)}>PDF</button>
                           {m.status==='preparing' && <button className="btn btn-primary" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>updateManifestStatus(m.id,'dispatched')}>Dispatch</button>}
+                          {(!currentUser || currentUser.role === 'admin') && (
+                            <button className="btn btn-danger" style={{fontSize:11,padding:'3px 8px'}} onClick={()=>deleteManifest(m.id, m.manifest_number)}>Delete</button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -7164,6 +7240,9 @@ function AppMain({ currentUser = null }) {
                   <button className="btn btn-primary" style={{fontSize:12}} onClick={()=>downloadManifestPdf(logSelectedManifest.id, logSelectedManifest.manifest_number)}>Download PDF</button>
                   {logSelectedManifest.status==='preparing' && <button className="btn btn-primary" style={{background:'#27ae60',borderColor:'#27ae60',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'dispatched')}>Mark Dispatched</button>}
                   {logSelectedManifest.status==='dispatched' && <button className="btn btn-primary" style={{background:'#3498db',borderColor:'#3498db',fontSize:12}} onClick={()=>updateManifestStatus(logSelectedManifest.id,'in_transit')}>Mark In Transit</button>}
+                  {(!currentUser || currentUser.role === 'admin') && (
+                    <button className="btn btn-danger" style={{fontSize:12}} onClick={()=>deleteManifest(logSelectedManifest.id, logSelectedManifest.manifest_number)}>Delete Manifest</button>
+                  )}
                 </div>
                 <h3 style={{marginTop:0}}>Manifest: {logSelectedManifest.manifest_number}</h3>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16,marginBottom:20}}>
