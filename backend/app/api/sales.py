@@ -141,23 +141,21 @@ async def create_customer(
         
         # Auto-generate customer_code if not provided
         if not data_dict.get('customer_code'):
-            # Find the highest existing customer code number
+            # Get ALL existing customer codes and find the highest numeric suffix
             result = await session.execute(
-                select(Customer.customer_code).where(
-                    Customer.customer_code.like('CUST-%')
-                ).order_by(Customer.customer_code.desc())
+                select(Customer.customer_code)
             )
-            last_code = result.scalar()
-            if last_code:
-                try:
-                    last_num = int(last_code.replace('CUST-', ''))
-                    next_num = last_num + 1
-                except ValueError:
-                    # Fallback: count all customers
-                    count_result = await session.execute(select(func.count(Customer.id)))
-                    next_num = (count_result.scalar() or 0) + 1
-            else:
-                next_num = 1
+            existing_codes = [r[0] for r in result.fetchall() if r[0]]
+            max_num = 0
+            import re
+            for code in existing_codes:
+                # Extract trailing digits from any code format
+                nums = re.findall(r'\d+', code or '')
+                if nums:
+                    num = int(nums[-1])
+                    if num > max_num:
+                        max_num = num
+            next_num = max_num + 1
             data_dict['customer_code'] = f'CUST-{next_num:04d}'
         
         customer = Customer(**data_dict)
