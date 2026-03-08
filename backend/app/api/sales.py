@@ -328,11 +328,14 @@ async def create_sales_order(
         order_number = f"SO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         
         # Create sales order
-        order_dict = order_data.model_dump(exclude={'lines'})
+        order_dict = order_data.model_dump(exclude={'lines', 'order_type'})
         sales_order = SalesOrder(
             order_number=order_number,
             **order_dict
         )
+        # If payment_status is 'paid', set payment_date
+        if sales_order.payment_status == 'paid':
+            sales_order.payment_date = datetime.now(timezone.utc)
         session.add(sales_order)
         await session.flush()  # Get the ID
         
@@ -905,8 +908,8 @@ async def generate_receipt(
         if not order:
             raise HTTPException(status_code=404, detail="Sales order not found")
         
-        if order.payment_status != 'paid':
-            raise HTTPException(status_code=400, detail="Cannot generate receipt for unpaid order")
+        if order.payment_status == 'unpaid':
+            raise HTTPException(status_code=400, detail="Cannot generate receipt for unpaid order. Please mark as paid or record a partial payment first.")
         
         # Create PDF in memory
         buffer = io.BytesIO()
@@ -946,11 +949,12 @@ async def generate_receipt(
         elements.append(Spacer(1, 12))
         
         # Receipt details
+        payment_label = 'PAID' if order.payment_status == 'paid' else 'PARTIAL PAYMENT'
         receipt_info = f"""
         <b>Receipt No:</b> {order.order_number}<br/>
-        <b>Date:</b> {order.payment_date.strftime('%Y-%m-%d %H:%M') if order.payment_date else 'N/A'}<br/>
+        <b>Date:</b> {order.payment_date.strftime('%Y-%m-%d %H:%M') if order.payment_date else datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}<br/>
         <b>Customer:</b> {order.customer.name}<br/>
-        <b>Payment Status:</b> PAID
+        <b>Payment Status:</b> {payment_label}
         """
         elements.append(Paragraph(receipt_info, styles['Normal']))
         elements.append(Spacer(1, 20))

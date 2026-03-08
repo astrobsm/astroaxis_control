@@ -248,6 +248,8 @@ class SalesOrderBase(BaseModel):
     notes: Optional[str] = None
 
 class SalesOrderCreate(SalesOrderBase):
+    payment_status: Optional[str] = Field('unpaid', pattern="^(paid|unpaid|partial)$")
+    order_type: Optional[str] = Field('retail', pattern="^(retail|wholesale)$")
     lines: List[SalesOrderLineCreate] = []
 
 class SalesOrderUpdate(BaseModel):

@@ -3508,6 +3508,7 @@ function AppMain({ currentUser = null }) {
                         ) : order.payment_status === 'partial' ? (
                           <>
                             <button onClick={() => createInvoiceFromOrder(order.id)} className="btn btn-primary" title="View/Create Invoice" style={{background:'#8e44ad',color:'#fff',border:'none',marginRight:4}}>Track Payments</button>
+                            <button onClick={() => markOrderAsPaid(order.id)} className="btn btn-success" title="Mark as Fully Paid">Mark Paid</button>
                             <button onClick={() => downloadReceipt(order.id)} className="btn btn-primary" title="Download Receipt">Receipt</button>
                           </>
                         ) : (
