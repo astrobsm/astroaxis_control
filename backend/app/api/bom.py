@@ -398,7 +398,7 @@ async def approve_production_and_deduct_stock(
             deductions.append({
                 "raw_material_name": raw_material.name,
                 "quantity_deducted": float(required_qty),
-                "unit": line.unit or raw_material.unit,
+                "unit": raw_material.unit or 'unit',
                 "remaining_stock": float(stock_level.current_stock)
             })
         
@@ -447,7 +447,7 @@ async def list_products_with_bom(session: AsyncSession = Depends(get_session)):
                 "product_name": product.name,
                 "product_sku": product.sku,
                 "bom_id": str(bom.id),
-                "bom_version": bom.version,
+                "bom_created_at": str(bom.created_at) if bom.created_at else None,
                 "raw_materials_count": lines_count
             })
         

@@ -837,10 +837,10 @@ async def bulk_upload_raw_materials(file: UploadFile = File(...), session: Async
                     errors.append(f"Row {row_idx}: Unit cost cannot be negative")
                     continue
                 
-                # Check for duplicate name+category in DB
+                # Check for duplicate name in DB
                 dup_check = await session.execute(
-                    text("SELECT COUNT(*) FROM raw_materials WHERE LOWER(name) = LOWER(:name) AND LOWER(category) = LOWER(:cat)"),
-                    {"name": name, "cat": category}
+                    text("SELECT COUNT(*) FROM raw_materials WHERE LOWER(name) = LOWER(:name)"),
+                    {"name": name}
                 )
                 if dup_check.scalar_one() > 0:
                     errors.append(f"Row {row_idx}: '{name}' in category '{category}' already exists - skipped")
@@ -866,30 +866,23 @@ async def bulk_upload_raw_materials(file: UploadFile = File(...), session: Async
                 
                 used_skus.add(sku)
                 
-                # Insert using raw SQL (production DB compatible)
+                # Insert using raw SQL (matches raw_materials model columns)
                 result = await session.execute(
                     text("""
                         INSERT INTO raw_materials (
-                            id, name, sku, category, source, uom, unit_cost,
-                            manufacturer, reorder_point, opening_stock,
-                            unit, reorder_level, created_at
+                            id, name, sku, unit, unit_cost,
+                            manufacturer, reorder_level, created_at
                         ) VALUES (
-                            gen_random_uuid(), :name, :sku, :category, :source, :uom, :unit_cost,
-                            :manufacturer, :reorder_point, :opening_stock,
-                            :unit, :reorder_level, NOW()
+                            gen_random_uuid(), :name, :sku, :unit, :unit_cost,
+                            :manufacturer, :reorder_level, NOW()
                         ) RETURNING id, name, sku
                     """),
                     {
                         "name": name,
                         "sku": sku,
-                        "category": category,
-                        "source": source,
-                        "uom": unit,
+                        "unit": unit,
                         "unit_cost": unit_cost,
                         "manufacturer": manufacturer,
-                        "reorder_point": int(reorder_level),
-                        "opening_stock": opening_stock,
-                        "unit": unit,
                         "reorder_level": reorder_level,
                     }
                 )
@@ -1430,8 +1423,8 @@ async def bulk_upload_product_returns(file: UploadFile = File(...), session: Asy
                     try:
                         await session.execute(
                             text("""
-                                UPDATE products SET stock_quantity = COALESCE(stock_quantity, 0) + :qty
-                                WHERE id = :pid
+                                UPDATE stock_levels SET current_stock = COALESCE(current_stock, 0) + :qty
+                                WHERE product_id = :pid::uuid
                             """),
                             {"qty": quantity, "pid": str(prod.id)}
                         )

@@ -34,7 +34,7 @@ async def get_daily_staff_summary(
                     a.clock_in,
                     a.clock_out,
                     s.hourly_rate,
-                    COALESCE(s.overtime_rate, 450) AS overtime_rate,
+                    COALESCE(s.hourly_rate * 1.5, 450) AS overtime_rate,
                     -- 5PM WAT cutoff for this attendance date
                     (a.clock_in::date || ' 17:00:00')::timestamp AT TIME ZONE 'Africa/Lagos' AT TIME ZONE 'UTC' AS cutoff_utc,
                     EXTRACT(EPOCH FROM (a.clock_out - a.clock_in)) / 3600.0 AS total_hrs

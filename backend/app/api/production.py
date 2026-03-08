@@ -98,7 +98,6 @@ async def list_production_orders(
     limit: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
     product_id: Optional[UUID] = Query(None),
-    assigned_to: Optional[UUID] = Query(None),
     session: AsyncSession = Depends(get_session)
 ):
     """List production orders with pagination and filters"""
@@ -110,17 +109,12 @@ async def list_production_orders(
     if product_id:
         query = query.where(ProductionOrder.product_id == product_id)
     
-    if assigned_to:
-        query = query.where(ProductionOrder.assigned_to == assigned_to)
-    
     # Get total count
     count_query = select(func.count(ProductionOrder.id))
     if status:
         count_query = count_query.where(ProductionOrder.status == status)
     if product_id:
         count_query = count_query.where(ProductionOrder.product_id == product_id)
-    if assigned_to:
-        count_query = count_query.where(ProductionOrder.assigned_to == assigned_to)
     
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
@@ -387,21 +381,26 @@ async def calculate_production_requirements(
         # Get BOM for the product
         bom_result = await session.execute(
             select(BOM)
-            .options(selectinload(BOM.bom_lines).selectinload(BOMLine.raw_material))
+            .options(selectinload(BOM.lines))
             .where(BOM.product_id == product_id)
-            .where(BOM.is_active == True)
         )
         bom = bom_result.scalars().first()
         
         if not bom:
-            raise HTTPException(status_code=404, detail="No active BOM found for this product")
+            raise HTTPException(status_code=404, detail="No BOM found for this product")
         
         # Calculate requirements for each raw material
         requirements = []
         can_produce = True
         
-        for bom_line in bom.bom_lines:
-            required_quantity = bom_line.quantity * quantity
+        for bom_line in bom.lines:
+            required_quantity = float(bom_line.qty_per_unit) * quantity
+            
+            # Get the raw material info
+            rm_result = await session.execute(
+                select(RawMaterial).where(RawMaterial.id == bom_line.raw_material_id)
+            )
+            raw_material = rm_result.scalars().first()
             
             # Get current stock level for this raw material
             stock_result = await session.execute(
@@ -409,7 +408,7 @@ async def calculate_production_requirements(
                 .where(StockLevel.raw_material_id == bom_line.raw_material_id)
             )
             stock_level = stock_result.scalars().first()
-            available_quantity = stock_level.current_stock if stock_level else 0
+            available_quantity = float(stock_level.current_stock) if stock_level else 0
             
             # Check if sufficient stock is available
             is_sufficient = available_quantity >= required_quantity
@@ -418,13 +417,14 @@ async def calculate_production_requirements(
             
             requirements.append({
                 'raw_material_id': str(bom_line.raw_material_id),
-                'raw_material_name': bom_line.raw_material.name,
-                'raw_material_code': bom_line.raw_material.material_code,
+                'raw_material_name': raw_material.name if raw_material else 'Unknown',
+                'raw_material_code': raw_material.sku if raw_material else 'N/A',
                 'required_quantity': required_quantity,
                 'available_quantity': available_quantity,
-                'unit': bom_line.raw_material.unit,
+                'unit': raw_material.unit if raw_material else 'unit',
                 'is_sufficient': is_sufficient,
-                'shortage': max(0, required_quantity - available_quantity)
+                'shortage': max(0, required_quantity - available_quantity),
+                'cost_per_unit': float(raw_material.unit_cost) if raw_material else 0
             })
         
         return {
@@ -435,8 +435,7 @@ async def calculate_production_requirements(
             'bom_id': str(bom.id),
             'can_produce': can_produce,
             'requirements': requirements,
-            'total_cost': sum(req['required_quantity'] * (bom_line.raw_material.cost_per_unit or 0) 
-                            for req, bom_line in zip(requirements, bom.bom_lines))
+            'total_cost': sum(req['required_quantity'] * req['cost_per_unit'] for req in requirements)
         }
         
     except Exception as e:
@@ -463,11 +462,11 @@ async def execute_production(
         
         # Get default warehouse
         warehouse_result = await session.execute(
-            select(Warehouse).where(Warehouse.is_default == True)
+            select(Warehouse).where(Warehouse.is_active == True).limit(1)
         )
         warehouse = warehouse_result.scalars().first()
         if not warehouse:
-            warehouse_result = await session.execute(select(Warehouse))
+            warehouse_result = await session.execute(select(Warehouse).limit(1))
             warehouse = warehouse_result.scalars().first()
         
         if not warehouse:
@@ -483,10 +482,10 @@ async def execute_production(
             quantity_planned=quantity,
             quantity_produced=quantity,  # Mark as produced immediately
             status='completed',
-            start_date=datetime.now(timezone.utc),
-            end_date=datetime.now(timezone.utc),
-            notes=notes or "Automated production via console",
-            warehouse_id=warehouse.id
+            scheduled_start_date=datetime.now(timezone.utc),
+            actual_start_date=datetime.now(timezone.utc),
+            actual_end_date=datetime.now(timezone.utc),
+            notes=notes or "Automated production via console"
         )
         session.add(production_order)
         await session.flush()  # Get the production order ID
@@ -504,21 +503,17 @@ async def execute_production(
             stock_level = stock_result.scalars().first()
             
             if stock_level:
-                old_stock = stock_level.current_stock
                 stock_level.current_stock -= required_qty
-                stock_level.reserved_stock = max(0, stock_level.reserved_stock - required_qty)
+                stock_level.reserved_stock = max(0, float(stock_level.reserved_stock or 0) - required_qty)
                 
                 # Create stock movement record
                 movement = StockMovement(
                     raw_material_id=raw_material_id,
-                    movement_type='production_consumption',
-                    quantity=-required_qty,  # Negative for consumption
+                    movement_type='OUT',
+                    quantity=-required_qty,
                     warehouse_id=warehouse.id,
-                    reference_type='production_order',
-                    reference_id=str(production_order.id),
-                    notes=f"Raw material consumed for production order {order_number}",
-                    old_stock_level=old_stock,
-                    new_stock_level=stock_level.current_stock
+                    reference=f"Production Order {order_number}",
+                    notes=f"Raw material consumed for production order {order_number}"
                 )
                 session.add(movement)
                 stock_movements.append(movement)
@@ -527,44 +522,41 @@ async def execute_production(
                 order_material = ProductionOrderMaterial(
                     production_order_id=production_order.id,
                     raw_material_id=raw_material_id,
-                    quantity_planned=required_qty,
-                    quantity_used=required_qty,
-                    cost_per_unit=requirement.get('cost_per_unit', 0)
+                    quantity_required=required_qty,
+                    quantity_consumed=required_qty,
+                    warehouse_id=warehouse.id
                 )
                 session.add(order_material)
         
         # Add finished product to stock
         product_stock_result = await session.execute(
-            select(StockLevel).where(StockLevel.product_id == product_id)
+            select(StockLevel).where(
+                StockLevel.product_id == product_id,
+                StockLevel.warehouse_id == warehouse.id
+            )
         )
         product_stock = product_stock_result.scalars().first()
         
         if product_stock:
-            old_product_stock = product_stock.current_stock
             product_stock.current_stock += quantity
         else:
-            # Create new stock level entry
-            old_product_stock = 0
             product_stock = StockLevel(
                 product_id=product_id,
                 warehouse_id=warehouse.id,
                 current_stock=quantity,
                 reserved_stock=0,
-                minimum_stock=0
+                min_stock=0
             )
             session.add(product_stock)
         
         # Create stock movement for finished product
         product_movement = StockMovement(
             product_id=product_id,
-            movement_type='production_output',
+            movement_type='IN',
             quantity=quantity,
             warehouse_id=warehouse.id,
-            reference_type='production_order',
-            reference_id=str(production_order.id),
-            notes=f"Production output for order {order_number}",
-            old_stock_level=old_product_stock,
-            new_stock_level=old_product_stock + quantity
+            reference=f"Production Order {order_number}",
+            notes=f"Production output for order {order_number}"
         )
         session.add(product_movement)
         
@@ -608,17 +600,16 @@ async def register_production_output(
         
         # Update production order with actual output
         production_order.quantity_produced = actual_quantity
-        production_order.defective_quantity = defective_quantity
-        production_order.quality_grade = quality_grade
         production_order.status = 'completed'
         
         if completion_date:
-            production_order.end_date = datetime.fromisoformat(completion_date)
+            production_order.actual_end_date = datetime.fromisoformat(completion_date)
         else:
-            production_order.end_date = datetime.now(timezone.utc)
+            production_order.actual_end_date = datetime.now(timezone.utc)
         
         if notes:
-            production_order.notes = (production_order.notes or '') + f"\nOutput Notes: {notes}"
+            current_notes = production_order.notes or ''
+            production_order.notes = current_notes + f"\nOutput Notes: {notes} | Quality: {quality_grade} | Defective: {defective_quantity}"
         
         await session.commit()
         

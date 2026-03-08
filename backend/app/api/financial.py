@@ -80,7 +80,7 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
         StockMovement.product_id,
         func.sum(
             case(
-                (StockMovement.movement_type == 'in', StockMovement.quantity),
+                (StockMovement.movement_type == 'IN', StockMovement.quantity),
                 else_=-StockMovement.quantity
             )
         ).label('current_stock')

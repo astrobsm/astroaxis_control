@@ -223,11 +223,11 @@ async def get_raw_material_stock_levels(
         sql = """
             SELECT rm.id as raw_material_id,
                    rm.name as rm_name,
-                   COALESCE(rm.rm_id, rm.sku, rm.name) as rm_sku,
-                   COALESCE(rm.reorder_point, rm.reorder_level::integer, 10) as reorder_level,
-                   COALESCE(rm.uom, rm.unit, 'kg') as unit,
+                   COALESCE(rm.sku, rm.name) as rm_sku,
+                   COALESCE(rm.reorder_level::integer, 10) as reorder_level,
+                   COALESCE(rm.unit, 'kg') as unit,
                    COALESCE(sl.id, gen_random_uuid()) as stock_level_id,
-                   COALESCE(sl.current_stock, rm.opening_stock, 0) as current_stock,
+                   COALESCE(sl.current_stock, 0) as current_stock,
                    COALESCE(sl.min_stock, 0) as min_stock,
                    sl.warehouse_id,
                    COALESCE(w.name, 'Default') as warehouse_name,
@@ -614,7 +614,7 @@ async def get_stock_analysis(session: AsyncSession = Depends(get_session)):
         # Fallback: if no product_pricing data, use products.price
         if total_product_value == 0:
             r = await session.execute(text("""
-                SELECT COALESCE(SUM(sl.current_stock * COALESCE(p.price, 0)), 0)
+                SELECT COALESCE(SUM(sl.current_stock * COALESCE(p.cost_price, 0)), 0)
                 FROM stock_levels sl
                 LEFT JOIN products p ON sl.product_id = p.id::text
                 WHERE sl.product_id IS NOT NULL

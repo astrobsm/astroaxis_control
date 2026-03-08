@@ -358,7 +358,7 @@ async def create_stock_intake(
         warehouse_id=intake_data.warehouse_id,
         movement_type="IN",
         quantity=intake_data.quantity,
-        unit_cost=intake_data.unit_cost or product.unit_price,
+        unit_cost=intake_data.unit_cost or product.cost_price,
         reference=f"INTAKE-{uuid.uuid4().hex[:8].upper()}",
         notes=f"Stock Intake - Supplier: {intake_data.supplier or 'N/A'}, Batch: {intake_data.batch_number or 'N/A'}, Notes: {intake_data.notes or 'N/A'}",
         created_by=None  # TODO: Set to current user ID
