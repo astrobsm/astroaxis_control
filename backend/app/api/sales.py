@@ -695,10 +695,14 @@ async def generate_invoice_pdf(
         doc.build(story)
         buffer.seek(0)
         
+        # Name file after customer + date
+        cust_name = (order.customer.name if order.customer else 'Unknown').replace(' ', '_')
+        inv_date = (order.order_date or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
+        safe_filename = f"Invoice-{cust_name}-{inv_date}.pdf"
         return StreamingResponse(
             io.BytesIO(buffer.read()),
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=Invoice-{order.order_number}.pdf"}
+            headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'}
         )
         
     except Exception as e:
@@ -1005,10 +1009,14 @@ async def generate_receipt(
         doc.build(elements)
         buffer.seek(0)
         
+        # Name file after customer + date
+        cust_name = (order.customer.name if order.customer else 'Unknown').replace(' ', '_')
+        rcpt_date = (order.payment_date or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
+        safe_filename = f"Receipt-{cust_name}-{rcpt_date}.pdf"
         return StreamingResponse(
             buffer,
             media_type='application/pdf',
-            headers={'Content-Disposition': f'attachment; filename="receipt_{order.order_number}.pdf"'}
+            headers={'Content-Disposition': f'attachment; filename="{safe_filename}"'}
         )
         
     except HTTPException:
@@ -1147,10 +1155,14 @@ async def generate_invoice(
         doc.build(elements)
         buffer.seek(0)
         
+        # Name file after customer + date
+        cust_name = (order.customer.name if order.customer else 'Unknown').replace(' ', '_')
+        inv_date = (order.order_date or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
+        safe_filename = f"Invoice-{cust_name}-{inv_date}.pdf"
         return StreamingResponse(
             buffer,
             media_type='application/pdf',
-            headers={'Content-Disposition': f'attachment; filename="invoice_{order.order_number}.pdf"'}
+            headers={'Content-Disposition': f'attachment; filename="{safe_filename}"'}
         )
         
     except HTTPException:

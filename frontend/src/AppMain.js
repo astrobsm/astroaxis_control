@@ -1620,16 +1620,46 @@ function AppMain({ currentUser = null }) {
   async function generateInvoice(orderId) {
     try {
       setLoading(true);
+      const order = (data.sales||[]).find(o => o.id === orderId);
+      const customer = order ? (data.customers||[]).find(c => c.id === order.customer_id) : null;
+      const custName = (customer ? customer.name : 'Customer').replace(/\s+/g, '_');
+      const orderDate = order && order.order_date ? new Date(order.order_date).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
       const res = await fetch(`/api/sales/generate-invoice-pdf/${orderId}`);
       if (!res.ok) throw new Error('Failed to generate invoice');
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `invoice_${orderId}.pdf`; document.body.appendChild(a); a.click(); a.remove();
+      a.href = url; a.download = `Invoice-${custName}-${orderDate}.pdf`; document.body.appendChild(a); a.click(); a.remove();
       window.URL.revokeObjectURL(url);
       notify('Invoice downloaded', 'success');
     } catch (e) {
       notify(`Invoice error: ${e.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Delete Sales Order (Admin Only)
+  async function deleteSalesOrder(orderId) {
+    const order = (data.sales||[]).find(o => o.id === orderId);
+    const customer = order ? (data.customers||[]).find(c => c.id === order.customer_id) : null;
+    const orderLabel = order ? `${order.order_number} (${customer ? customer.name : 'Unknown'})` : orderId;
+    if (!window.confirm(`Are you sure you want to DELETE sales order ${orderLabel}? This action cannot be undone. Stock will be restored if applicable.`)) return;
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('access_token');
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(`/api/sales/orders/${orderId}`, { method: 'DELETE', headers });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to delete order');
+      }
+      notify(`Sales order ${orderLabel} deleted successfully`, 'success');
+      fetchData('sales');
+      fetchData('stock');
+    } catch (e) {
+      notify(`Delete error: ${e.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1682,6 +1712,10 @@ function AppMain({ currentUser = null }) {
   // Download Invoice
   async function downloadInvoice(orderId) {
     try {
+      const order = (data.sales||[]).find(o => o.id === orderId);
+      const customer = order ? (data.customers||[]).find(c => c.id === order.customer_id) : null;
+      const custName = (customer ? customer.name : 'Customer').replace(/\s+/g, '_');
+      const orderDate = order && order.order_date ? new Date(order.order_date).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
       const url = `/api/sales/orders/${orderId}/generate-invoice`;
       console.log('Fetching invoice from:', url);
       const response = await fetch(url, { method: 'POST' });
@@ -1696,7 +1730,7 @@ function AppMain({ currentUser = null }) {
       const objectUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
-      a.download = `invoice_${orderId}.pdf`;
+      a.download = `Invoice-${custName}-${orderDate}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1711,6 +1745,10 @@ function AppMain({ currentUser = null }) {
   // Download Receipt
   async function downloadReceipt(orderId) {
     try {
+      const order = (data.sales||[]).find(o => o.id === orderId);
+      const customer = order ? (data.customers||[]).find(c => c.id === order.customer_id) : null;
+      const custName = (customer ? customer.name : 'Customer').replace(/\s+/g, '_');
+      const orderDate = order && order.order_date ? new Date(order.order_date).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
       const url = `/api/sales/orders/${orderId}/generate-receipt`;
       console.log('Fetching receipt from:', url);
       const response = await fetch(url, { method: 'POST' });
@@ -1725,7 +1763,7 @@ function AppMain({ currentUser = null }) {
       const objectUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
-      a.download = `receipt_${orderId}.pdf`;
+      a.download = `Receipt-${custName}-${orderDate}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -3514,7 +3552,10 @@ function AppMain({ currentUser = null }) {
                         ) : (
                           <button onClick={() => downloadReceipt(order.id)} className="btn btn-primary" title="Download Receipt">Receipt</button>
                         )}}
-                        <button onClick={() => processOrder(order.id)} className="btn-paid">✅ Process</button>
+                        <button onClick={() => processOrder(order.id)} className="btn-paid">Process</button>
+                        {(!currentUser || currentUser.role === 'admin') && (
+                          <button onClick={() => deleteSalesOrder(order.id)} className="btn btn-danger" title="Delete Order (Admin Only)" style={{background:'#e74c3c',color:'#fff',border:'none',marginLeft:4}}>Delete</button>
+                        )}
                       </td>
                     </tr>
                   )})}
