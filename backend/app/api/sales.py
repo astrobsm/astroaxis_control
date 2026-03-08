@@ -502,34 +502,39 @@ async def update_sales_order(
         raise HTTPException(status_code=400, detail=f"Error updating sales order: {str(e)}")
 
 @router.delete('/orders/{order_id}', response_model=ApiResponse)
-async def cancel_sales_order(
+async def delete_sales_order(
     order_id: UUID,
     session: AsyncSession = Depends(get_session)
 ):
-    """Cancel sales order"""
+    """Permanently delete a sales order and its lines"""
     result = await session.execute(select(SalesOrder).where(SalesOrder.id == order_id))
     order = result.scalars().first()
     
     if not order:
         raise HTTPException(status_code=404, detail="Sales order not found")
     
-    if order.status in ['shipped', 'delivered']:
-        raise HTTPException(status_code=400, detail="Cannot cancel shipped or delivered orders")
-    
     try:
-        # Restore stock if the order was confirmed (stock was deducted)
-        if order.status == 'confirmed':
+        # Restore stock if the order had stock deducted (confirmed/completed)
+        if order.status in ['confirmed', 'completed']:
             await restore_stock_for_order(session, order)
         
-        order.status = 'cancelled'
+        # Delete order lines first (foreign key constraint)
+        lines_result = await session.execute(
+            select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id)
+        )
+        for line in lines_result.scalars().all():
+            await session.delete(line)
+        
+        # Delete the order itself
+        await session.delete(order)
         await session.commit()
-        return ApiResponse(message="Sales order cancelled successfully and stock restored")
+        return ApiResponse(message=f"Sales order {order.order_number} permanently deleted and stock restored")
     except HTTPException:
         await session.rollback()
         raise
     except Exception as e:
         await session.rollback()
-        raise HTTPException(status_code=400, detail=f"Error cancelling sales order: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error deleting sales order: {str(e)}")
 
 # Import missing func from sqlalchemy
 from sqlalchemy import func
