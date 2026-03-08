@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy import func
+from sqlalchemy import func, text
 from typing import Optional
 from uuid import UUID
 import uuid
@@ -506,7 +506,7 @@ async def delete_sales_order(
     order_id: UUID,
     session: AsyncSession = Depends(get_session)
 ):
-    """Permanently delete a sales order and its lines"""
+    """Permanently delete a sales order and all related records"""
     result = await session.execute(select(SalesOrder).where(SalesOrder.id == order_id))
     order = result.scalars().first()
     
@@ -518,14 +518,52 @@ async def delete_sales_order(
         if order.status in ['confirmed', 'completed']:
             await restore_stock_for_order(session, order)
         
-        # Delete order lines first (foreign key constraint)
-        lines_result = await session.execute(
-            select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id)
+        # Delete in dependency order: payments → invoice_lines → invoices → order_lines → returned_stock → order
+        # 1. Find related invoices
+        inv_result = await session.execute(
+            text("SELECT id FROM invoices WHERE sales_order_id = :oid"),
+            {"oid": order.id}
         )
-        for line in lines_result.scalars().all():
-            await session.delete(line)
+        invoice_ids = [row[0] for row in inv_result.fetchall()]
         
-        # Delete the order itself
+        if invoice_ids:
+            # 2. Delete payments linked to those invoices
+            for inv_id in invoice_ids:
+                await session.execute(
+                    text("DELETE FROM payments WHERE invoice_id = :iid"),
+                    {"iid": inv_id}
+                )
+            # 3. Delete invoice lines
+            for inv_id in invoice_ids:
+                await session.execute(
+                    text("DELETE FROM invoice_lines WHERE invoice_id = :iid"),
+                    {"iid": inv_id}
+                )
+            # 4. Delete invoices
+            await session.execute(
+                text("DELETE FROM invoices WHERE sales_order_id = :oid"),
+                {"oid": order.id}
+            )
+        
+        # 5. Delete returned stock records
+        await session.execute(
+            text("DELETE FROM returned_stock WHERE sales_order_id = :oid"),
+            {"oid": order.id}
+        )
+        
+        # 6. Delete order lines
+        await session.execute(
+            text("DELETE FROM sales_order_lines WHERE sales_order_id = :oid"),
+            {"oid": order.id}
+        )
+        
+        # 7. Delete stock movements referencing this order
+        await session.execute(
+            text("DELETE FROM stock_movements WHERE reference LIKE :ref"),
+            {"ref": f"%{order.order_number}%"}
+        )
+        
+        # 8. Delete the order itself
         await session.delete(order)
         await session.commit()
         return ApiResponse(message=f"Sales order {order.order_number} permanently deleted and stock restored")
@@ -536,8 +574,7 @@ async def delete_sales_order(
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error deleting sales order: {str(e)}")
 
-# Import missing func from sqlalchemy
-from sqlalchemy import func
+# PDF imports
 from fastapi.responses import StreamingResponse
 import io
 import os
