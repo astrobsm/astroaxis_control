@@ -8055,8 +8055,70 @@ function AppMain({ currentUser = null }) {
               {showForm === 'salesOrder' && (
                 <form onSubmit={submitSalesOrder}>
                   <div className="form-row">
-                    <div className="form-group"><label>Customer *</label><select value={forms.salesOrder.customer_id} onChange={(e)=>handleFormChange('salesOrder','customer_id',e.target.value)} required><option value="">Select customer</option>{(data.customers||[]).map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
-                    <div className="form-group"><button type="button" className="btn btn-secondary" onClick={()=>openForm('customer')} style={{marginTop:'1.5rem'}}>ž• New Customer</button></div>
+                    <div className="form-group" style={{position:'relative'}}>
+                      <label>Customer *</label>
+                      <input
+                        type="text"
+                        placeholder="Search customer by name..."
+                        value={forms.salesOrder._customerSearch !== undefined ? forms.salesOrder._customerSearch : ((data.customers||[]).find(c=>c.id===forms.salesOrder.customer_id)||{}).name || ''}
+                        onChange={(e)=>{
+                          handleFormChange('salesOrder','_customerSearch',e.target.value);
+                          handleFormChange('salesOrder','_customerDropdownOpen',true);
+                          if(!e.target.value) handleFormChange('salesOrder','customer_id','');
+                        }}
+                        onFocus={()=>handleFormChange('salesOrder','_customerDropdownOpen',true)}
+                        autoComplete="off"
+                        required={!forms.salesOrder.customer_id}
+                        style={{width:'100%'}}
+                      />
+                      {forms.salesOrder.customer_id && (
+                        <span
+                          onClick={()=>{handleFormChange('salesOrder','customer_id','');handleFormChange('salesOrder','_customerSearch','');}}
+                          style={{position:'absolute',right:10,top:'2.4rem',cursor:'pointer',color:'#999',fontSize:16,fontWeight:'bold',lineHeight:1}}
+                          title="Clear selection"
+                        >&times;</span>
+                      )}
+                      {forms.salesOrder._customerDropdownOpen && (
+                        <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:1000,background:'#fff',border:'1px solid #ccc',borderRadius:4,maxHeight:200,overflowY:'auto',boxShadow:'0 4px 12px rgba(0,0,0,0.15)'}}>
+                          {(data.customers||[])
+                            .filter(c => {
+                              const search = (forms.salesOrder._customerSearch||'').toLowerCase();
+                              return !search || c.name.toLowerCase().includes(search);
+                            })
+                            .length === 0 ? (
+                              <div style={{padding:'8px 12px',color:'#999',fontSize:13}}>No customers found</div>
+                            ) : (
+                              (data.customers||[])
+                                .filter(c => {
+                                  const search = (forms.salesOrder._customerSearch||'').toLowerCase();
+                                  return !search || c.name.toLowerCase().includes(search);
+                                })
+                                .map(c=>(
+                                  <div
+                                    key={c.id}
+                                    onClick={()=>{
+                                      handleFormChange('salesOrder','customer_id',c.id);
+                                      handleFormChange('salesOrder','_customerSearch',c.name);
+                                      handleFormChange('salesOrder','_customerDropdownOpen',false);
+                                    }}
+                                    style={{padding:'8px 12px',cursor:'pointer',fontSize:14,borderBottom:'1px solid #f0f0f0',background:forms.salesOrder.customer_id===c.id?'#e8f0fe':'transparent'}}
+                                    onMouseEnter={(e)=>e.target.style.background='#f5f5f5'}
+                                    onMouseLeave={(e)=>e.target.style.background=forms.salesOrder.customer_id===c.id?'#e8f0fe':'transparent'}
+                                  >{c.name}</div>
+                                ))
+                            )
+                          }
+                        </div>
+                      )}
+                      {/* Click-outside handler */}
+                      {forms.salesOrder._customerDropdownOpen && (
+                        <div
+                          style={{position:'fixed',top:0,left:0,right:0,bottom:0,zIndex:999}}
+                          onClick={()=>handleFormChange('salesOrder','_customerDropdownOpen',false)}
+                        />
+                      )}
+                    </div>
+                    <div className="form-group"><button type="button" className="btn btn-secondary" onClick={()=>openForm('customer')} style={{marginTop:'1.5rem'}}>New Customer</button></div>
                   </div>
                   <div className="form-row">
                     <div className="form-group">
