@@ -2369,10 +2369,11 @@ function AppMain({ currentUser = null }) {
   }
 
   // Admin stock level adjustment
-  async function adminAdjustStockLevel(stockLevelId, itemName, currentStock, type = 'product') {
+  async function adminAdjustStockLevel(stockLevelId, itemName, currentStock, type = 'product', units = '') {
     const isAdmin = !currentUser || currentUser.role === 'admin';
     if (!isAdmin) { notify('Only administrators can adjust stock levels', 'error'); return; }
-    const newVal = prompt(`Adjust stock for: ${itemName}\nCurrent Stock: ${currentStock}\n\nEnter new stock level:`, currentStock);
+    const unitDisplay = units ? ` (${units})` : '';
+    const newVal = prompt(`Adjust stock for: ${itemName}\nAvailable Units: ${units || 'N/A'}\nCurrent Stock: ${currentStock}${unitDisplay}\n\nEnter new stock level${unitDisplay}:`, currentStock);
     if (newVal === null) return;
     const newStock = parseFloat(newVal);
     if (isNaN(newStock) || newStock < 0) { notify('Please enter a valid non-negative number', 'error'); return; }
@@ -2443,7 +2444,8 @@ function AppMain({ currentUser = null }) {
                   <td><strong>${l.available_stock}${unitLabel}</strong></td>
                   <td>${l.reorder_level}${unitLabel}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
-                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product')" style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
+                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product','${(units||'').replace(/'/g, "\\'")}')"
+                    style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
               `}).join('')}
             </tbody>
@@ -2498,7 +2500,8 @@ function AppMain({ currentUser = null }) {
                   <td>${l.unit}</td>
                   <td>${l.reorder_level}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
-                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.raw_material_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'rawmaterial')" style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
+                  ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.raw_material_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'rawmaterial','${(l.unit||'').replace(/'/g, "\\'")}')"
+                    style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
               `).join('')}
             </tbody>
