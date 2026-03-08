@@ -3871,7 +3871,10 @@ function AppMain({ currentUser = null }) {
                               const pid = e.target.value;
                               const prod = (data.products||[]).find(p=>p.id===pid);
                               const priceType = returnForm.price_type || 'retail';
-                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              const pr = prod?.pricing?.[0] || {};
+                              const unitPrice = priceType === 'wholesale'
+                                ? (parseFloat(pr.wholesale_price)||parseFloat(prod?.wholesale_price)||parseFloat(prod?.selling_price)||0)
+                                : (parseFloat(pr.retail_price)||parseFloat(prod?.retail_price)||parseFloat(prod?.selling_price)||0);
                               const qty = parseFloat(returnForm.quantity) || 0;
                               setReturnForm(f => ({...f, product_id: pid, refund_amount: (unitPrice * qty).toFixed(2)}));
                             }} required>
@@ -3894,7 +3897,10 @@ function AppMain({ currentUser = null }) {
                               const qty = parseFloat(e.target.value) || 0;
                               const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
                               const priceType = returnForm.price_type || 'retail';
-                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              const pr = prod?.pricing?.[0] || {};
+                              const unitPrice = priceType === 'wholesale'
+                                ? (parseFloat(pr.wholesale_price)||parseFloat(prod?.wholesale_price)||parseFloat(prod?.selling_price)||0)
+                                : (parseFloat(pr.retail_price)||parseFloat(prod?.retail_price)||parseFloat(prod?.selling_price)||0);
                               setReturnForm(f => ({...f, quantity: e.target.value, refund_amount: (unitPrice * qty).toFixed(2)}));
                             }} required placeholder="Enter quantity"/>
                           </div>
@@ -3905,7 +3911,10 @@ function AppMain({ currentUser = null }) {
                             <select value={returnForm.price_type || 'retail'} onChange={(e) => {
                               const priceType = e.target.value;
                               const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
-                              const unitPrice = prod ? (priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0)) : 0;
+                              const pr = prod?.pricing?.[0] || {};
+                              const unitPrice = priceType === 'wholesale'
+                                ? (parseFloat(pr.wholesale_price)||parseFloat(prod?.wholesale_price)||parseFloat(prod?.selling_price)||0)
+                                : (parseFloat(pr.retail_price)||parseFloat(prod?.retail_price)||parseFloat(prod?.selling_price)||0);
                               const qty = parseFloat(returnForm.quantity) || 0;
                               setReturnForm(f => ({...f, price_type: priceType, refund_amount: (unitPrice * qty).toFixed(2)}));
                             }}>
@@ -3918,8 +3927,11 @@ function AppMain({ currentUser = null }) {
                             <input type="text" readOnly value={(() => {
                               const prod = (data.products||[]).find(p=>p.id===returnForm.product_id);
                               if (!prod) return '---';
+                              const pr = prod?.pricing?.[0] || {};
                               const priceType = returnForm.price_type || 'retail';
-                              const price = priceType === 'wholesale' ? (parseFloat(prod.wholesale_price)||parseFloat(prod.selling_price)||0) : (parseFloat(prod.retail_price)||parseFloat(prod.selling_price)||0);
+                              const price = priceType === 'wholesale'
+                                ? (parseFloat(pr.wholesale_price)||parseFloat(prod?.wholesale_price)||parseFloat(prod?.selling_price)||0)
+                                : (parseFloat(pr.retail_price)||parseFloat(prod?.retail_price)||parseFloat(prod?.selling_price)||0);
                               return `\u20A6${price.toLocaleString()}`;
                             })()} style={{background:'#f5f5f5',fontWeight:600}}/>
                           </div>
