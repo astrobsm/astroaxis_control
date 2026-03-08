@@ -25,7 +25,8 @@ import os
 from app.db import get_session
 from app.models import (
     SalesOrder, Product, RawMaterial, StockMovement,
-    Staff, Attendance, ProductionOrder, Customer, Warehouse
+    Staff, Attendance, ProductionOrder, Customer, Warehouse,
+    StockLevel, ProductPricing
 )
 from app.schemas import ApiResponse
 
@@ -33,10 +34,12 @@ router = APIRouter(prefix='/api/financial')
 
 
 async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
-    """Calculate comprehensive financial metrics for the company"""
+    """Calculate comprehensive financial metrics for the company using real data"""
+    from sqlalchemy import text
     
-    # 1. REVENUE ANALYSIS
-    # Total revenue from paid sales orders
+    # =====================================================================
+    # 1. REVENUE & SALES ANALYSIS (from sales_orders table)
+    # =====================================================================
     revenue_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
         SalesOrder.payment_status == 'paid'
     )
@@ -45,10 +48,24 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
     
     # Outstanding payments (unpaid orders)
     outstanding_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
-        SalesOrder.payment_status == 'unpaid'
+        SalesOrder.payment_status.in_(['unpaid', 'partial'])
     )
     outstanding_result = await session.execute(outstanding_query)
     outstanding_payments = float(outstanding_result.scalar())
+    
+    # Order counts
+    total_orders_result = await session.execute(select(func.count(SalesOrder.id)))
+    total_orders = total_orders_result.scalar() or 0
+    
+    paid_orders_result = await session.execute(
+        select(func.count(SalesOrder.id)).where(SalesOrder.payment_status == 'paid')
+    )
+    paid_orders_count = paid_orders_result.scalar() or 0
+    
+    unpaid_orders_result = await session.execute(
+        select(func.count(SalesOrder.id)).where(SalesOrder.payment_status.in_(['unpaid', 'partial']))
+    )
+    unpaid_orders_count = unpaid_orders_result.scalar() or 0
     
     # Revenue by month (last 12 months)
     revenue_by_month = []
@@ -59,8 +76,8 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
         monthly_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
             and_(
                 SalesOrder.payment_status == 'paid',
-                SalesOrder.payment_date >= month_start,
-                SalesOrder.payment_date <= month_end
+                SalesOrder.created_at >= month_start,
+                SalesOrder.created_at <= month_end
             )
         )
         monthly_result = await session.execute(monthly_query)
@@ -71,52 +88,58 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
             'revenue': monthly_revenue
         })
     
-    # 2. INVENTORY VALUATION
-    # Product inventory value - calculate from stock movements
-    # Get sum of all stock movements (in - out) per product
-    from sqlalchemy import case
+    # =====================================================================
+    # 2. PRODUCT INVENTORY VALUATION (from stock_levels + product_pricing)
+    # =====================================================================
+    # Use raw SQL: JOIN stock_levels -> products -> product_pricing
+    # Use the product's primary unit to find the matching cost_price from product_pricing
+    product_inv_sql = text("""
+        SELECT 
+            COALESCE(SUM(sl.current_stock * COALESCE(pp_match.cost_price, p.cost_price, 0)), 0) as total_value,
+            COALESCE(SUM(sl.current_stock), 0) as total_units,
+            COUNT(DISTINCT sl.product_id) as product_count
+        FROM stock_levels sl
+        JOIN products p ON sl.product_id = p.id
+        LEFT JOIN product_pricing pp_match ON pp_match.product_id = p.id AND pp_match.unit = p.unit
+        WHERE sl.product_id IS NOT NULL AND sl.current_stock > 0
+    """)
+    product_inv_result = await session.execute(product_inv_sql)
+    product_inv_row = product_inv_result.fetchone()
+    product_inventory_value = float(product_inv_row.total_value) if product_inv_row else 0.0
+    total_products_in_stock = int(product_inv_row.product_count) if product_inv_row else 0
+    total_product_units = float(product_inv_row.total_units) if product_inv_row else 0
     
-    stock_query = select(
-        StockMovement.product_id,
-        func.sum(
-            case(
-                (StockMovement.movement_type == 'IN', StockMovement.quantity),
-                else_=-StockMovement.quantity
-            )
-        ).label('current_stock')
-    ).group_by(StockMovement.product_id)
-    
-    stock_result = await session.execute(stock_query)
-    product_stocks = {row.product_id: float(row.current_stock or 0) for row in stock_result}
-    
-    # Get products with cost price
-    products_query = select(Product)
-    products_result = await session.execute(products_query)
-    products = products_result.scalars().all()
-    
-    product_inventory_value = sum(
-        product_stocks.get(p.id, 0) * float(p.cost_price or 0) 
-        for p in products
-    )
-    
-    # Raw materials inventory value - set to 0 (no current_stock field in model)
-    # TODO: Implement raw material stock tracking in future update
-    raw_materials_value = 0.0
+    # =====================================================================
+    # 3. RAW MATERIAL INVENTORY VALUATION (from stock_levels + raw_materials)
+    # =====================================================================
+    raw_mat_inv_sql = text("""
+        SELECT 
+            COALESCE(SUM(sl.current_stock * COALESCE(rm.unit_cost, 0)), 0) as total_value,
+            COALESCE(SUM(sl.current_stock), 0) as total_units,
+            COUNT(DISTINCT sl.raw_material_id) as material_count
+        FROM stock_levels sl
+        JOIN raw_materials rm ON sl.raw_material_id = rm.id
+        WHERE sl.raw_material_id IS NOT NULL AND sl.current_stock > 0
+    """)
+    raw_mat_result = await session.execute(raw_mat_inv_sql)
+    raw_mat_row = raw_mat_result.fetchone()
+    raw_materials_value = float(raw_mat_row.total_value) if raw_mat_row else 0.0
+    total_raw_materials_in_stock = int(raw_mat_row.material_count) if raw_mat_row else 0
+    total_raw_material_units = float(raw_mat_row.total_units) if raw_mat_row else 0
     
     total_inventory_value = product_inventory_value + raw_materials_value
     
-    # 3. PAYROLL EXPENSES
-    # Calculate monthly payroll from attendance records
+    # =====================================================================
+    # 4. PAYROLL EXPENSES (current month)
+    # =====================================================================
     current_month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
-    # Get all staff with attendance this month
     staff_query = select(Staff)
     staff_result = await session.execute(staff_query)
     all_staff = staff_result.scalars().all()
     
-    total_payroll = 0
+    total_payroll = 0.0
     for staff_member in all_staff:
-        # Get attendance records for current month
         attendance_query = select(Attendance).where(
             and_(
                 Attendance.staff_id == staff_member.id,
@@ -126,86 +149,108 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
         attendance_result = await session.execute(attendance_query)
         attendance_records = attendance_result.scalars().all()
         
-        # Calculate hours worked
-        total_hours = 0
+        total_hours = 0.0
         for record in attendance_records:
             if record.clock_out:
                 hours = (record.clock_out - record.clock_in).total_seconds() / 3600
                 total_hours += hours
         
-        staff_pay = total_hours * float(staff_member.hourly_rate)
+        staff_pay = total_hours * float(staff_member.hourly_rate or 0)
         total_payroll += staff_pay
     
-    # 4. PRODUCTION COSTS
-    # Estimate production costs from completed production orders
-    completed_production_query = select(ProductionOrder).where(
-        ProductionOrder.status == 'completed'
+    # =====================================================================
+    # 5. PRODUCTION ANALYSIS
+    # =====================================================================
+    prod_total = await session.execute(select(func.count(ProductionOrder.id)))
+    total_production = prod_total.scalar() or 0
+    
+    prod_completed = await session.execute(
+        select(func.count(ProductionOrder.id)).where(ProductionOrder.status == 'completed')
     )
-    completed_production_result = await session.execute(completed_production_query)
-    completed_orders = completed_production_result.scalars().all()
+    completed_production = prod_completed.scalar() or 0
     
-    production_costs = 0
-    for prod_order in completed_orders:
-        # Simplified: estimate 70% of revenue as production cost
-        production_costs += float(prod_order.quantity_produced) * 0.7
+    prod_in_progress = await session.execute(
+        select(func.count(ProductionOrder.id)).where(ProductionOrder.status == 'in_progress')
+    )
+    in_progress_production = prod_in_progress.scalar() or 0
     
-    # 5. ASSETS & LIABILITIES
-    # Assets: Inventory + Outstanding Payments
+    prod_pending = await session.execute(
+        select(func.count(ProductionOrder.id)).where(ProductionOrder.status == 'pending')
+    )
+    pending_production = prod_pending.scalar() or 0
+    
+    # =====================================================================
+    # 6. FINANCIAL POSITION
+    # =====================================================================
     total_assets = total_inventory_value + outstanding_payments
+    total_liabilities = total_payroll
+    net_worth = total_revenue + total_inventory_value - total_payroll
     
-    # Liabilities: Estimated (simplified - would normally include debts, loans, etc.)
-    total_liabilities = total_payroll  # Current month payroll liability
-    
-    # Net Worth: Assets - Liabilities
-    net_worth = total_assets - total_liabilities
-    
-    # 6. PROFITABILITY
-    total_expenses = total_payroll + production_costs
+    total_expenses = total_payroll
     net_profit = total_revenue - total_expenses
     profit_margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0
     
-    # 7. SALES STATISTICS
-    sales_count_query = select(func.count(SalesOrder.id))
-    sales_count_result = await session.execute(sales_count_query)
-    total_sales = sales_count_result.scalar()
+    # =====================================================================
+    # 7. ENTITY COUNTS
+    # =====================================================================
+    customers_result = await session.execute(select(func.count(Customer.id)))
+    total_customers = customers_result.scalar() or 0
     
-    paid_sales_query = select(func.count(SalesOrder.id)).where(SalesOrder.payment_status == 'paid')
-    paid_sales_result = await session.execute(paid_sales_query)
-    paid_sales = paid_sales_result.scalar()
+    products_result = await session.execute(select(func.count(Product.id)))
+    total_products = products_result.scalar() or 0
     
-    # 8. CUSTOMER ANALYTICS
-    customers_query = select(func.count(Customer.id))
-    customers_result = await session.execute(customers_query)
-    total_customers = customers_result.scalar()
+    raw_materials_result = await session.execute(select(func.count(RawMaterial.id)))
+    total_raw_materials = raw_materials_result.scalar() or 0
     
-    # 9. INVENTORY COUNTS
-    products_count_query = select(func.count(Product.id))
-    products_count_result = await session.execute(products_count_query)
-    total_products = products_count_result.scalar()
+    staff_count_result = await session.execute(select(func.count(Staff.id)))
+    total_staff = staff_count_result.scalar() or 0
     
-    raw_materials_count_query = select(func.count(RawMaterial.id))
-    raw_materials_count_result = await session.execute(raw_materials_count_query)
-    total_raw_materials = raw_materials_count_result.scalar()
+    payment_collection_rate = (paid_orders_count / total_orders * 100) if total_orders > 0 else 0
     
-    # 10. WORKFORCE
-    staff_count_query = select(func.count(Staff.id))
-    staff_count_result = await session.execute(staff_count_query)
-    total_staff = staff_count_result.scalar()
+    # =====================================================================
+    # 8. DETAILED PRODUCT INVENTORY BREAKDOWN (top items by value)
+    # =====================================================================
+    detailed_product_sql = text("""
+        SELECT p.name, p.unit, sl.current_stock, 
+               COALESCE(pp_match.cost_price, p.cost_price, 0) as unit_cost,
+               sl.current_stock * COALESCE(pp_match.cost_price, p.cost_price, 0) as line_value
+        FROM stock_levels sl
+        JOIN products p ON sl.product_id = p.id
+        LEFT JOIN product_pricing pp_match ON pp_match.product_id = p.id AND pp_match.unit = p.unit
+        WHERE sl.product_id IS NOT NULL AND sl.current_stock > 0
+        ORDER BY line_value DESC
+    """)
+    detailed_result = await session.execute(detailed_product_sql)
+    product_breakdown = []
+    for row in detailed_result:
+        product_breakdown.append({
+            'name': row.name,
+            'unit': row.unit,
+            'stock': float(row.current_stock),
+            'unit_cost': float(row.unit_cost),
+            'value': float(row.line_value)
+        })
     
     return {
         # Revenue Metrics
         'total_revenue': total_revenue,
         'outstanding_payments': outstanding_payments,
-        'revenue_by_month': list(reversed(revenue_by_month)),  # Oldest to newest
+        'paid_orders_count': paid_orders_count,
+        'unpaid_orders_count': unpaid_orders_count,
+        'revenue_by_month': list(reversed(revenue_by_month)),
         
         # Inventory Metrics
         'product_inventory_value': product_inventory_value,
         'raw_materials_value': raw_materials_value,
         'total_inventory_value': total_inventory_value,
+        'total_products_in_stock': total_products_in_stock,
+        'total_raw_materials_in_stock': total_raw_materials_in_stock,
+        'total_product_units': total_product_units,
+        'total_raw_material_units': total_raw_material_units,
+        'product_breakdown': product_breakdown,
         
         # Expense Metrics
         'monthly_payroll': total_payroll,
-        'production_costs': production_costs,
         'total_expenses': total_expenses,
         
         # Financial Position
@@ -217,10 +262,19 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
         'net_profit': net_profit,
         'profit_margin': profit_margin,
         
-        # Operational Metrics
-        'total_sales': total_sales,
-        'paid_sales': paid_sales,
+        # Sales
+        'total_sales': total_orders,
+        'paid_sales': paid_orders_count,
         'total_customers': total_customers,
+        'payment_collection_rate': round(payment_collection_rate, 1),
+        
+        # Production
+        'total_production_orders': total_production,
+        'completed_production': completed_production,
+        'in_progress_production': in_progress_production,
+        'pending_production': pending_production,
+        
+        # Workforce
         'total_products': total_products,
         'total_raw_materials': total_raw_materials,
         'total_staff': total_staff,
@@ -416,9 +470,8 @@ async def export_financial_report(
         
         expense_data = [
             ['Category', 'Amount'],
-            ['Monthly Payroll', f"₦{metrics['monthly_payroll']:,.2f}"],
-            ['Production Costs', f"₦{metrics['production_costs']:,.2f}"],
-            ['TOTAL EXPENSES', f"₦{metrics['total_expenses']:,.2f}"],
+            ['Monthly Payroll', f"\u20a6{metrics['monthly_payroll']:,.2f}"],
+            ['TOTAL EXPENSES', f"\u20a6{metrics['total_expenses']:,.2f}"],
         ]
         
         expense_table = Table(expense_data, colWidths=[3.5*inch, 2.5*inch])

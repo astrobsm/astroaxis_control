@@ -4902,7 +4902,7 @@ function AppMain({ currentUser = null }) {
                     <div className="card-content">
                       <h3>Company Net Worth</h3>
                       <div className="card-value success">{formatCurrency(financialData.net_worth || 0)}</div>
-                      <div className="card-detail">Revenue + Inventory - Outstanding</div>
+                      <div className="card-detail">Revenue + Inventory - Payroll</div>
                     </div>
                   </div>
                 </div>
@@ -4923,12 +4923,16 @@ function AppMain({ currentUser = null }) {
                           <td className="amount-warning">{formatCurrency(financialData.outstanding_payments || 0)}</td>
                         </tr>
                         <tr>
+                          <td>Monthly Payroll Expense</td>
+                          <td className="amount-warning">{formatCurrency(financialData.monthly_payroll || 0)}</td>
+                        </tr>
+                        <tr>
                           <td>Inventory Investment</td>
                           <td className="amount-neutral">{formatCurrency(financialData.total_inventory_value || 0)}</td>
                         </tr>
                         <tr className="total-row">
                           <td><strong>Net Cash Position</strong></td>
-                          <td className="amount-positive"><strong>{formatCurrency((financialData.total_revenue || 0) - (financialData.total_inventory_value || 0))}</strong></td>
+                          <td className="amount-positive"><strong>{formatCurrency((financialData.total_revenue || 0) - (financialData.monthly_payroll || 0))}</strong></td>
                         </tr>
                       </tbody>
                     </table>
@@ -4945,15 +4949,15 @@ function AppMain({ currentUser = null }) {
                         </tr>
                         <tr>
                           <td>Raw Material Inventory Value</td>
-                          <td className="amount-neutral">{formatCurrency(financialData.raw_material_inventory_value || 0)}</td>
+                          <td className="amount-neutral">{formatCurrency(financialData.raw_materials_value || 0)}</td>
                         </tr>
                         <tr>
-                          <td>Total Products in Stock</td>
-                          <td>{financialData.total_products_in_stock || 0} units</td>
+                          <td>Products in Stock</td>
+                          <td>{financialData.total_products_in_stock || 0} items ({Math.round(financialData.total_product_units || 0)} units)</td>
                         </tr>
                         <tr>
-                          <td>Total Raw Materials in Stock</td>
-                          <td>{financialData.total_raw_materials_in_stock || 0} units</td>
+                          <td>Raw Materials in Stock</td>
+                          <td>{financialData.total_raw_materials_in_stock || 0} items ({Math.round(financialData.total_raw_material_units || 0)} units)</td>
                         </tr>
                         <tr className="total-row">
                           <td><strong>Total Inventory Value</strong></td>
@@ -4963,7 +4967,7 @@ function AppMain({ currentUser = null }) {
                     </table>
                   </div>
 
-                  {/* Production Costs */}
+                  {/* Production Analysis */}
                   <div className="detail-card">
                     <h3>🏭 Production Analysis</h3>
                     <table className="detail-table">
@@ -4974,15 +4978,15 @@ function AppMain({ currentUser = null }) {
                         </tr>
                         <tr>
                           <td>Completed Orders</td>
-                          <td>{financialData.completed_production_orders || 0}</td>
+                          <td>{financialData.completed_production || 0}</td>
                         </tr>
                         <tr>
                           <td>In Progress Orders</td>
-                          <td>{financialData.in_progress_production_orders || 0}</td>
+                          <td>{financialData.in_progress_production || 0}</td>
                         </tr>
                         <tr>
                           <td>Pending Orders</td>
-                          <td>{financialData.pending_production_orders || 0}</td>
+                          <td>{financialData.pending_production || 0}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -4995,11 +4999,11 @@ function AppMain({ currentUser = null }) {
                       <tbody>
                         <tr>
                           <td>Total Orders</td>
-                          <td>{financialData.total_sales_orders || 0}</td>
+                          <td>{financialData.total_sales || 0}</td>
                         </tr>
                         <tr>
                           <td>Paid Orders</td>
-                          <td className="amount-positive">{financialData.paid_orders_count || 0}</td>
+                          <td className="amount-positive">{financialData.paid_sales || 0}</td>
                         </tr>
                         <tr>
                           <td>Unpaid Orders</td>
@@ -5011,7 +5015,7 @@ function AppMain({ currentUser = null }) {
                         </tr>
                         <tr className="total-row">
                           <td><strong>Payment Collection Rate</strong></td>
-                          <td><strong>{financialData.total_sales_orders > 0 ? ((financialData.paid_orders_count / financialData.total_sales_orders) * 100).toFixed(1) : 0}%</strong></td>
+                          <td><strong>{financialData.payment_collection_rate || 0}%</strong></td>
                         </tr>
                       </tbody>
                     </table>
@@ -5028,19 +5032,52 @@ function AppMain({ currentUser = null }) {
                     </div>
                     <div className="profit-separator">-</div>
                     <div className="profit-metric">
-                      <div className="metric-label">Inventory Cost</div>
-                      <div className="metric-value">{formatCurrency(financialData.total_inventory_value || 0)}</div>
+                      <div className="metric-label">Total Expenses</div>
+                      <div className="metric-value">{formatCurrency(financialData.total_expenses || 0)}</div>
                     </div>
                     <div className="profit-separator">=</div>
                     <div className="profit-metric highlight">
-                      <div className="metric-label">Net Profit Potential</div>
-                      <div className="metric-value">{formatCurrency((financialData.total_revenue || 0) - (financialData.total_inventory_value || 0))}</div>
+                      <div className="metric-label">Net Profit</div>
+                      <div className="metric-value">{formatCurrency(financialData.net_profit || 0)}</div>
                     </div>
                   </div>
                   <div className="profit-note">
-                    <strong>Note:</strong> This is a simplified calculation. Actual profit should account for operational costs, salaries, utilities, and other expenses.
+                    <strong>Profit Margin:</strong> {financialData.profit_margin || 0}% | <strong>Monthly Payroll:</strong> {formatCurrency(financialData.monthly_payroll || 0)}
                   </div>
                 </div>
+
+                {/* Product Inventory Breakdown */}
+                {financialData.product_breakdown && financialData.product_breakdown.length > 0 && (
+                  <div className="detail-card" style={{marginTop: '20px'}}>
+                    <h3>📋 Product Inventory Breakdown</h3>
+                    <table className="detail-table">
+                      <thead>
+                        <tr>
+                          <th style={{textAlign: 'left'}}>Product</th>
+                          <th style={{textAlign: 'center'}}>Unit</th>
+                          <th style={{textAlign: 'right'}}>Stock</th>
+                          <th style={{textAlign: 'right'}}>Cost/Unit</th>
+                          <th style={{textAlign: 'right'}}>Total Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {financialData.product_breakdown.map((item, idx) => (
+                          <tr key={idx}>
+                            <td>{item.name}</td>
+                            <td style={{textAlign: 'center'}}>{item.unit}</td>
+                            <td style={{textAlign: 'right'}}>{item.stock}</td>
+                            <td style={{textAlign: 'right'}}>{formatCurrency(item.unit_cost)}</td>
+                            <td style={{textAlign: 'right'}}>{formatCurrency(item.value)}</td>
+                          </tr>
+                        ))}
+                        <tr className="total-row">
+                          <td colSpan="4"><strong>Total Product Inventory</strong></td>
+                          <td style={{textAlign: 'right'}}><strong>{formatCurrency(financialData.product_inventory_value || 0)}</strong></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
