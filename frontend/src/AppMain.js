@@ -259,7 +259,7 @@ function AppMain({ currentUser = null }) {
       pricing: [{ unit: '', cost_price: '', retail_price: '', wholesale_price: '' }]
     },
     rawMaterial: { name: '', sku: '', manufacturer: '', unit: 'kg', reorder_level: '0', unit_cost: '', opening_stock: '0', date_added: new Date().toISOString().split('T')[0] },
-    stockIntake: { product_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', notes: '' },
+    stockIntake: { product_id: '', warehouse_id: '', quantity: '', unit_cost: '', unit: '', supplier: '', batch_number: '', notes: '' },
     rawMaterialIntake: { raw_material_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', notes: '' },
     damagedProduct: { warehouse_id: '', product_id: '', quantity: '', damage_type: '', damage_reason: '', notes: '' },
     damagedRawMaterial: { warehouse_id: '', raw_material_id: '', quantity: '', damage_type: '', damage_reason: '', notes: '' },
@@ -1417,7 +1417,7 @@ function AppMain({ currentUser = null }) {
         lead_time_days: '', minimum_order_quantity: '1'
       },
       rawMaterial: { sku: '', name: '', unit_cost: '' },
-      stockIntake: { product_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', expiry_date: '', notes: '' },
+      stockIntake: { product_id: '', warehouse_id: '', quantity: '', unit_cost: '', unit: '', supplier: '', batch_number: '', expiry_date: '', notes: '' },
       rawMaterialIntake: { raw_material_id: '', warehouse_id: '', quantity: '', unit_cost: '', supplier: '', batch_number: '', expiry_date: '', notes: '' },
       warehouse: { code: '', name: '', location: '', manager_id: '' },
       customer: { customer_code: '', name: '', email: '', phone: '', address: '', credit_limit: '0' },
@@ -2185,12 +2185,16 @@ function AppMain({ currentUser = null }) {
       if (!forms.stockIntake.warehouse_id || !forms.stockIntake.product_id || !forms.stockIntake.quantity || !forms.stockIntake.unit_cost) {
         throw new Error('Please fill all required fields');
       }
+      if (!forms.stockIntake.unit) {
+        throw new Error('Please select a unit');
+      }
       setLoading(true);
       const payload = {
         warehouse_id: forms.stockIntake.warehouse_id,
         product_id: forms.stockIntake.product_id,
         quantity: parseFloat(forms.stockIntake.quantity),
         unit_cost: parseFloat(forms.stockIntake.unit_cost),
+        unit: forms.stockIntake.unit,
         supplier: forms.stockIntake.supplier || null,
         batch_number: forms.stockIntake.batch_number || null,
         notes: forms.stockIntake.notes || null,
@@ -2415,6 +2419,7 @@ function AppMain({ currentUser = null }) {
                 <th>Product</th>
                 <th>SKU</th>
                 <th>Warehouse</th>
+                <th>Units</th>
                 <th>Current Stock</th>
                 <th>Reserved</th>
                 <th>Available</th>
@@ -2424,19 +2429,23 @@ function AppMain({ currentUser = null }) {
               </tr>
             </thead>
             <tbody>
-              ${levels.map(l => `
+              ${levels.map(l => {
+                const units = l.available_units || l.product_unit || '';
+                const unitLabel = units ? ' ' + units.split(', ')[0] : '';
+                return `
                 <tr class="${l.is_low_stock ? 'low-stock-row' : ''}">
                   <td>${l.product_name}</td>
                   <td>${l.product_sku}</td>
                   <td>${l.warehouse_name}</td>
-                  <td>${l.current_stock}</td>
-                  <td>${l.reserved_stock}</td>
-                  <td><strong>${l.available_stock}</strong></td>
-                  <td>${l.reorder_level}</td>
+                  <td><span style="background:#e8eaf6;color:#3949ab;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">${units || 'N/A'}</span></td>
+                  <td>${l.current_stock}${unitLabel}</td>
+                  <td>${l.reserved_stock}${unitLabel}</td>
+                  <td><strong>${l.available_stock}${unitLabel}</strong></td>
+                  <td>${l.reorder_level}${unitLabel}</td>
                   <td>${l.is_low_stock ? '<span class="status-badge low-stock">LOW STOCK</span>' : '<span class="status-badge ok-stock">OK</span>'}</td>
                   ${isAdmin ? `<td><button onclick="window.adminAdjustStockLevel('${l.stock_level_id}','${(l.product_name||'').replace(/'/g, "\\'").replace(/"/g, '&quot;')}',${l.current_stock},'product')" style="background:#667eea;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:600;">Edit</button></td>` : ''}
                 </tr>
-              `).join('')}
+              `}).join('')}
             </tbody>
           </table>
         </div>
@@ -7984,12 +7993,14 @@ function AppMain({ currentUser = null }) {
                 <form onSubmit={async (e)=>{
                   e.preventDefault();
                   try {
+                    if (!forms.stockIntake.unit) throw new Error('Please select a unit');
                     setLoading(true);
                     const payload = { 
                       product_id: forms.stockIntake.product_id, 
                       warehouse_id: forms.stockIntake.warehouse_id, 
                       quantity: forms.stockIntake.quantity, 
                       unit_cost: forms.stockIntake.unit_cost || null, 
+                      unit: forms.stockIntake.unit,
                       supplier: forms.stockIntake.supplier || null,
                       batch_number: forms.stockIntake.batch_number || null,
                       expiry_date: forms.stockIntake.expiry_date || null,
@@ -8001,12 +8012,36 @@ function AppMain({ currentUser = null }) {
                   } catch(e){ notify(`Error: ${e.message}`,'error'); } finally { setLoading(false); }
                 }}>
                   <div className="form-row">
-                    <div className="form-group"><label>Product *</label><select value={forms.stockIntake.product_id} onChange={(e)=>handleFormChange('stockIntake','product_id',e.target.value)} required><option value="">Select product</option>{(data.products||[]).map(p=>(<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+                    <div className="form-group"><label>Product *</label><select value={forms.stockIntake.product_id} onChange={(e)=>{
+                      const pid = e.target.value;
+                      handleFormChange('stockIntake','product_id', pid);
+                      handleFormChange('stockIntake','unit','');
+                      handleFormChange('stockIntake','unit_cost','');
+                    }} required><option value="">Select product</option>{(data.products||[]).map(p=>(<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
                     <div className="form-group"><label>Warehouse *</label><select value={forms.stockIntake.warehouse_id} onChange={(e)=>handleFormChange('stockIntake','warehouse_id',e.target.value)} required><option value="">Select warehouse</option>{(data.warehouses||[]).map(w=>(<option key={w.id} value={w.id}>{w.name}</option>))}</select></div>
-                    <div className="form-group"><label>Quantity *</label><input type="number" value={forms.stockIntake.quantity} onChange={(e)=>handleFormChange('stockIntake','quantity',e.target.value)} required/></div>
                   </div>
                   <div className="form-row">
+                    <div className="form-group"><label>Unit *</label>
+                      {(() => {
+                        const selectedProd = (data.products||[]).find(p=>p.id===forms.stockIntake.product_id);
+                        const units = selectedProd?.pricing?.map(pr=>pr.unit) || [];
+                        return (
+                          <select value={forms.stockIntake.unit} onChange={(e)=>{
+                            const selUnit = e.target.value;
+                            handleFormChange('stockIntake','unit', selUnit);
+                            const prEntry = selectedProd?.pricing?.find(pr=>pr.unit===selUnit);
+                            if(prEntry) handleFormChange('stockIntake','unit_cost', String(prEntry.cost_price||''));
+                          }} required>
+                            <option value="">{forms.stockIntake.product_id ? (units.length ? 'Select unit' : 'No units configured') : 'Select product first'}</option>
+                            {units.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        );
+                      })()}
+                    </div>
+                    <div className="form-group"><label>Quantity * <span style={{fontSize:11,color:'#667eea',fontWeight:600}}>{forms.stockIntake.unit ? `(in ${forms.stockIntake.unit})` : ''}</span></label><input type="number" value={forms.stockIntake.quantity} onChange={(e)=>handleFormChange('stockIntake','quantity',e.target.value)} required placeholder={forms.stockIntake.unit ? `Enter qty in ${forms.stockIntake.unit}` : 'Enter quantity'}/></div>
                     <div className="form-group"><label>Unit Cost</label><input type="number" step="0.01" value={forms.stockIntake.unit_cost} onChange={(e)=>handleFormChange('stockIntake','unit_cost',e.target.value)}/></div>
+                  </div>
+                  <div className="form-row">
                     <div className="form-group"><label>Supplier</label><input value={forms.stockIntake.supplier} onChange={(e)=>handleFormChange('stockIntake','supplier',e.target.value)}/></div>
                     <div className="form-group"><label>Batch Number</label><input value={forms.stockIntake.batch_number} onChange={(e)=>handleFormChange('stockIntake','batch_number',e.target.value)}/></div>
                   </div>
@@ -8301,12 +8336,34 @@ function AppMain({ currentUser = null }) {
               {showForm === 'productStockIntake' && (
                 <form onSubmit={submitProductStockIntake}>
                   <div className="form-row">
+                    <div className="form-group"><label>Product *</label><select value={forms.stockIntake.product_id} onChange={(e)=>{
+                      const pid = e.target.value;
+                      handleFormChange('stockIntake','product_id', pid);
+                      handleFormChange('stockIntake','unit','');
+                      handleFormChange('stockIntake','unit_cost','');
+                    }} required><option value="">Select product</option>{(data.products||[]).map(p=>(<option key={p.id} value={p.id}>{p.name} - {p.sku}</option>))}</select></div>
                     <div className="form-group"><label>Warehouse *</label><select value={forms.stockIntake.warehouse_id} onChange={(e)=>handleFormChange('stockIntake','warehouse_id',e.target.value)} required><option value="">Select warehouse</option>{(data.warehouses||[]).map(w=>(<option key={w.id} value={w.id}>{w.name}</option>))}</select></div>
-                    <div className="form-group"><label>Product *</label><select value={forms.stockIntake.product_id} onChange={(e)=>handleFormChange('stockIntake','product_id',e.target.value)} required><option value="">Select product</option>{(data.products||[]).map(p=>(<option key={p.id} value={p.id}>{p.name} - {p.sku}</option>))}</select></div>
                   </div>
                   <div className="form-row">
-                    <div className="form-group"><label>Quantity *</label><input type="number" step="0.01" value={forms.stockIntake.quantity} onChange={(e)=>handleFormChange('stockIntake','quantity',e.target.value)} required/></div>
-                    <div className="form-group"><label>Unit Cost (‚¦) *</label><input type="number" step="0.01" value={forms.stockIntake.unit_cost} onChange={(e)=>handleFormChange('stockIntake','unit_cost',e.target.value)} required/></div>
+                    <div className="form-group"><label>Unit *</label>
+                      {(() => {
+                        const selectedProd = (data.products||[]).find(p=>p.id===forms.stockIntake.product_id);
+                        const units = selectedProd?.pricing?.map(pr=>pr.unit) || [];
+                        return (
+                          <select value={forms.stockIntake.unit} onChange={(e)=>{
+                            const selUnit = e.target.value;
+                            handleFormChange('stockIntake','unit', selUnit);
+                            const prEntry = selectedProd?.pricing?.find(pr=>pr.unit===selUnit);
+                            if(prEntry) handleFormChange('stockIntake','unit_cost', String(prEntry.cost_price||''));
+                          }} required>
+                            <option value="">{forms.stockIntake.product_id ? (units.length ? 'Select unit' : 'No units configured') : 'Select product first'}</option>
+                            {units.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        );
+                      })()}
+                    </div>
+                    <div className="form-group"><label>Quantity * <span style={{fontSize:11,color:'#667eea',fontWeight:600}}>{forms.stockIntake.unit ? `(in ${forms.stockIntake.unit})` : ''}</span></label><input type="number" step="0.01" value={forms.stockIntake.quantity} onChange={(e)=>handleFormChange('stockIntake','quantity',e.target.value)} required placeholder={forms.stockIntake.unit ? `Enter qty in ${forms.stockIntake.unit}` : 'Enter quantity'}/></div>
+                    <div className="form-group"><label>Unit Cost</label><input type="number" step="0.01" value={forms.stockIntake.unit_cost} onChange={(e)=>handleFormChange('stockIntake','unit_cost',e.target.value)}/></div>
                   </div>
                   <div className="form-row">
                     <div className="form-group"><label>Supplier</label><input value={forms.stockIntake.supplier} onChange={(e)=>handleFormChange('stockIntake','supplier',e.target.value)}/></div>

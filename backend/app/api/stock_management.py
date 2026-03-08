@@ -22,6 +22,7 @@ class ProductIntakeRequest(BaseModel):
     product_id: UUID
     quantity: float
     unit_cost: float
+    unit: Optional[str] = None
     supplier: Optional[str] = None
     batch_number: Optional[str] = None
     notes: Optional[str] = None
@@ -55,6 +56,7 @@ async def product_stock_intake(
     """Record product stock intake"""
     try:
         # Create stock movement
+        unit_label = request.unit or 'units'
         movement = StockMovement(
             warehouse_id=request.warehouse_id,
             product_id=request.product_id,
@@ -62,7 +64,7 @@ async def product_stock_intake(
             quantity=Decimal(str(request.quantity)),
             unit_cost=Decimal(str(request.unit_cost)),
             reference=f"Supplier: {request.supplier or 'N/A'}" + (f", Batch: {request.batch_number}" if request.batch_number else ""),
-            notes=request.notes
+            notes=f"Unit: {unit_label}, Qty: {request.quantity} {unit_label}" + (f". {request.notes}" if request.notes else "")
         )
         session.add(movement)
         
@@ -90,7 +92,7 @@ async def product_stock_intake(
         
         return {
             "success": True,
-            "message": f"Stock intake recorded: {request.quantity} units added",
+            "message": f"Stock intake recorded: {request.quantity} {unit_label} added",
             "movement_id": str(movement.id),
             "new_stock_level": float(stock_level.current_stock)
         }
@@ -165,9 +167,12 @@ async def get_product_stock_levels(
             SELECT sl.id, sl.warehouse_id, sl.product_id, sl.current_stock,
                    COALESCE(sl.min_stock, 0) as min_stock,
                    p.name as product_name, p.sku as product_sku,
+                   p.unit as product_unit,
                    COALESCE(NULLIF(sl.min_stock, 0), 10) as reorder_level,
                    sl.updated_at,
-                   w.name as warehouse_name
+                   w.name as warehouse_name,
+                   (SELECT string_agg(pp.unit, ', ' ORDER BY pp.unit)
+                    FROM product_pricing pp WHERE pp.product_id = sl.product_id) as available_units
             FROM stock_levels sl
             LEFT JOIN products p ON sl.product_id::text = p.id::text
             LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
@@ -190,6 +195,7 @@ async def get_product_stock_levels(
             if low_stock_only and not is_low_stock:
                 continue
             
+            available_units = row.available_units or row.product_unit or 'each'
             stock_levels.append({
                 'stock_level_id': str(row.id),
                 'warehouse_id': str(row.warehouse_id or ''),
@@ -201,6 +207,7 @@ async def get_product_stock_levels(
                 'reserved_stock': 0,
                 'available_stock': current_stock,
                 'reorder_level': reorder_level,
+                'available_units': available_units,
                 'is_low_stock': is_low_stock,
                 'updated_at': row.updated_at.isoformat() if row.updated_at else None
             })
