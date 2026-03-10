@@ -122,6 +122,123 @@ async def list_products(
         "pages": (total + size - 1) // size
     }
 
+@router.get('/price-list-pdf')
+async def generate_price_list_pdf(session: AsyncSession = Depends(get_session)):
+    """Generate a downloadable PDF price list for all products"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    import os
+
+    # Fetch products with pricing
+    result = await session.execute(
+        select(Product).options(selectinload(Product.pricing)).where(Product.is_active == True).order_by(Product.name)
+    )
+    products = result.scalars().all()
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    # Header styles
+    title_style = ParagraphStyle('PriceTitle', parent=styles['Title'], fontSize=18, textColor=colors.HexColor('#2c3e50'), spaceAfter=4)
+    subtitle_style = ParagraphStyle('PriceSub', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#888888'), alignment=TA_CENTER, spaceAfter=2)
+    cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontSize=9, leading=11)
+    cell_bold = ParagraphStyle('CellBold', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#2c3e50'))
+    price_style = ParagraphStyle('PriceStyle', parent=styles['Normal'], fontSize=9, leading=11, alignment=TA_RIGHT, textColor=colors.HexColor('#2c3e50'))
+
+    # Company logo
+    logo_paths = ['/app/frontend/build/company-logo.png', '/app/frontend/build/logo.png']
+    for lp in logo_paths:
+        if os.path.exists(lp):
+            try:
+                img = Image(lp, width=50*mm, height=15*mm)
+                img.hAlign = 'CENTER'
+                elements.append(img)
+                elements.append(Spacer(1, 4*mm))
+            except:
+                pass
+            break
+
+    elements.append(Paragraph("BONNESANTE MEDICALS", title_style))
+    elements.append(Paragraph("PRODUCT PRICE LIST", ParagraphStyle('Sub2', parent=styles['Normal'], fontSize=13, textColor=colors.HexColor('#2ecc71'), alignment=TA_CENTER, spaceAfter=4)))
+    elements.append(Paragraph(f"Date: {datetime.now().strftime('%d %b %Y')}", subtitle_style))
+    elements.append(Paragraph("Prices in Nigerian Naira (NGN)", subtitle_style))
+    elements.append(Spacer(1, 8*mm))
+
+    # Build table data
+    header = ['S/N', 'Product', 'SKU', 'Unit', 'Retail Price', 'Wholesale Price']
+    table_data = [header]
+    sn = 0
+
+    for p in products:
+        if p.pricing and len(p.pricing) > 0:
+            for pr in p.pricing:
+                sn += 1
+                retail = f"NGN {float(pr.retail_price or 0):,.2f}"
+                wholesale = f"NGN {float(pr.wholesale_price or 0):,.2f}"
+                table_data.append([
+                    str(sn),
+                    Paragraph(p.name or '', cell_bold),
+                    p.sku or '',
+                    pr.unit or '-',
+                    retail,
+                    wholesale
+                ])
+        else:
+            sn += 1
+            retail_val = float(getattr(p, 'retail_price', 0) or getattr(p, 'selling_price', 0) or 0)
+            wholesale_val = float(getattr(p, 'wholesale_price', 0) or getattr(p, 'selling_price', 0) or 0)
+            table_data.append([
+                str(sn),
+                Paragraph(p.name or '', cell_bold),
+                p.sku or '',
+                '-',
+                f"NGN {retail_val:,.2f}",
+                f"NGN {wholesale_val:,.2f}"
+            ])
+
+    col_widths = [25, 150, 55, 50, 85, 85]
+    tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2ecc71')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (4, 0), (5, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dee2e6')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(tbl)
+
+    # Footer
+    elements.append(Spacer(1, 10*mm))
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#888888'), alignment=TA_CENTER)
+    elements.append(Paragraph("Bonnesante Medicals | Tel: +234 707 679 3866 | +234 901 283 5413", footer_style))
+    elements.append(Paragraph("Prices subject to change without notice.", footer_style))
+    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %b %Y %H:%M')}", footer_style))
+
+    doc.build(elements)
+    buf.seek(0)
+
+    filename = f"Bonnesante_Price_List_{datetime.now().strftime('%Y%m%d')}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
 @router.get('/{product_id}', response_model=ApiResponse)
 async def get_product(
     product_id: uuid.UUID,
@@ -270,121 +387,3 @@ async def get_product_stock(
         })
     
     return stock_data
-
-
-@router.get('/price-list-pdf')
-async def generate_price_list_pdf(session: AsyncSession = Depends(get_session)):
-    """Generate a downloadable PDF price list for all products"""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-    import os
-
-    # Fetch products with pricing
-    result = await session.execute(
-        select(Product).options(selectinload(Product.pricing)).where(Product.is_active == True).order_by(Product.name)
-    )
-    products = result.scalars().all()
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=15*mm, bottomMargin=15*mm, leftMargin=15*mm, rightMargin=15*mm)
-    styles = getSampleStyleSheet()
-    elements = []
-
-    # Header styles
-    title_style = ParagraphStyle('PriceTitle', parent=styles['Title'], fontSize=18, textColor=colors.HexColor('#2c3e50'), spaceAfter=4)
-    subtitle_style = ParagraphStyle('PriceSub', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#888888'), alignment=TA_CENTER, spaceAfter=2)
-    cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontSize=9, leading=11)
-    cell_bold = ParagraphStyle('CellBold', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#2c3e50'))
-    price_style = ParagraphStyle('PriceStyle', parent=styles['Normal'], fontSize=9, leading=11, alignment=TA_RIGHT, textColor=colors.HexColor('#2c3e50'))
-
-    # Company logo
-    logo_paths = ['/app/frontend/build/company-logo.png', '/app/frontend/build/logo.png']
-    for lp in logo_paths:
-        if os.path.exists(lp):
-            try:
-                img = Image(lp, width=50*mm, height=15*mm)
-                img.hAlign = 'CENTER'
-                elements.append(img)
-                elements.append(Spacer(1, 4*mm))
-            except:
-                pass
-            break
-
-    elements.append(Paragraph("BONNESANTE MEDICALS", title_style))
-    elements.append(Paragraph("PRODUCT PRICE LIST", ParagraphStyle('Sub2', parent=styles['Normal'], fontSize=13, textColor=colors.HexColor('#2ecc71'), alignment=TA_CENTER, spaceAfter=4)))
-    elements.append(Paragraph(f"Date: {datetime.now().strftime('%d %b %Y')}", subtitle_style))
-    elements.append(Paragraph("Prices in Nigerian Naira (NGN)", subtitle_style))
-    elements.append(Spacer(1, 8*mm))
-
-    # Build table data
-    header = ['S/N', 'Product', 'SKU', 'Unit', 'Retail Price', 'Wholesale Price']
-    table_data = [header]
-    sn = 0
-
-    for p in products:
-        if p.pricing and len(p.pricing) > 0:
-            for pr in p.pricing:
-                sn += 1
-                retail = f"NGN {float(pr.retail_price or 0):,.2f}"
-                wholesale = f"NGN {float(pr.wholesale_price or 0):,.2f}"
-                table_data.append([
-                    str(sn),
-                    Paragraph(p.name or '', cell_bold),
-                    p.sku or '',
-                    pr.unit or '-',
-                    retail,
-                    wholesale
-                ])
-        else:
-            sn += 1
-            retail_val = float(getattr(p, 'retail_price', 0) or getattr(p, 'selling_price', 0) or 0)
-            wholesale_val = float(getattr(p, 'wholesale_price', 0) or getattr(p, 'selling_price', 0) or 0)
-            table_data.append([
-                str(sn),
-                Paragraph(p.name or '', cell_bold),
-                p.sku or '',
-                '-',
-                f"NGN {retail_val:,.2f}",
-                f"NGN {wholesale_val:,.2f}"
-            ])
-
-    col_widths = [25, 150, 55, 50, 85, 85]
-    tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2ecc71')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('ALIGN', (4, 0), (5, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')]),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dee2e6')),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-    ]))
-    elements.append(tbl)
-
-    # Footer
-    elements.append(Spacer(1, 10*mm))
-    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#888888'), alignment=TA_CENTER)
-    elements.append(Paragraph("Bonnesante Medicals | Tel: +234 707 679 3866 | +234 901 283 5413", footer_style))
-    elements.append(Paragraph("Prices subject to change without notice.", footer_style))
-    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %b %Y %H:%M')}", footer_style))
-
-    doc.build(elements)
-    buf.seek(0)
-
-    filename = f"Bonnesante_Price_List_{datetime.now().strftime('%Y%m%d')}.pdf"
-    return StreamingResponse(
-        buf,
-        media_type='application/pdf',
-        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
-    )
