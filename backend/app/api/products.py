@@ -133,9 +133,9 @@ async def generate_price_list_pdf(session: AsyncSession = Depends(get_session)):
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT
     import os
 
-    # Fetch products with pricing
+    # Fetch all products with pricing
     result = await session.execute(
-        select(Product).options(selectinload(Product.pricing)).where(Product.is_active == True).order_by(Product.name)
+        select(Product).options(selectinload(Product.pricing)).order_by(Product.name)
     )
     products = result.scalars().all()
 
