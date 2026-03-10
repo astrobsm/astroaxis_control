@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db import get_session
-from app.models import User, UserSession, AuditLog, RolePermission, UserModuleAccess
+from app.models import User, UserSession, AuditLog, RolePermission, UserModuleAccess, user_warehouses, Warehouse
+from sqlalchemy import delete, and_
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
@@ -771,4 +772,73 @@ async def set_user_module_access(user_id: UUID, body: ModuleAccessUpdate, db: As
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating module access: {str(e)}")
+
+
+# ======================== WAREHOUSE ACCESS MANAGEMENT ========================
+
+@router.get("/warehouse-access")
+async def get_all_warehouse_access(db: AsyncSession = Depends(get_session)):
+    """Get warehouse access for all users (admin settings view)"""
+    # All users
+    users_result = await db.execute(select(User).order_by(User.full_name))
+    users = users_result.scalars().all()
+    # All warehouses
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.is_active == True).order_by(Warehouse.name))
+    warehouses = wh_result.scalars().all()
+    # Current grants
+    grants_result = await db.execute(select(user_warehouses))
+    grants = grants_result.fetchall()
+    grant_set = {(str(g.user_id), str(g.warehouse_id)) for g in grants}
+
+    wh_list = [{"id": str(w.id), "name": w.name, "code": w.code} for w in warehouses]
+    user_list = []
+    for u in users:
+        if not u.is_active:
+            continue
+        uid = str(u.id)
+        access = {str(w.id): (uid, str(w.id)) in grant_set for w in warehouses}
+        user_list.append({
+            "user_id": uid,
+            "full_name": u.full_name,
+            "email": u.email,
+            "role": u.role,
+            "warehouse_access": access
+        })
+    return {"warehouses": wh_list, "users": user_list}
+
+
+class WarehouseAccessUpdate(BaseModel):
+    warehouse_access: dict  # { "warehouse_id": true/false, ... }
+
+@router.put("/warehouse-access/{user_id}")
+async def set_user_warehouse_access(user_id: UUID, body: WarehouseAccessUpdate, db: AsyncSession = Depends(get_session)):
+    """Set warehouse access for a user — replaces all grants with the new set"""
+    try:
+        # Remove all existing grants for this user
+        await db.execute(
+            delete(user_warehouses).where(user_warehouses.c.user_id == user_id)
+        )
+        # Insert new grants
+        for wh_id_str, granted in body.warehouse_access.items():
+            if granted:
+                try:
+                    wh_uuid = uuid.UUID(wh_id_str)
+                except ValueError:
+                    continue
+                await db.execute(
+                    user_warehouses.insert().values(user_id=user_id, warehouse_id=wh_uuid)
+                )
+        audit_log = AuditLog(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            action="WAREHOUSE_ACCESS_UPDATED",
+            module="auth",
+            details=f"Warehouse access updated for user {user_id}"
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"success": True, "message": "Warehouse access updated successfully"}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating warehouse access: {str(e)}")
 

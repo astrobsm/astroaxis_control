@@ -200,6 +200,11 @@ function AppMain({ currentUser = null }) {
   const [maLoading, setMaLoading] = useState(false);
   const [maSaving, setMaSaving] = useState({});
 
+  // Warehouse Access Control state
+  const [warehouseAccessData, setWarehouseAccessData] = useState({ warehouses: [], users: [] });
+  const [waLoading, setWaLoading] = useState(false);
+  const [waSaving, setWaSaving] = useState({});
+
   // Transfer Module state
   const [transfersList, setTransfersList] = useState([]);
   const [transferSummary, setTransferSummary] = useState({ total_transfers: 0, total_quantity_moved: 0, today_transfers: 0 });
@@ -539,6 +544,33 @@ function AppMain({ currentUser = null }) {
       notify(d.message, 'success');
     } catch(e) { notify(e.message, 'error'); }
     finally { setMaSaving(prev => ({...prev, [userId]: false})); }
+  }
+
+  // Fetch warehouse access for all users (admin settings)
+  async function fetchWarehouseAccessAll() {
+    setWaLoading(true);
+    try {
+      const r = await fetch('/api/auth/warehouse-access');
+      const d = await r.json();
+      setWarehouseAccessData(d && d.warehouses ? d : { warehouses: [], users: [] });
+    } catch(e) { console.error(e); }
+    finally { setWaLoading(false); }
+  }
+
+  // Save warehouse access for one user
+  async function saveWarehouseAccess(userId, warehouseAccess) {
+    setWaSaving(prev => ({...prev, [userId]: true}));
+    try {
+      const r = await fetch(`/api/auth/warehouse-access/${userId}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ warehouse_access: warehouseAccess })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Failed');
+      notify(d.message, 'success');
+    } catch(e) { notify(e.message, 'error'); }
+    finally { setWaSaving(prev => ({...prev, [userId]: false})); }
   }
 
   // ===== TRANSFER FETCHERS =====
@@ -7815,6 +7847,68 @@ function AppMain({ currentUser = null }) {
                               <td style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
                                 <button disabled={isAdmin || maSaving[u.user_id]} onClick={() => saveModuleAccess(u.user_id, u.modules)} style={{padding:'4px 10px',borderRadius:6,border:'none',background:isAdmin?'#eee':'#27ae60',color:isAdmin?'#999':'#fff',fontSize:10,fontWeight:700,cursor:isAdmin?'not-allowed':'pointer'}}>
                                   {maSaving[u.user_id] ? '...' : 'Save'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Warehouse Access Control */}
+              <div className="settings-card" style={{gridColumn: '1 / -1'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <h3>🏭 Warehouse Access Control</h3>
+                  <button className="btn btn-primary" onClick={fetchWarehouseAccessAll} style={{fontSize:12}}>{waLoading ? 'Loading...' : 'Load / Refresh Warehouse Access'}</button>
+                </div>
+                <p style={{fontSize:13,color:'#666',marginBottom:16}}>Grant or revoke access to each warehouse for individual users. Admins always have full access. Changes save immediately per user.</p>
+                {warehouseAccessData.users.length === 0 && !waLoading && (
+                  <div style={{textAlign:'center',padding:30,color:'#aaa'}}>Click "Load / Refresh Warehouse Access" above to view and manage warehouse access for all users.</div>
+                )}
+                {warehouseAccessData.users.length > 0 && (
+                  <div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                      <thead>
+                        <tr style={{background:'#f1f3f5'}}>
+                          <th style={{padding:'10px 8px',textAlign:'left',position:'sticky',left:0,background:'#f1f3f5',zIndex:2,minWidth:200,borderBottom:'2px solid #dee2e6'}}>User</th>
+                          <th style={{padding:'10px 4px',textAlign:'center',fontSize:11,borderBottom:'2px solid #dee2e6',minWidth:30}} title="Select All">All</th>
+                          {warehouseAccessData.warehouses.map(wh => (
+                            <th key={wh.id} style={{padding:'10px 8px',textAlign:'center',fontSize:11,borderBottom:'2px solid #dee2e6',minWidth:120,whiteSpace:'nowrap'}}>
+                              {wh.name}
+                            </th>
+                          ))}
+                          <th style={{padding:'10px 8px',borderBottom:'2px solid #dee2e6'}}>Save</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {warehouseAccessData.users.map((u, idx) => {
+                          const isAdmin = u.role === 'admin';
+                          const allChecked = warehouseAccessData.warehouses.every(wh => u.warehouse_access[wh.id]);
+                          return (
+                            <tr key={u.user_id} style={{background: idx%2===0?'#fff':'#fafbfc', opacity: isAdmin ? 0.6 : 1}}>
+                              <td style={{padding:'8px',fontWeight:600,position:'sticky',left:0,background:idx%2===0?'#fff':'#fafbfc',zIndex:1,borderBottom:'1px solid #eee'}}>
+                                <div>{u.full_name}</div>
+                                <div style={{fontSize:10,color:'#888',fontWeight:400}}>{u.email} ({u.role})</div>
+                              </td>
+                              <td style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                <input type="checkbox" checked={allChecked} disabled={isAdmin} onChange={(e) => {
+                                  const val = e.target.checked;
+                                  setWarehouseAccessData(prev => ({...prev, users: prev.users.map(x => x.user_id === u.user_id ? {...x, warehouse_access: {...x.warehouse_access, ...Object.fromEntries(prev.warehouses.map(wh => [wh.id, val]))}} : x)}));
+                                }} title="Toggle all warehouses" style={{cursor:isAdmin?'not-allowed':'pointer'}} />
+                              </td>
+                              {warehouseAccessData.warehouses.map(wh => (
+                                <td key={wh.id} style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                  <input type="checkbox" checked={!!u.warehouse_access[wh.id]} disabled={isAdmin} onChange={() => {
+                                    setWarehouseAccessData(prev => ({...prev, users: prev.users.map(x => x.user_id === u.user_id ? {...x, warehouse_access: {...x.warehouse_access, [wh.id]: !x.warehouse_access[wh.id]}} : x)}));
+                                  }} style={{cursor:isAdmin?'not-allowed':'pointer',accentColor: u.warehouse_access[wh.id]?'#3498db':'#ccc'}} />
+                                </td>
+                              ))}
+                              <td style={{padding:'4px',textAlign:'center',borderBottom:'1px solid #eee'}}>
+                                <button disabled={isAdmin || waSaving[u.user_id]} onClick={() => saveWarehouseAccess(u.user_id, u.warehouse_access)} style={{padding:'4px 10px',borderRadius:6,border:'none',background:isAdmin?'#eee':'#3498db',color:isAdmin?'#999':'#fff',fontSize:11,fontWeight:700,cursor:isAdmin?'not-allowed':'pointer'}}>
+                                  {waSaving[u.user_id] ? '...' : 'Save'}
                                 </button>
                               </td>
                             </tr>
