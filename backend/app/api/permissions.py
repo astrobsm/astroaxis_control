@@ -173,7 +173,7 @@ async def get_user_permissions(user_id: str, session: AsyncSession = Depends(get
 @router.post("/grant", status_code=status.HTTP_201_CREATED)
 async def grant_permissions(
     grant_data: UserPermissionGrant,
-    admin_user_id: str,  # Should come from JWT token in production
+    admin_user_id: Optional[str] = None,  # Should come from JWT token in production
     session: AsyncSession = Depends(get_session)
 ):
     """Grant permissions to a user (Admin only)"""
