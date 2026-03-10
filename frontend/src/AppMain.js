@@ -448,7 +448,7 @@ function AppMain({ currentUser = null }) {
         production: '/api/production/orders',
         sales: '/api/sales/orders',
         attendance: '/api/attendance/',
-        customers: '/api/sales/customers',
+        customers: '/api/sales/customers?limit=1000&active_only=false',
         users: '/api/auth/users',
       };
 
@@ -487,7 +487,7 @@ function AppMain({ currentUser = null }) {
       production: '/api/production/orders',
       sales: '/api/sales/orders',
       attendance: '/api/attendance/',
-      customers: '/api/sales/customers',
+      customers: '/api/sales/customers?limit=1000&active_only=false',
       users: '/api/auth/users',
     };
     try {

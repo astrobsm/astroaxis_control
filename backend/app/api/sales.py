@@ -174,7 +174,7 @@ async def create_customer(
 @router.get('/customers', response_model=PaginatedResponse[CustomerSchema])
 async def list_customers(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     active_only: bool = Query(True),
     search: Optional[str] = Query(None),
     session: AsyncSession = Depends(get_session)
