@@ -242,6 +242,14 @@ function AppMain({ currentUser = null }) {
   const [logSelectedManifest, setLogSelectedManifest] = useState(null);
   const [logConfirmForm, setLogConfirmForm] = useState({ receiver_name: '', receiver_phone: '', physical_invoice_number: '', delivery_notes: '', signature_collected: true });
   const [logConfirmingCustomerId, setLogConfirmingCustomerId] = useState(null);
+  // Customer Management state
+  const [custSearch, setCustSearch] = useState('');
+  const [custShowForm, setCustShowForm] = useState(false);
+  const [custEditing, setCustEditing] = useState(null);
+  const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', address: '', credit_limit: '0' });
+  const [custViewOrders, setCustViewOrders] = useState(null);
+  const [custOrders, setCustOrders] = useState([]);
+  const [custLoadingOrders, setCustLoadingOrders] = useState(false);
   const [logManifestForm, setLogManifestForm] = useState({
     logistics_officer: '', delivery_date: new Date().toISOString().split('T')[0],
     vehicle_details: '', driver_name: '', driver_phone: '', transport_mode: 'vehicle',
@@ -392,6 +400,7 @@ function AppMain({ currentUser = null }) {
     if (activeModule === 'damagedTransfers') { fetchDamagedTransfers(); fetchDamagedTransfersSummary(); }
     if (activeModule === 'receiveTransfers') { fetchReceiveTransfers(); fetchReceiveTransfersSummary(); }
     if (activeModule === 'salaryPayroll') { fetchPayrollDashboard(); fetchPayrollEntries(); }
+    if (activeModule === 'customers') { fetchData('customers'); }
   }, [activeModule]);
 
   useEffect(() => {
@@ -2690,7 +2699,7 @@ function AppMain({ currentUser = null }) {
           <small className="build-badge">{BUILD_TAG}</small>
         </div>
         <nav className="sidebar-nav">
-          {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
+          {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','customers','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','userManagement','settings'].filter(m => {
             // Admin always sees everything
             if (!currentUser || currentUser.role === 'admin') return true;
             // Dashboard always visible
@@ -2701,7 +2710,7 @@ function AppMain({ currentUser = null }) {
             return false;
           }).map(m => (
             <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => setActiveModule(m)}>
-              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m.toUpperCase()}
+              {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m === 'customers' ? 'CUSTOMERS' : m.toUpperCase()}
             </button>
           ))}
         </nav>
@@ -3682,6 +3691,237 @@ function AppMain({ currentUser = null }) {
                   )})}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== CUSTOMER MANAGEMENT ==================== */}
+        {activeModule === 'customers' && (
+          <div className="module-content">
+            <div className="module-header">
+              <div className="module-header-left">
+                <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+                <h2>Customer Management</h2>
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <input type="text" placeholder="Search customers..." value={custSearch} onChange={e=>setCustSearch(e.target.value)} style={{padding:'8px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:13,width:220}} />
+                <button onClick={() => { setCustEditing(null); setCustForm({ name:'', email:'', phone:'', address:'', credit_limit:'0' }); setCustShowForm(true); }} className="btn btn-primary">+ New Customer</button>
+              </div>
+            </div>
+
+            {/* Summary Cards */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:16,marginBottom:20}}>
+              <div style={{background:'linear-gradient(135deg,#667eea,#764ba2)',borderRadius:12,padding:'18px 20px',color:'#fff'}}>
+                <div style={{fontSize:12,opacity:0.8}}>Total Customers</div>
+                <div style={{fontSize:28,fontWeight:700}}>{(data.customers||[]).length}</div>
+              </div>
+              <div style={{background:'linear-gradient(135deg,#2ecc71,#27ae60)',borderRadius:12,padding:'18px 20px',color:'#fff'}}>
+                <div style={{fontSize:12,opacity:0.8}}>Active</div>
+                <div style={{fontSize:28,fontWeight:700}}>{(data.customers||[]).filter(c=>c.is_active!==false).length}</div>
+              </div>
+              <div style={{background:'linear-gradient(135deg,#e74c3c,#c0392b)',borderRadius:12,padding:'18px 20px',color:'#fff'}}>
+                <div style={{fontSize:12,opacity:0.8}}>Inactive</div>
+                <div style={{fontSize:28,fontWeight:700}}>{(data.customers||[]).filter(c=>c.is_active===false).length}</div>
+              </div>
+              <div style={{background:'linear-gradient(135deg,#f39c12,#e67e22)',borderRadius:12,padding:'18px 20px',color:'#fff'}}>
+                <div style={{fontSize:12,opacity:0.8}}>With Orders</div>
+                <div style={{fontSize:28,fontWeight:700}}>{(data.customers||[]).filter(c=>(data.sales||[]).some(s=>s.customer_id===c.id)).length}</div>
+              </div>
+            </div>
+
+            {/* Customer Registration / Edit Modal */}
+            {custShowForm && (
+              <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:10000,display:'flex',justifyContent:'center',alignItems:'center'}}>
+                <div style={{background:'#fff',borderRadius:12,padding:30,width:'100%',maxWidth:500,boxShadow:'0 8px 32px rgba(0,0,0,0.2)'}}>
+                  <h3 style={{margin:'0 0 20px',color:'#2c3e50'}}>{custEditing ? 'Edit Customer' : 'Register New Customer'}</h3>
+                  <form onSubmit={async (e) => {
+                    e.preventDefault();
+                    try {
+                      const token = localStorage.getItem('access_token');
+                      const headers = { 'Content-Type':'application/json' };
+                      if (token) headers['Authorization'] = `Bearer ${token}`;
+                      const payload = { ...custForm, credit_limit: parseFloat(custForm.credit_limit)||0 };
+                      let res;
+                      if (custEditing) {
+                        res = await fetch(`/api/sales/customers/${custEditing.id}`, { method:'PUT', headers, body:JSON.stringify(payload) });
+                      } else {
+                        res = await fetch('/api/sales/customers', { method:'POST', headers, body:JSON.stringify(payload) });
+                      }
+                      if (!res.ok) { const err = await res.json(); throw new Error(err.detail||'Failed'); }
+                      notify(custEditing ? 'Customer updated successfully' : 'Customer registered successfully', 'success');
+                      setCustShowForm(false); setCustEditing(null);
+                      fetchData('customers');
+                    } catch(err) { notify(err.message, 'error'); }
+                  }}>
+                    <div style={{marginBottom:14}}>
+                      <label style={{display:'block',fontWeight:600,marginBottom:4,fontSize:13}}>Customer Name *</label>
+                      <input required type="text" value={custForm.name} onChange={e=>setCustForm(f=>({...f,name:e.target.value}))} style={{width:'100%',padding:'10px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:14}} placeholder="Full name" />
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:14}}>
+                      <div>
+                        <label style={{display:'block',fontWeight:600,marginBottom:4,fontSize:13}}>Email</label>
+                        <input type="email" value={custForm.email} onChange={e=>setCustForm(f=>({...f,email:e.target.value}))} style={{width:'100%',padding:'10px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:14}} placeholder="email@example.com" />
+                      </div>
+                      <div>
+                        <label style={{display:'block',fontWeight:600,marginBottom:4,fontSize:13}}>Phone</label>
+                        <input type="text" value={custForm.phone} onChange={e=>setCustForm(f=>({...f,phone:e.target.value}))} style={{width:'100%',padding:'10px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:14}} placeholder="+234..." />
+                      </div>
+                    </div>
+                    <div style={{marginBottom:14}}>
+                      <label style={{display:'block',fontWeight:600,marginBottom:4,fontSize:13}}>Address</label>
+                      <textarea value={custForm.address} onChange={e=>setCustForm(f=>({...f,address:e.target.value}))} style={{width:'100%',padding:'10px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:14,minHeight:60}} placeholder="Customer address" />
+                    </div>
+                    <div style={{marginBottom:20}}>
+                      <label style={{display:'block',fontWeight:600,marginBottom:4,fontSize:13}}>Credit Limit (NGN)</label>
+                      <input type="number" min="0" step="0.01" value={custForm.credit_limit} onChange={e=>setCustForm(f=>({...f,credit_limit:e.target.value}))} style={{width:'100%',padding:'10px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:14}} />
+                    </div>
+                    <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+                      <button type="button" onClick={()=>{setCustShowForm(false);setCustEditing(null);}} className="btn btn-secondary">Cancel</button>
+                      <button type="submit" className="btn btn-primary">{custEditing ? 'Update Customer' : 'Register Customer'}</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Customer Transaction View Modal */}
+            {custViewOrders && (
+              <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:10000,display:'flex',justifyContent:'center',alignItems:'flex-start',overflowY:'auto',padding:'30px 0'}}>
+                <div style={{background:'#fff',borderRadius:12,padding:30,width:'100%',maxWidth:800,boxShadow:'0 8px 32px rgba(0,0,0,0.2)',margin:'auto'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+                    <div>
+                      <h3 style={{margin:0,color:'#2c3e50'}}>Transactions: {custViewOrders.name}</h3>
+                      <p style={{margin:'4px 0 0',fontSize:13,color:'#888'}}>{custViewOrders.customer_code} | {custViewOrders.phone||'No phone'} | {custViewOrders.email||'No email'}</p>
+                    </div>
+                    <button onClick={()=>{setCustViewOrders(null);setCustOrders([]);}} className="btn btn-secondary">Close</button>
+                  </div>
+                  {custLoadingOrders ? <p style={{textAlign:'center',color:'#888'}}>Loading transactions...</p> : custOrders.length === 0 ? (
+                    <div style={{textAlign:'center',padding:40,color:'#aaa'}}>
+                      <div style={{fontSize:48,marginBottom:10}}>No transactions found</div>
+                      <p>This customer has no sales orders yet.</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:12,marginBottom:16}}>
+                        <div style={{background:'#f0f4ff',borderRadius:8,padding:'12px 16px'}}>
+                          <div style={{fontSize:11,color:'#667eea',fontWeight:600}}>Total Orders</div>
+                          <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{custOrders.length}</div>
+                        </div>
+                        <div style={{background:'#f0fff4',borderRadius:8,padding:'12px 16px'}}>
+                          <div style={{fontSize:11,color:'#2ecc71',fontWeight:600}}>Total Spent</div>
+                          <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(custOrders.reduce((s,o)=>s+(parseFloat(o.total_amount)||0),0))}</div>
+                        </div>
+                        <div style={{background:'#fff5f5',borderRadius:8,padding:'12px 16px'}}>
+                          <div style={{fontSize:11,color:'#e74c3c',fontWeight:600}}>Unpaid</div>
+                          <div style={{fontSize:22,fontWeight:700,color:'#e74c3c'}}>{custOrders.filter(o=>o.payment_status==='unpaid').length}</div>
+                        </div>
+                        <div style={{background:'#fffaf0',borderRadius:8,padding:'12px 16px'}}>
+                          <div style={{fontSize:11,color:'#f39c12',fontWeight:600}}>Partial</div>
+                          <div style={{fontSize:22,fontWeight:700,color:'#f39c12'}}>{custOrders.filter(o=>o.payment_status==='partial').length}</div>
+                        </div>
+                      </div>
+                      <div style={{maxHeight:400,overflowY:'auto'}}>
+                        <table className="data-table">
+                          <thead><tr><th>Order #</th><th>Date</th><th>Amount</th><th>Status</th><th>Payment</th></tr></thead>
+                          <tbody>
+                            {custOrders.map(o => (
+                              <tr key={o.id}>
+                                <td style={{fontWeight:600}}>{o.order_number}</td>
+                                <td>{o.order_date ? new Date(o.order_date).toLocaleDateString() : o.created_at ? new Date(o.created_at).toLocaleDateString() : '-'}</td>
+                                <td style={{fontWeight:600}}>{formatCurrency(o.total_amount)}</td>
+                                <td><span className={`status ${o.status}`}>{o.status}</span></td>
+                                <td><span className={`status ${o.payment_status||'unpaid'}`}>{o.payment_status||'unpaid'}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Customers Table */}
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Email</th>
+                    <th>Address</th>
+                    <th>Credit Limit</th>
+                    <th>Status</th>
+                    <th>Orders</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.customers||[]).filter(c => {
+                    if (!custSearch) return true;
+                    const s = custSearch.toLowerCase();
+                    return (c.name||'').toLowerCase().includes(s) || (c.phone||'').toLowerCase().includes(s) || (c.email||'').toLowerCase().includes(s) || (c.customer_code||'').toLowerCase().includes(s) || (c.address||'').toLowerCase().includes(s);
+                  }).map(c => {
+                    const orderCount = (data.sales||[]).filter(o=>o.customer_id===c.id).length;
+                    return (
+                      <tr key={c.id} style={{opacity: c.is_active===false ? 0.5 : 1}}>
+                        <td style={{fontWeight:600,color:'#667eea'}}>{c.customer_code||'-'}</td>
+                        <td style={{fontWeight:600}}>{c.name}</td>
+                        <td>{c.phone||'-'}</td>
+                        <td>{c.email||'-'}</td>
+                        <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={c.address||''}>{c.address||'-'}</td>
+                        <td>{formatCurrency(c.credit_limit||0)}</td>
+                        <td><span className={`status ${c.is_active!==false?'confirmed':'cancelled'}`}>{c.is_active!==false?'Active':'Inactive'}</span></td>
+                        <td style={{fontWeight:600}}>{orderCount}</td>
+                        <td className="actions" style={{whiteSpace:'nowrap'}}>
+                          <button onClick={async () => {
+                            setCustViewOrders(c); setCustLoadingOrders(true);
+                            try {
+                              const token = localStorage.getItem('access_token');
+                              const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+                              const res = await fetch(`/api/sales/orders?customer_id=${c.id}&limit=100`, { headers });
+                              const d = await res.json();
+                              setCustOrders(d.items||d||[]);
+                            } catch(err) { notify('Error loading orders','error'); setCustOrders([]); }
+                            finally { setCustLoadingOrders(false); }
+                          }} className="btn btn-primary" style={{fontSize:11,padding:'4px 10px',marginRight:4}} title="View Transactions">Transactions</button>
+                          <button onClick={() => {
+                            setCustEditing(c);
+                            setCustForm({ name:c.name||'', email:c.email||'', phone:c.phone||'', address:c.address||'', credit_limit:String(c.credit_limit||0) });
+                            setCustShowForm(true);
+                          }} className="btn btn-secondary" style={{fontSize:11,padding:'4px 10px',marginRight:4}} title="Edit Customer">Edit</button>
+                          {c.is_active!==false ? (
+                            <button onClick={async () => {
+                              if (!window.confirm(`Deactivate customer "${c.name}"?`)) return;
+                              try {
+                                const token = localStorage.getItem('access_token');
+                                const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+                                const res = await fetch(`/api/sales/customers/${c.id}`, { method:'DELETE', headers });
+                                if (!res.ok) throw new Error('Failed');
+                                notify('Customer deactivated','success'); fetchData('customers');
+                              } catch(err) { notify(err.message,'error'); }
+                            }} className="btn btn-danger" style={{fontSize:11,padding:'4px 10px',background:'#e74c3c',color:'#fff',border:'none'}} title="Deactivate Customer">Deactivate</button>
+                          ) : (
+                            <button onClick={async () => {
+                              try {
+                                const token = localStorage.getItem('access_token');
+                                const headers = { 'Content-Type':'application/json' };
+                                if (token) headers['Authorization'] = `Bearer ${token}`;
+                                const res = await fetch(`/api/sales/customers/${c.id}`, { method:'PUT', headers, body:JSON.stringify({is_active:true}) });
+                                if (!res.ok) throw new Error('Failed');
+                                notify('Customer reactivated','success'); fetchData('customers');
+                              } catch(err) { notify(err.message,'error'); }
+                            }} className="btn btn-success" style={{fontSize:11,padding:'4px 10px'}} title="Reactivate Customer">Reactivate</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {(data.customers||[]).length === 0 && <p style={{textAlign:'center',padding:30,color:'#aaa'}}>No customers yet. Click "+ New Customer" to register one.</p>}
             </div>
           </div>
         )}
