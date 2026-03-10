@@ -2800,9 +2800,19 @@ function AppMain({ currentUser = null }) {
                     <h3 style={{margin:0,fontSize:18,color:'#2c3e50'}}>Product Price List</h3>
                     <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                       <button onClick={() => {
+                        const link = document.createElement('a');
+                        link.href = '/api/products/price-list-pdf';
+                        link.download = 'Bonnesante_Price_List.pdf';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        notify('Downloading PDF...', 'info');
+                      }} className="btn" style={{background:'#e74c3c',color:'#fff',border:'none',padding:'8px 16px',borderRadius:6,fontWeight:600,cursor:'pointer'}}>Download PDF</button>
+                      <button onClick={() => {
                         const printArea = document.getElementById('price-list-printable');
                         if (!printArea) return;
                         const win = window.open('', '_blank');
+                        if (!win) { notify('Popup blocked! Use Download PDF instead.', 'error'); return; }
                         win.document.write(`<!DOCTYPE html><html><head><title>Bonnesante Medicals - Product Price List</title><style>
                           @page { size: A4 portrait; margin: 15mm; }
                           * { margin:0; padding:0; box-sizing:border-box; }
