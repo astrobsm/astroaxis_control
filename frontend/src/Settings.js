@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import API_BASE_URL from './config';
+import { authedFetch } from './utils/api';
 
 function Settings({ currentUser }) {
   const [activeTab, setActiveTab] = useState('general');
@@ -26,7 +27,7 @@ function Settings({ currentUser }) {
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/settings/`);
+      const response = await authedFetch(`${API_BASE_URL}/api/settings/`);
       const data = await response.json();
       setSettings(data);
     } catch (error) {
@@ -38,7 +39,7 @@ function Settings({ currentUser }) {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/users`);
+      const response = await authedFetch(`${API_BASE_URL}/api/auth/users`);
       if (!response.ok) {
         console.warn('Users endpoint not available yet');
         setUsers([]);
@@ -54,7 +55,7 @@ function Settings({ currentUser }) {
 
   const fetchPermissions = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/permissions/`);
+      const response = await authedFetch(`${API_BASE_URL}/api/permissions/`);
       if (!response.ok) {
         console.warn('Permissions endpoint not available yet');
         setPermissions([]);
@@ -70,7 +71,7 @@ function Settings({ currentUser }) {
 
   const fetchModules = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/permissions/modules`);
+      const response = await authedFetch(`${API_BASE_URL}/api/permissions/modules`);
       if (!response.ok) {
         console.warn('Modules endpoint not available yet');
         setModules({});
@@ -86,7 +87,7 @@ function Settings({ currentUser }) {
 
   const fetchUserPermissions = async (userId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/permissions/user/${userId}`);
+      const response = await authedFetch(`${API_BASE_URL}/api/permissions/user/${userId}`);
       if (!response.ok) {
         console.warn('User permissions endpoint not available yet');
         setUserPermissions([]);
@@ -105,7 +106,7 @@ function Settings({ currentUser }) {
     setMessage('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/settings/`, {
+      const response = await authedFetch(`${API_BASE_URL}/api/settings/`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
@@ -133,7 +134,7 @@ function Settings({ currentUser }) {
     setMessage('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/permissions/grant`, {
+      const response = await authedFetch(`${API_BASE_URL}/api/permissions/grant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -5,7 +5,11 @@ from typing import List, Optional
 import re
 from datetime import datetime
 
+import uuid
+from app.models import User
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.services.inventory import apply_stock_movement
 from app.schemas import (
     RawMaterialCreate,
     RawMaterialUpdate,
@@ -76,7 +80,8 @@ def _row_to_dict(row):
 @router.post('/')
 async def create_raw_material(
     material_data: RawMaterialCreate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Create a new raw material (SKU auto-generated if not provided)"""
     data = material_data.model_dump()
@@ -125,20 +130,32 @@ async def create_raw_material(
     row = result.fetchone()
     rm_id = str(row.id)
 
-    # Auto-create stock_levels entry in default (first) warehouse
+    # Auto-create the stock_levels entry in the default (first) warehouse.
+    # Opening stock used to be inserted straight into the balance with no
+    # corresponding movement, so the material's very first quantity had no
+    # ledger entry -- replaying the ledger could never reproduce the balance,
+    # and the origin of that stock was unauditable.
     if opening_stock > 0:
         wh_result = await session.execute(text("SELECT id FROM warehouses ORDER BY name LIMIT 1"))
         wh_row = wh_result.fetchone()
         if wh_row:
+            await apply_stock_movement(
+                session,
+                warehouse_id=wh_row.id,
+                raw_material_id=uuid.UUID(rm_id),
+                movement_type='IN',
+                quantity=opening_stock,
+                unit_cost=data.get('unit_cost'),
+                reference=f"OPENING-{row.sku}",
+                notes="Opening stock recorded at raw material creation",
+                created_by=current_user.id,
+            )
             await session.execute(
-                text("""
-                    INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock, min_stock, updated_at)
-                    VALUES (gen_random_uuid(), :wh_id, :rm_id::uuid, :stock, :min_stock, NOW())
-                """),
+                text("""UPDATE stock_levels SET min_stock = :min_stock
+                         WHERE warehouse_id = :wh_id AND raw_material_id = :rm_id::uuid"""),
                 {
                     "wh_id": str(wh_row.id),
                     "rm_id": rm_id,
-                    "stock": opening_stock,
                     "min_stock": float(data.get('reorder_level') or 0),
                 }
             )
@@ -154,7 +171,7 @@ async def create_raw_material(
 @router.get('/')
 async def list_raw_materials(
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
+    size: int = Query(50, ge=1, le=1000),
     search: Optional[str] = Query(None, description="Search by SKU or name"),
     session: AsyncSession = Depends(get_session)
 ):

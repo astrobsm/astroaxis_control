@@ -9,9 +9,12 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.services.inventory import (
+    apply_stock_movement, transfer_stock, get_available_stock)
 from app.models import (
     StockLevel, StockMovement, DamagedStock, ReturnedStock,
-    Product, RawMaterial, Warehouse, ProductPricing
+    Product, RawMaterial, Warehouse, ProductPricing, User
 )
 
 router = APIRouter(prefix='/api/stock-management')
@@ -51,51 +54,37 @@ class TransferRequest(BaseModel):
 @router.post('/product-intake')
 async def product_stock_intake(
     request: ProductIntakeRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Record product stock intake"""
     try:
-        # Create stock movement
         unit_label = request.unit or 'units'
-        movement = StockMovement(
+        movement_id = await apply_stock_movement(
+            session,
             warehouse_id=request.warehouse_id,
             product_id=request.product_id,
             movement_type='IN',
             quantity=Decimal(str(request.quantity)),
             unit_cost=Decimal(str(request.unit_cost)),
             reference=f"Supplier: {request.supplier or 'N/A'}" + (f", Batch: {request.batch_number}" if request.batch_number else ""),
-            notes=f"Unit: {unit_label}, Qty: {request.quantity} {unit_label}" + (f". {request.notes}" if request.notes else "")
+            notes=f"Unit: {unit_label}, Qty: {request.quantity} {unit_label}" + (f". {request.notes}" if request.notes else ""),
+            created_by=current_user.id,
         )
-        session.add(movement)
-        
-        # Update or create stock level
-        stock_level_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == request.warehouse_id, StockLevel.product_id == request.product_id)
-            )
-        )
-        stock_level = stock_level_result.scalars().first()
-        
-        if stock_level:
-            stock_level.current_stock += Decimal(str(request.quantity))
-            stock_level.updated_at = datetime.now(timezone.utc)
-        else:
-            stock_level = StockLevel(
-                warehouse_id=request.warehouse_id,
-                product_id=request.product_id,
-                current_stock=Decimal(str(request.quantity))
-            )
-            session.add(stock_level)
-        
+        new_level = await get_available_stock(
+            session, warehouse_id=request.warehouse_id, product_id=request.product_id)
+
         await session.commit()
-        await session.refresh(movement)
-        
+
         return {
             "success": True,
             "message": f"Stock intake recorded: {request.quantity} {unit_label} added",
-            "movement_id": str(movement.id),
-            "new_stock_level": float(stock_level.current_stock)
+            "movement_id": str(movement_id),
+            "new_stock_level": float(new_level)
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording stock intake: {str(e)}")
@@ -105,50 +94,36 @@ async def product_stock_intake(
 @router.post('/raw-material-intake')
 async def raw_material_stock_intake(
     request: RawMaterialIntakeRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Record raw material stock intake"""
     try:
-        # Create stock movement
-        movement = StockMovement(
+        movement_id = await apply_stock_movement(
+            session,
             warehouse_id=request.warehouse_id,
             raw_material_id=request.raw_material_id,
             movement_type='IN',
             quantity=Decimal(str(request.quantity)),
             unit_cost=Decimal(str(request.unit_cost)),
             reference=f"Supplier: {request.supplier or 'N/A'}" + (f", Batch: {request.batch_number}" if request.batch_number else ""),
-            notes=request.notes
+            notes=request.notes,
+            created_by=current_user.id,
         )
-        session.add(movement)
-        
-        # Update or create stock level
-        stock_level_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == request.warehouse_id, StockLevel.raw_material_id == request.raw_material_id)
-            )
-        )
-        stock_level = stock_level_result.scalars().first()
-        
-        if stock_level:
-            stock_level.current_stock += Decimal(str(request.quantity))
-            stock_level.updated_at = datetime.now(timezone.utc)
-        else:
-            stock_level = StockLevel(
-                warehouse_id=request.warehouse_id,
-                raw_material_id=request.raw_material_id,
-                current_stock=Decimal(str(request.quantity))
-            )
-            session.add(stock_level)
-        
+        new_level = await get_available_stock(
+            session, warehouse_id=request.warehouse_id, raw_material_id=request.raw_material_id)
+
         await session.commit()
-        await session.refresh(movement)
-        
+
         return {
             "success": True,
             "message": f"Raw material intake recorded: {request.quantity} units added",
-            "movement_id": str(movement.id),
-            "new_stock_level": float(stock_level.current_stock)
+            "movement_id": str(movement_id),
+            "new_stock_level": float(new_level)
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording raw material intake: {str(e)}")
@@ -228,7 +203,8 @@ class StockAdjustmentRequest(BaseModel):
 @router.put('/adjust-stock-level')
 async def adjust_stock_level(
     req: StockAdjustmentRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Admin-only: Adjust the current stock level for a product."""
     try:
@@ -247,38 +223,54 @@ async def adjust_stock_level(
         if not row:
             raise HTTPException(status_code=404, detail="Stock level record not found")
 
-        old_stock = float(row.current_stock or 0)
+        if req.new_stock < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Adjusted stock cannot be negative.",
+            )
+
+        # Re-read the balance under a row lock before computing the delta.
+        #
+        # This endpoint used to compute `adjustment = new_stock - old_stock`
+        # from an UNLOCKED read taken when the admin opened the screen, then
+        # force `current_stock = new_stock` absolutely. If a sale committed in
+        # between, submitting the on-screen figure as a no-op silently erased
+        # that sale from the balance while its OUT movement stayed in the
+        # ledger -- and the audit note read "100.0 -> 100.0", so the review
+        # trail showed nothing had happened.
+        #
+        # Locking first, then expressing the change as a relative movement,
+        # means a concurrent sale is reflected rather than overwritten.
+        locked = (await session.execute(
+            text("SELECT current_stock FROM stock_levels WHERE id = :slid FOR UPDATE"),
+            {"slid": str(req.stock_level_id)}
+        )).fetchone()
+
+        old_stock = float(locked.current_stock or 0)
         adjustment = req.new_stock - old_stock
 
-        # Update stock level
-        await session.execute(
-            text("UPDATE stock_levels SET current_stock = :ns, updated_at = NOW() WHERE id = :slid"),
-            {"ns": req.new_stock, "slid": str(req.stock_level_id)}
-        )
+        if adjustment == 0:
+            await session.rollback()
+            return {
+                "message": f"No change: {row.item_name} is already at {old_stock}",
+                "item_name": row.item_name,
+                "old_stock": old_stock,
+                "new_stock": old_stock,
+                "adjustment": 0,
+            }
 
-        # Record a stock movement for audit trail
-        import uuid as uuid_mod
-        movement_type = 'IN' if adjustment >= 0 else 'OUT'
-        mov_params = {
-            "id": str(uuid_mod.uuid4()),
-            "warehouse_id": str(row.warehouse_id),
-            "quantity": abs(adjustment),
-            "unit_cost": 0,
-            "movement_type": movement_type,
-            "reference": f"ADMIN-ADJUSTMENT",
-            "notes": f"Admin stock adjustment for {row.item_name} ({row.item_sku}): {old_stock} -> {req.new_stock}. Reason: {req.reason or 'N/A'}",
-        }
-        if row.product_id:
-            mov_params["product_id"] = str(row.product_id)
-            mov_params["raw_material_id"] = None
-        else:
-            mov_params["raw_material_id"] = str(row.raw_material_id)
-            mov_params["product_id"] = None
-
-        await session.execute(
-            text("INSERT INTO stock_movements (id, warehouse_id, product_id, raw_material_id, quantity, unit_cost, movement_type, reference, notes) "
-                 "VALUES (:id, :warehouse_id, :product_id, :raw_material_id, :quantity, :unit_cost, :movement_type, :reference, :notes)"),
-            mov_params
+        await apply_stock_movement(
+            session,
+            warehouse_id=row.warehouse_id,
+            product_id=row.product_id,
+            raw_material_id=None if row.product_id else row.raw_material_id,
+            movement_type='ADJUST_IN' if adjustment > 0 else 'ADJUST_OUT',
+            quantity=abs(adjustment),
+            reference="ADMIN-ADJUSTMENT",
+            notes=(f"Admin stock adjustment for {row.item_name} ({row.item_sku}): "
+                   f"{old_stock} -> {req.new_stock}. "
+                   f"Reason: {req.reason or 'N/A'}"),
+            created_by=current_user.id,
         )
 
         await session.commit()
@@ -290,6 +282,9 @@ async def adjust_stock_level(
             "adjustment": adjustment
         }
     except HTTPException:
+        raise
+    except HTTPException:
+        await session.rollback()
         raise
     except Exception as e:
         await session.rollback()
@@ -371,7 +366,8 @@ async def record_damaged_product(
     damage_type: str,
     damage_reason: Optional[str] = None,
     notes: Optional[str] = None,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Record damaged product"""
     try:
@@ -386,38 +382,35 @@ async def record_damaged_product(
         )
         session.add(damaged)
         
-        # Create stock movement (OUT)
-        movement = StockMovement(
+        # The movement used to be written unconditionally while the balance
+        # was only updated "if stock_level:", and the subtraction had no
+        # sufficiency check -- damaging 100 units of a 10-unit holding
+        # returned HTTP 200 with "remaining_stock": -90. The service rejects
+        # that and keeps balance and ledger in step.
+        await apply_stock_movement(
+            session,
             warehouse_id=warehouse_id,
             product_id=product_id,
             movement_type='DAMAGE',
             quantity=Decimal(str(quantity)),
             reference=f"Damage: {damage_type}",
-            notes=damage_reason
+            notes=damage_reason,
+            created_by=current_user.id,
         )
-        session.add(movement)
-        
-        # Update stock level
-        stock_level_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == warehouse_id, StockLevel.product_id == product_id)
-            )
-        )
-        stock_level = stock_level_result.scalars().first()
-        
-        if stock_level:
-            stock_level.current_stock -= Decimal(str(quantity))
-            stock_level.updated_at = datetime.now(timezone.utc)
-        
+        remaining = await get_available_stock(
+            session, warehouse_id=warehouse_id, product_id=product_id)
+
         await session.commit()
-        await session.refresh(damaged)
-        
+
         return {
             "success": True,
             "message": f"Damaged product recorded: {quantity} units",
             "damaged_id": str(damaged.id),
-            "remaining_stock": float(stock_level.current_stock) if stock_level else 0
+            "remaining_stock": float(remaining)
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording damaged product: {str(e)}")
@@ -432,7 +425,8 @@ async def record_damaged_raw_material(
     damage_type: str,
     damage_reason: Optional[str] = None,
     notes: Optional[str] = None,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Record damaged raw material"""
     try:
@@ -447,38 +441,35 @@ async def record_damaged_raw_material(
         )
         session.add(damaged)
         
-        # Create stock movement (DAMAGE)
-        movement = StockMovement(
+        # The movement used to be written unconditionally while the balance
+        # was only updated "if stock_level:", and the subtraction had no
+        # sufficiency check -- damaging 100 units of a 10-unit holding
+        # returned HTTP 200 with "remaining_stock": -90. The service rejects
+        # that and keeps balance and ledger in step.
+        await apply_stock_movement(
+            session,
             warehouse_id=warehouse_id,
             raw_material_id=raw_material_id,
             movement_type='DAMAGE',
             quantity=Decimal(str(quantity)),
             reference=f"Damage: {damage_type}",
-            notes=damage_reason
+            notes=damage_reason,
+            created_by=current_user.id,
         )
-        session.add(movement)
-        
-        # Update stock level
-        stock_level_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == warehouse_id, StockLevel.raw_material_id == raw_material_id)
-            )
-        )
-        stock_level = stock_level_result.scalars().first()
-        
-        if stock_level:
-            stock_level.current_stock -= Decimal(str(quantity))
-            stock_level.updated_at = datetime.now(timezone.utc)
-        
+        remaining = await get_available_stock(
+            session, warehouse_id=warehouse_id, raw_material_id=raw_material_id)
+
         await session.commit()
-        await session.refresh(damaged)
-        
+
         return {
             "success": True,
             "message": f"Damaged raw material recorded: {quantity} units",
             "damaged_id": str(damaged.id),
-            "remaining_stock": float(stock_level.current_stock) if stock_level else 0
+            "remaining_stock": float(remaining)
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording damaged raw material: {str(e)}")
@@ -495,7 +486,8 @@ async def record_returned_product(
     customer_name: Optional[str] = None,
     refund_amount: Optional[float] = 0,
     notes: Optional[str] = None,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Record product return from customer"""
     try:
@@ -511,46 +503,35 @@ async def record_returned_product(
         )
         session.add(returned)
         
-        # Create stock movement (RETURN)
-        movement = StockMovement(
-            warehouse_id=warehouse_id,
-            product_id=product_id,
-            movement_type='RETURN',
-            quantity=Decimal(str(quantity)),
-            reference=f"Return: {return_reason}",
-            notes=f"Condition: {return_condition}"
-        )
-        session.add(movement)
-        
-        # Update stock level only if condition is good
+        # The RETURN movement used to be written unconditionally while the
+        # balance was only incremented for 'good' condition. Since RETURN is
+        # an inbound type, replaying the ledger then over-stated stock by the
+        # full quantity of every damaged return, forever. Movement and balance
+        # now move together, or not at all.
         if return_condition == 'good':
-            stock_level_result = await session.execute(
-                select(StockLevel).where(
-                    and_(StockLevel.warehouse_id == warehouse_id, StockLevel.product_id == product_id)
-                )
+            await apply_stock_movement(
+                session,
+                warehouse_id=warehouse_id,
+                product_id=product_id,
+                movement_type='RETURN',
+                quantity=Decimal(str(quantity)),
+                reference=f"Return: {return_reason}",
+                notes=f"Condition: {return_condition}",
+                created_by=current_user.id,
             )
-            stock_level = stock_level_result.scalars().first()
-            
-            if stock_level:
-                stock_level.current_stock += Decimal(str(quantity))
-                stock_level.updated_at = datetime.now(timezone.utc)
-            else:
-                stock_level = StockLevel(
-                    warehouse_id=warehouse_id,
-                    product_id=product_id,
-                    current_stock=Decimal(str(quantity))
-                )
-                session.add(stock_level)
-        
+
         await session.commit()
         await session.refresh(returned)
-        
+
         return {
             "success": True,
             "message": f"Product return recorded: {quantity} units ({return_condition})",
             "returned_id": str(returned.id),
             "restocked": return_condition == 'good'
         }
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error recording product return: {str(e)}")
@@ -560,7 +541,8 @@ async def record_returned_product(
 @router.post('/transfer')
 async def transfer_product(
     request: TransferRequest,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Transfer product quantity from one warehouse to another atomically"""
     if request.from_warehouse_id == request.to_warehouse_id:
@@ -570,74 +552,39 @@ async def transfer_product(
         raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
 
     try:
-        # Fetch source stock level
-        src_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == request.from_warehouse_id, StockLevel.product_id == request.product_id)
-            )
-        )
-        src_level = src_result.scalars().first()
-
-        if not src_level or src_level.current_stock < Decimal(str(request.quantity)):
-            raise HTTPException(status_code=400, detail="Insufficient stock in source warehouse")
-
-        # Fetch destination stock level
-        dst_result = await session.execute(
-            select(StockLevel).where(
-                and_(StockLevel.warehouse_id == request.to_warehouse_id, StockLevel.product_id == request.product_id)
-            )
-        )
-        dst_level = dst_result.scalars().first()
-
-        # Perform updates
-        src_level.current_stock -= Decimal(str(request.quantity))
-        src_level.updated_at = datetime.now(timezone.utc)
-
-        if dst_level:
-            dst_level.current_stock += Decimal(str(request.quantity))
-            dst_level.updated_at = datetime.now(timezone.utc)
-        else:
-            dst_level = StockLevel(
-                warehouse_id=request.to_warehouse_id,
-                product_id=request.product_id,
-                current_stock=Decimal(str(request.quantity))
-            )
-            session.add(dst_level)
-
-        # Record stock movements
-        out_movement = StockMovement(
-            warehouse_id=request.from_warehouse_id,
+        # Both legs through the locking service. The sufficiency check used to
+        # run against an unlocked read taken before the decrement, so
+        # concurrent transfers could each pass it and oversell the source.
+        out_movement_id, in_movement_id = await transfer_stock(
+            session,
+            from_warehouse_id=request.from_warehouse_id,
+            to_warehouse_id=request.to_warehouse_id,
             product_id=request.product_id,
-            movement_type='TRANSFER_OUT',
             quantity=Decimal(str(request.quantity)),
-            reference=request.reference or f"Transfer to {request.to_warehouse_id}",
-            notes=request.notes
+            reference=request.reference or f"Transfer {request.from_warehouse_id} -> {request.to_warehouse_id}",
+            notes=request.notes,
+            created_by=current_user.id,
         )
-        in_movement = StockMovement(
-            warehouse_id=request.to_warehouse_id,
-            product_id=request.product_id,
-            movement_type='TRANSFER_IN',
-            quantity=Decimal(str(request.quantity)),
-            reference=request.reference or f"Transfer from {request.from_warehouse_id}",
-            notes=request.notes
-        )
-        session.add(out_movement)
-        session.add(in_movement)
+
+        src_new = await get_available_stock(
+            session, warehouse_id=request.from_warehouse_id, product_id=request.product_id)
+        dst_new = await get_available_stock(
+            session, warehouse_id=request.to_warehouse_id, product_id=request.product_id)
 
         await session.commit()
-        # refresh levels for response
-        await session.refresh(src_level)
-        await session.refresh(dst_level)
 
         return {
             "success": True,
             "message": f"Transferred {request.quantity} units",
-            "from_warehouse_new_level": float(src_level.current_stock),
-            "to_warehouse_new_level": float(dst_level.current_stock),
-            "out_movement_id": str(out_movement.id),
-            "in_movement_id": str(in_movement.id)
+            "from_warehouse_new_level": float(src_new),
+            "to_warehouse_new_level": float(dst_new),
+            "out_movement_id": str(out_movement_id),
+            "in_movement_id": str(in_movement_id)
         }
     except HTTPException:
+        raise
+    except HTTPException:
+        await session.rollback()
         raise
     except Exception as e:
         await session.rollback()

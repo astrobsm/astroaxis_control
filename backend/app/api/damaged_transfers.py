@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from app.db import get_session
 from app.api.auth import get_current_user
+from app.services.inventory import apply_stock_movement
 
 router = APIRouter(prefix='/api/damaged-transfers')
 
@@ -176,61 +177,21 @@ async def create_damaged_transfer(
     transfer_number = f"DMG-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     try:
-        # Deduct from source warehouse stock
-        if product_id:
-            stock_r = await session.execute(text("""
-                SELECT current_stock FROM stock_levels
-                WHERE warehouse_id = :wid AND product_id = :pid
-            """), {"wid": from_wh, "pid": product_id})
-            stock_row = stock_r.fetchone()
-            available = float(stock_row.current_stock) if stock_row else 0
-            if available < quantity:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient stock. Available: {available}, Requested: {quantity}"
-                )
-            await session.execute(text("""
-                UPDATE stock_levels SET current_stock = current_stock - :qty
-                WHERE warehouse_id = :wid AND product_id = :pid
-            """), {"qty": quantity, "wid": from_wh, "pid": product_id})
-
-            # Record stock movement OUT
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, product_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :pid, 'DAMAGE_TRANSFER_OUT', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": from_wh, "pid": product_id, "qty": quantity,
-                "ref": transfer_number,
-                "notes": f"Damaged transfer to destination: {damage_type} - {damage_reason}",
-                "uid": user_id
-            })
-
-        elif raw_material_id:
-            stock_r = await session.execute(text("""
-                SELECT current_stock FROM stock_levels
-                WHERE warehouse_id = :wid AND raw_material_id = :rid
-            """), {"wid": from_wh, "rid": raw_material_id})
-            stock_row = stock_r.fetchone()
-            available = float(stock_row.current_stock) if stock_row else 0
-            if available < quantity:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient stock. Available: {available}, Requested: {quantity}"
-                )
-            await session.execute(text("""
-                UPDATE stock_levels SET current_stock = current_stock - :qty
-                WHERE warehouse_id = :wid AND raw_material_id = :rid
-            """), {"qty": quantity, "wid": from_wh, "rid": raw_material_id})
-
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, raw_material_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :rid, 'DAMAGE_TRANSFER_OUT', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": from_wh, "rid": raw_material_id, "qty": quantity,
-                "ref": transfer_number,
-                "notes": f"Damaged transfer to destination: {damage_type} - {damage_reason}",
-                "uid": user_id
-            })
+        # Deduct from the source warehouse. Both branches previously read the
+        # balance unlocked, checked sufficiency, then issued a separate UPDATE
+        # -- so concurrent transfers could each pass the check and drive the
+        # source negative. One locked path handles both item types.
+        await apply_stock_movement(
+            session,
+            warehouse_id=from_wh,
+            product_id=product_id or None,
+            raw_material_id=None if product_id else (raw_material_id or None),
+            movement_type='DAMAGE_TRANSFER_OUT',
+            quantity=quantity,
+            reference=transfer_number,
+            notes=f"Damaged transfer to destination: {damage_type} - {damage_reason}",
+            created_by=user_id,
+        )
 
         # Create the transfer record with status 'pending' (needs receipt)
         await session.execute(text("""
@@ -307,89 +268,65 @@ async def receive_damaged_transfer(
     await _ensure_table(session)
     user_id, user_role, user_name = await _auth_user(authorization, session)
 
-    result = await session.execute(text(
-        "SELECT * FROM damaged_product_transfers WHERE id = :tid"
-    ), {"tid": transfer_id})
-    row = result.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-    if row.status == 'received':
-        raise HTTPException(status_code=400, detail="Transfer already received")
-    if row.status == 'cancelled':
-        raise HTTPException(status_code=400, detail="Transfer was cancelled")
-
     receipt_notes = data.get('receipt_notes', '')
     receipt_condition = data.get('receipt_condition', 'as_expected')
 
     try:
-        # Add stock to destination warehouse
-        quantity = float(row.quantity)
-        if row.product_id:
-            # Check if stock level exists at destination
-            dest_stock = await session.execute(text("""
-                SELECT id, current_stock FROM stock_levels
-                WHERE warehouse_id = :wid AND product_id = :pid
-            """), {"wid": str(row.to_warehouse_id), "pid": str(row.product_id)})
-            dest_row = dest_stock.fetchone()
-            if dest_row:
-                await session.execute(text("""
-                    UPDATE stock_levels SET current_stock = current_stock + :qty
-                    WHERE warehouse_id = :wid AND product_id = :pid
-                """), {"qty": quantity, "wid": str(row.to_warehouse_id), "pid": str(row.product_id)})
-            else:
-                await session.execute(text("""
-                    INSERT INTO stock_levels (id, warehouse_id, product_id, current_stock)
-                    VALUES (gen_random_uuid(), :wid, :pid, :qty)
-                """), {"wid": str(row.to_warehouse_id), "pid": str(row.product_id), "qty": quantity})
-
-            # Record stock movement IN
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, product_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :pid, 'DAMAGE_TRANSFER_IN', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": str(row.to_warehouse_id), "pid": str(row.product_id),
-                "qty": quantity, "ref": row.transfer_number,
-                "notes": f"Damaged transfer received: {receipt_condition} - {receipt_notes}",
-                "uid": user_id,
-            })
-
-        elif row.raw_material_id:
-            dest_stock = await session.execute(text("""
-                SELECT id, current_stock FROM stock_levels
-                WHERE warehouse_id = :wid AND raw_material_id = :rid
-            """), {"wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id)})
-            dest_row = dest_stock.fetchone()
-            if dest_row:
-                await session.execute(text("""
-                    UPDATE stock_levels SET current_stock = current_stock + :qty
-                    WHERE warehouse_id = :wid AND raw_material_id = :rid
-                """), {"qty": quantity, "wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id)})
-            else:
-                await session.execute(text("""
-                    INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock)
-                    VALUES (gen_random_uuid(), :wid, :rid, :qty)
-                """), {"wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id), "qty": quantity})
-
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, raw_material_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :rid, 'DAMAGE_TRANSFER_IN', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id),
-                "qty": quantity, "ref": row.transfer_number,
-                "notes": f"Damaged transfer received: {receipt_condition} - {receipt_notes}",
-                "uid": user_id,
-            })
-
-        # Mark transfer as received
-        await session.execute(text("""
+        # Claim the transfer atomically BEFORE moving any stock.
+        #
+        # The previous flow read the row, checked row.status == 'received',
+        # then set the status ~70 lines later. That gap is a TOCTOU window: a
+        # double-clicked button or a retried request had both callers pass the
+        # check, both add stock, and both write a DAMAGE_TRANSFER_IN movement.
+        # The destination gained twice the shipment and the ledger held two
+        # IN rows under one transfer_number, so even the audit trail could not
+        # distinguish the duplicate from a legitimate split receipt.
+        #
+        # Making the status change a conditional UPDATE and gating everything
+        # else on its rowcount means exactly one caller can ever proceed.
+        claimed = await session.execute(text("""
             UPDATE damaged_product_transfers
-            SET status = 'received', received_by = :uid,
-                received_at = NOW(), receipt_notes = :rn, receipt_condition = :rc
-            WHERE id = :tid
+               SET status = 'received', received_by = :uid,
+                   received_at = NOW(), receipt_notes = :rn,
+                   receipt_condition = :rc
+             WHERE id = :tid AND status NOT IN ('received', 'cancelled')
+         RETURNING id, transfer_number, quantity, product_id,
+                   raw_material_id, to_warehouse_id
         """), {
             "uid": user_id, "rn": receipt_notes,
             "rc": receipt_condition, "tid": transfer_id,
         })
+        row = claimed.fetchone()
+
+        if row is None:
+            # Either it does not exist, or someone else already claimed it.
+            existing = (await session.execute(text(
+                "SELECT status FROM damaged_product_transfers WHERE id = :tid"
+            ), {"tid": transfer_id})).fetchone()
+            await session.rollback()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Transfer not found")
+            if existing.status == 'received':
+                raise HTTPException(status_code=400, detail="Transfer already received")
+            if existing.status == 'cancelled':
+                raise HTTPException(status_code=400, detail="Transfer was cancelled")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transfer could not be received (status: {existing.status})",
+            )
+
+        # Only the caller that won the claim books the stock.
+        await apply_stock_movement(
+            session,
+            warehouse_id=row.to_warehouse_id,
+            product_id=row.product_id,
+            raw_material_id=row.raw_material_id,
+            movement_type='DAMAGE_TRANSFER_IN',
+            quantity=float(row.quantity),
+            reference=row.transfer_number,
+            notes=f"Damaged transfer received: {receipt_condition} - {receipt_notes}",
+            created_by=user_id,
+        )
 
         await session.commit()
         return {

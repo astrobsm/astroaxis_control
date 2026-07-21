@@ -58,9 +58,32 @@ class NotificationType:
     PAYMENT = "payment"
     SYSTEM = "system"
 
-# In-memory subscription store (in production, use database)
-# This will be migrated to database model
-push_subscriptions: Dict[str, Dict[str, Any]] = {}
+# Persistent subscription store backed by JSON file so subscriptions
+# survive backend restarts.
+SUBSCRIPTIONS_FILE = Path(__file__).parent.parent.parent / "push_subscriptions.json"
+
+
+def _load_subscriptions() -> Dict[str, Dict[str, Any]]:
+    try:
+        if SUBSCRIPTIONS_FILE.exists():
+            with open(SUBSCRIPTIONS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception as e:
+        print(f"[notifications] Failed to load subscriptions: {e}")
+    return {}
+
+
+def _save_subscriptions() -> None:
+    try:
+        with open(SUBSCRIPTIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(push_subscriptions, f, indent=2, default=str)
+    except Exception as e:
+        print(f"[notifications] Failed to save subscriptions: {e}")
+
+
+push_subscriptions: Dict[str, Dict[str, Any]] = _load_subscriptions()
 
 
 @router.post("/subscribe")
@@ -82,6 +105,7 @@ async def subscribe_to_push(
             "subscribed_at": datetime.utcnow().isoformat(),
             "active": True
         }
+        _save_subscriptions()
         
         # TODO: In production, save to database with user_id association
         # await save_subscription_to_db(session, user_id, subscription)
@@ -107,6 +131,7 @@ async def unsubscribe_from_push(
         
         if endpoint in push_subscriptions:
             del push_subscriptions[endpoint]
+            _save_subscriptions()
             
         return {
             "success": True,
@@ -234,8 +259,10 @@ async def broadcast_push_notification(payload: dict):
                     print(f"Push failed for {endpoint}: {e}")
             
             # Clean up failed subscriptions
-            for endpoint in failed_endpoints:
-                push_subscriptions.pop(endpoint, None)
+            if failed_endpoints:
+                for endpoint in failed_endpoints:
+                    push_subscriptions.pop(endpoint, None)
+                _save_subscriptions()
                 
         except ImportError:
             # pywebpush not installed - log the notification
@@ -310,3 +337,41 @@ async def notify_payment_received(order_number: str, amount: float, customer_nam
         "data": {"type": NotificationType.PAYMENT, "order": order_number}
     }
     await broadcast_push_notification(payload)
+
+
+async def notify_sale_created(order_number: str, customer_name: str, total_amount: float, line_count: int = 0):
+    """Send new sale created notification"""
+    body = f"New sale {order_number} for {customer_name} — ₦{total_amount:,.2f}"
+    if line_count:
+        body += f" ({line_count} item{'s' if line_count != 1 else ''})"
+    payload = {
+        "title": "New Sale",
+        "body": body,
+        "icon": "/logo192.png",
+        "url": f"/sales?order={order_number}",
+        "tag": f"sale-{order_number}",
+        "data": {"type": NotificationType.ORDER_UPDATE, "order": order_number}
+    }
+    await broadcast_push_notification(payload)
+
+
+def fire_notification(coro):
+    """Fire-and-forget helper to schedule a notification coroutine without blocking.
+    Safe to call from request handlers; failures are swallowed and logged."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(_safe_run(coro))
+    except RuntimeError:
+        # No running loop — run synchronously as last resort
+        try:
+            asyncio.run(_safe_run(coro))
+        except Exception as e:
+            print(f"[notifications] fire_notification fallback failed: {e}")
+
+
+async def _safe_run(coro):
+    try:
+        await coro
+    except Exception as e:
+        print(f"[notifications] notification dispatch failed: {e}")

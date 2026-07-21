@@ -7,12 +7,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func, and_
 from app.db import get_session
+from app.services.receivables import (
+    record_payment, delete_payment as delete_payment_svc,
+    recompute_invoice_paid, reconciliation_report,
+    revenue_between, outstanding_receivables, ensure_invoice_for_order)
 from app.models import Invoice, InvoiceLine, Payment, SalesOrder, SalesOrderLine, Customer, Product, StockLevel, StockMovement
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional
 import uuid
+
+from app.api.notifications import fire_notification, notify_payment_received
 
 router = APIRouter(prefix='/api/payment-tracking')
 
@@ -96,30 +102,25 @@ async def create_invoice_from_order(
             )
             session.add(inv_line)
 
-        # Deduct stock if the order hasn't been confirmed yet (safety net)
+        # Deduct stock if the order hasn't been confirmed yet (safety net).
+        #
+        # The old version silently skipped the deduction when stock was
+        # insufficient (`if stock_level and current_stock >= quantity`) while
+        # still marking the order 'confirmed' -- so an under-stocked order was
+        # invoiced and confirmed with its goods never leaving inventory. Let
+        # the service raise instead, so the shortfall surfaces.
         if order.status not in ('confirmed', 'completed', 'shipped', 'delivered'):
             for line in lines:
-                quantity = Decimal(str(line.quantity))
-                stock_result = await session.execute(
-                    select(StockLevel).where(
-                        and_(
-                            StockLevel.warehouse_id == order.warehouse_id,
-                            StockLevel.product_id == line.product_id
-                        )
-                    )
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=order.warehouse_id,
+                    product_id=line.product_id,
+                    movement_type='OUT',
+                    quantity=Decimal(str(line.quantity)),
+                    reference=f"Invoice: {inv_number}",
+                    notes=f"Stock deducted on invoice generation for order {order.order_number}",
+                    created_by=order.created_by,
                 )
-                stock_level = stock_result.scalars().first()
-                if stock_level and stock_level.current_stock >= quantity:
-                    stock_level.current_stock -= quantity
-                    movement = StockMovement(
-                        warehouse_id=order.warehouse_id,
-                        product_id=line.product_id,
-                        movement_type='OUT',
-                        quantity=quantity,
-                        reference=f"Invoice: {inv_number}",
-                        notes=f"Stock deducted on invoice generation for order {order.order_number}"
-                    )
-                    session.add(movement)
             order.status = 'confirmed'
 
         await session.commit()
@@ -338,60 +339,59 @@ async def record_payment(
         else:
             payment_date = datetime.now(timezone.utc)
 
-        # Get invoice
-        inv_result = await session.execute(select(Invoice).where(Invoice.id == invoice_id))
-        inv = inv_result.scalars().first()
-        if not inv:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-
-        # Calculate current total paid
-        paid_result = await session.execute(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.invoice_id == invoice_id)
-        )
-        current_paid = float(paid_result.scalar())
-        total_amount = float(inv.total_amount or 0)
-        new_total_paid = current_paid + amount
-        new_balance = total_amount - new_total_paid
-
-        if new_balance < -0.01:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Payment of {amount:,.2f} exceeds remaining balance of {(total_amount - current_paid):,.2f}"
-            )
-
-        # Create payment record
-        payment = Payment(
-            id=uuid.uuid4(),
+        # Recording a payment locks the invoice, validates against the live
+        # SUM(payments), inserts the row, and recomputes every derived value
+        # (invoice.paid_amount, invoice.status, order.payment_status) from the
+        # payment rows.
+        #
+        # The old inline version read the paid total on an UNLOCKED invoice,
+        # so two operators recording the final payment at the same moment both
+        # saw paid=0, both passed the overpayment guard, and both inserted --
+        # leaving twice the invoice total in `payments` while paid_amount
+        # showed the correct figure. profits.py reads payments, so revenue
+        # doubled on that sale with nothing to indicate why.
+        result = await record_payment(
+            session,
             invoice_id=invoice_id,
+            amount=amount,
             payment_method=payment_method,
-            amount=Decimal(str(amount)),
-            payment_date=payment_date,
             reference=reference,
             notes=notes,
+            payment_date=payment_date,
         )
-        session.add(payment)
+        new_total_paid = float(result["total_paid"])
+        new_balance = float(result["balance"])
 
-        # Update invoice paid_amount and status
-        inv.paid_amount = Decimal(str(new_total_paid))
-        if new_balance <= 0.01:
-            inv.status = 'paid'
-        else:
-            inv.status = 'partial'
-
-        # Also update the linked sales order payment_status
-        if inv.sales_order_id:
-            order_result = await session.execute(
-                select(SalesOrder).where(SalesOrder.id == inv.sales_order_id)
-            )
-            order = order_result.scalars().first()
-            if order:
-                if new_balance <= 0.01:
-                    order.payment_status = 'paid'
-                    order.payment_date = payment_date
-                else:
-                    order.payment_status = 'partial'
+        inv = (await session.execute(
+            select(Invoice).where(Invoice.id == invoice_id))).scalars().first()
 
         await session.commit()
+
+        # Fire payment received notification (non-blocking)
+        try:
+            customer_name = "Customer"
+            order_number = getattr(inv, 'invoice_number', None) or str(inv.id)
+            if inv.sales_order_id:
+                so_res = await session.execute(
+                    select(SalesOrder).where(SalesOrder.id == inv.sales_order_id)
+                )
+                so = so_res.scalars().first()
+                if so:
+                    order_number = so.order_number or order_number
+                    if so.customer_id:
+                        cust_res = await session.execute(
+                            select(Customer).where(Customer.id == so.customer_id)
+                        )
+                        cust = cust_res.scalars().first()
+                        if cust and cust.name:
+                            customer_name = cust.name
+            fire_notification(notify_payment_received(
+                order_number=order_number,
+                amount=float(amount),
+                customer_name=customer_name,
+            ))
+        except Exception as _notif_err:
+            print(f"[payment_tracking] notification dispatch error: {_notif_err}")
 
         return {
             "message": f"Payment of NGN {amount:,.2f} recorded successfully",
@@ -424,49 +424,17 @@ async def delete_payment(
 ):
     """Delete a payment and recalculate invoice balance"""
     try:
-        pay_result = await session.execute(select(Payment).where(Payment.id == payment_id))
-        payment = pay_result.scalars().first()
-        if not payment:
-            raise HTTPException(status_code=404, detail="Payment not found")
-
-        invoice_id = payment.invoice_id
-        await session.delete(payment)
-
-        # Recalculate invoice
-        inv_result = await session.execute(select(Invoice).where(Invoice.id == invoice_id))
-        inv = inv_result.scalars().first()
-        if inv:
-            paid_result = await session.execute(
-                select(func.coalesce(func.sum(Payment.amount), 0))
-                .where(Payment.invoice_id == invoice_id)
-                .where(Payment.id != payment_id)
-            )
-            new_paid = float(paid_result.scalar())
-            inv.paid_amount = Decimal(str(new_paid))
-            balance = float(inv.total_amount or 0) - new_paid
-            if balance <= 0.01:
-                inv.status = 'paid'
-            elif new_paid > 0:
-                inv.status = 'partial'
-            else:
-                inv.status = 'pending'
-
-            # Update linked sales order
-            if inv.sales_order_id:
-                order_result = await session.execute(
-                    select(SalesOrder).where(SalesOrder.id == inv.sales_order_id)
-                )
-                order = order_result.scalars().first()
-                if order:
-                    if balance <= 0.01:
-                        order.payment_status = 'paid'
-                    elif new_paid > 0:
-                        order.payment_status = 'partial'
-                    else:
-                        order.payment_status = 'unpaid'
-
+        # Deletion recomputes the invoice from the payments that remain,
+        # rather than subtracting the deleted amount from a cached total.
+        result = await delete_payment_svc(session, payment_id=payment_id)
         await session.commit()
-        return {"message": "Payment deleted and balances recalculated"}
+        return {
+            "message": "Payment deleted and balances recalculated",
+            "invoice_id": str(result["invoice_id"]),
+            "total_paid": float(result["total_paid"]),
+            "balance": float(result["balance"]),
+            "status": result["status"],
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1161,3 +1129,35 @@ async def payment_reconciliation(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching reconciliation: {str(e)}")
+
+
+# ─── RECONCILIATION: are the derived caches in step with the payment rows? ───
+@router.get('/reconciliation/audit')
+async def revenue_reconciliation_audit(
+    session: AsyncSession = Depends(get_session)
+):
+    """Report every place the derived money values disagree with `payments`.
+
+    `payments` rows are the single source of truth for cash received;
+    invoices.paid_amount and sales_orders.payment_status are caches derived
+    from them. Anything reported here is historical drift created before that
+    rule was enforced -- most likely orders settled through the old
+    sales.py mark-paid path, which wrote no Payment row at all.
+
+    Run this before trusting any financial report, and before the accounting
+    module posts journals: a general ledger built on rows that do not
+    reconcile produces a trial balance that cannot be explained.
+    """
+    report = await reconciliation_report(session)
+    report["healthy"] = (report["drifted_count"] == 0
+                         and report["orphan_count"] == 0)
+    report["summary"] = (
+        "All invoices reconcile with their payment rows."
+        if report["healthy"] else
+        f"{report['drifted_count']} invoice(s) have a cached paid_amount that "
+        f"disagrees with their payments, and {report['orphan_count']} order(s) "
+        f"are flagged paid/partial with no invoice "
+        f"(₦{report['unrecognised_revenue']:,.2f} of revenue no profit report "
+        f"has ever seen)."
+    )
+    return report

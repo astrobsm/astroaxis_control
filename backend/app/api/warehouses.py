@@ -44,7 +44,7 @@ async def create_warehouse(
 @router.get('/', response_model=PaginatedResponse)
 async def list_warehouses(
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
+    size: int = Query(50, ge=1, le=1000),
     search: Optional[str] = Query(None, description="Search warehouses"),
     active_only: bool = Query(True, description="Show only active"),
     authorization: Optional[str] = Header(None),

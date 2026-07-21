@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './BulkUpload.css';
+import { authedFetch } from './utils/api';
 
 const BulkUpload = ({ module, onClose, onSuccess }) => {
   const [uploading, setUploading] = useState(false);
@@ -123,7 +124,7 @@ const BulkUpload = ({ module, onClose, onSuccess }) => {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const response = await fetch(config.uploadUrl, {
+      const response = await authedFetch(config.uploadUrl, {
         method: 'POST',
         body: formData
       });

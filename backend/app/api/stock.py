@@ -7,6 +7,8 @@ from decimal import Decimal
 import uuid
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.services.inventory import apply_stock_movement
 from app.models import (
     StockMovement, StockLevel, Product, RawMaterial, 
     Warehouse, User
@@ -32,50 +34,23 @@ async def update_stock_level(
     quantity_change: Decimal = 0,
     movement_type: str = "IN"
 ):
-    """Update stock level based on movement"""
-    # Find existing stock level
-    filters = [StockLevel.warehouse_id == warehouse_id]
-    if product_id:
-        filters.append(StockLevel.product_id == product_id)
-    if raw_material_id:
-        filters.append(StockLevel.raw_material_id == raw_material_id)
-    
-    result = await session.execute(
-        select(StockLevel).where(and_(*filters))
+    """Deprecated. Use app.services.inventory.apply_stock_movement instead.
+
+    Kept only so any remaining caller fails loudly rather than silently
+    writing a balance with no ledger entry, no row lock, and no negative-stock
+    guard -- which is what this function used to do.
+    """
+    raise HTTPException(
+        status_code=500,
+        detail="update_stock_level is deprecated; use "
+               "app.services.inventory.apply_stock_movement.",
     )
-    stock_level = result.scalar()
-    
-    if not stock_level:
-        # Create new stock level record
-        stock_level = StockLevel(
-            warehouse_id=warehouse_id,
-            product_id=product_id,
-            raw_material_id=raw_material_id,
-            current_stock=0,
-            reserved_stock=0,
-            min_stock=0,
-            max_stock=0
-        )
-        session.add(stock_level)
-    
-    # Calculate new stock based on movement type
-    if movement_type in ["IN", "RETURN"]:
-        stock_level.current_stock += quantity_change
-    elif movement_type in ["OUT", "DAMAGE", "TRANSFER"]:
-        if stock_level.current_stock < quantity_change:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient stock. Available: {stock_level.current_stock}, Required: {quantity_change}"
-            )
-        stock_level.current_stock -= quantity_change
-    
-    return stock_level
 
 @router.post('/movement/product', response_model=ApiResponse)
 async def create_product_movement(
     movement_data: StockMovementCreateProduct,
-    # TODO: Add current_user dependency for created_by
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Create a stock movement for a product"""
     # Verify product exists
@@ -94,25 +69,34 @@ async def create_product_movement(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found or inactive")
     
-    # Create stock movement
-    movement = StockMovement(
-        **movement_data.model_dump(),
-        created_by=None  # TODO: Set to current user ID
-    )
-    session.add(movement)
-    
-    # Update stock level
-    await update_stock_level(
+    # 'TRANSFER' used to be accepted here and deducted the source with no
+    # destination increment anywhere -- inventory simply vanished. Transfers
+    # need two warehouses, so they belong on the transfer endpoint.
+    if movement_data.movement_type == 'TRANSFER':
+        raise HTTPException(
+            status_code=400,
+            detail="Use POST /api/transfers/ for warehouse transfers; it "
+                   "records both the outbound and inbound legs atomically.",
+        )
+
+    movement_id = await apply_stock_movement(
         session,
-        movement_data.warehouse_id,
+        warehouse_id=movement_data.warehouse_id,
         product_id=movement_data.product_id,
-        quantity_change=movement_data.quantity,
-        movement_type=movement_data.movement_type
+        movement_type=movement_data.movement_type,
+        quantity=movement_data.quantity,
+        unit_cost=getattr(movement_data, 'unit_cost', None),
+        reference=getattr(movement_data, 'reference', None),
+        notes=getattr(movement_data, 'notes', None),
+        created_by=current_user.id,
     )
-    
+
     await session.commit()
-    await session.refresh(movement)
-    
+
+    movement = (await session.execute(
+        select(StockMovement).where(StockMovement.id == movement_id)
+    )).scalar_one()
+
     return ApiResponse(
         message=f"Stock movement for {product.name} recorded successfully",
         data=StockMovementSchema.model_validate(movement)
@@ -121,7 +105,8 @@ async def create_product_movement(
 @router.post('/movement/raw-material', response_model=ApiResponse)
 async def create_raw_material_movement(
     movement_data: StockMovementCreateRawMaterial,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Create a stock movement for a raw material"""
     # Verify raw material exists
@@ -140,25 +125,31 @@ async def create_raw_material_movement(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found or inactive")
     
-    # Create stock movement
-    movement = StockMovement(
-        **movement_data.model_dump(),
-        created_by=None  # TODO: Set to current user ID
-    )
-    session.add(movement)
-    
-    # Update stock level
-    await update_stock_level(
+    if movement_data.movement_type == 'TRANSFER':
+        raise HTTPException(
+            status_code=400,
+            detail="Use POST /api/transfers/ for warehouse transfers; it "
+                   "records both the outbound and inbound legs atomically.",
+        )
+
+    movement_id = await apply_stock_movement(
         session,
-        movement_data.warehouse_id,
+        warehouse_id=movement_data.warehouse_id,
         raw_material_id=movement_data.raw_material_id,
-        quantity_change=movement_data.quantity,
-        movement_type=movement_data.movement_type
+        movement_type=movement_data.movement_type,
+        quantity=movement_data.quantity,
+        unit_cost=getattr(movement_data, 'unit_cost', None),
+        reference=getattr(movement_data, 'reference', None),
+        notes=getattr(movement_data, 'notes', None),
+        created_by=current_user.id,
     )
-    
+
     await session.commit()
-    await session.refresh(movement)
-    
+
+    movement = (await session.execute(
+        select(StockMovement).where(StockMovement.id == movement_id)
+    )).scalar_one()
+
     return ApiResponse(
         message=f"Stock movement for {material.name} recorded successfully",
         data=StockMovementSchema.model_validate(movement)
@@ -167,7 +158,7 @@ async def create_raw_material_movement(
 @router.get('/movements', response_model=PaginatedResponse)
 async def list_stock_movements(
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
+    size: int = Query(50, ge=1, le=1000),
     warehouse_id: Optional[uuid.UUID] = Query(None),
     movement_type: Optional[str] = Query(None),
     session: AsyncSession = Depends(get_session)
@@ -334,6 +325,8 @@ async def get_inventory_valuation(
 async def create_stock_intake(
     intake_data: StockIntakeCreate,
     session: AsyncSession = Depends(get_session)
+,
+    current_user: User = Depends(require_authenticated_user)
 ):
     """Create a stock intake (incoming stock) for a product"""
     # Verify product exists
@@ -352,30 +345,24 @@ async def create_stock_intake(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found or inactive")
     
-    # Create stock movement for the intake
-    movement = StockMovement(
-        product_id=intake_data.product_id,
+    # Balance and ledger entry are written together by the service.
+    movement_id = await apply_stock_movement(
+        session,
         warehouse_id=intake_data.warehouse_id,
+        product_id=intake_data.product_id,
         movement_type="IN",
         quantity=intake_data.quantity,
         unit_cost=intake_data.unit_cost or product.cost_price,
         reference=f"INTAKE-{uuid.uuid4().hex[:8].upper()}",
         notes=f"Stock Intake - Supplier: {intake_data.supplier or 'N/A'}, Batch: {intake_data.batch_number or 'N/A'}, Notes: {intake_data.notes or 'N/A'}",
-        created_by=None  # TODO: Set to current user ID
+        created_by=current_user.id,
     )
-    session.add(movement)
-    
-    # Update stock level
-    await update_stock_level(
-        session,
-        intake_data.warehouse_id,
-        product_id=intake_data.product_id,
-        quantity_change=intake_data.quantity,
-        movement_type="IN"
-    )
-    
+
     await session.commit()
-    await session.refresh(movement)
+
+    movement = (await session.execute(
+        select(StockMovement).where(StockMovement.id == movement_id)
+    )).scalar_one()
     
     return ApiResponse(
         message=f"Stock intake for {product.name} completed successfully. Added {intake_data.quantity} units.",
@@ -391,7 +378,8 @@ async def create_stock_intake(
 @router.post('/intake/raw-material/', response_model=ApiResponse)
 async def create_raw_material_stock_intake(
     intake_data: RawMaterialStockIntakeCreate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Create a stock intake (incoming stock) for a raw material"""
     # Verify raw material exists
@@ -410,26 +398,16 @@ async def create_raw_material_stock_intake(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found or inactive")
     
-    # Create stock movement for the intake
-    movement = StockMovement(
-        raw_material_id=intake_data.raw_material_id,
+    movement_id = await apply_stock_movement(
+        session,
         warehouse_id=intake_data.warehouse_id,
+        raw_material_id=intake_data.raw_material_id,
         movement_type="IN",
         quantity=intake_data.quantity,
         unit_cost=intake_data.unit_cost or raw_material.unit_cost,
         reference=f"RM-INTAKE-{uuid.uuid4().hex[:8].upper()}",
         notes=f"Raw Material Stock Intake - Supplier: {intake_data.supplier or 'N/A'}, Batch: {intake_data.batch_number or 'N/A'}, Notes: {intake_data.notes or 'N/A'}",
-        created_by=None  # TODO: Set to current user ID
-    )
-    session.add(movement)
-    
-    # Update stock level
-    await update_stock_level(
-        session,
-        intake_data.warehouse_id,
-        raw_material_id=intake_data.raw_material_id,
-        quantity_change=intake_data.quantity,
-        movement_type="IN"
+        created_by=current_user.id,
     )
     
     await session.commit()

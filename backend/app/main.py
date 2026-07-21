@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+import os
 
 # Create AstroBSM StockMaster app
 app = FastAPI(
@@ -12,11 +13,19 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# CORS. This app authenticates with Bearer tokens held in localStorage, not
+# cookies, so allow_credentials is not required -- and combining it with a "*"
+# origin makes Starlette echo back any caller's Origin, which would let any
+# site read authenticated responses. Set ALLOWED_ORIGINS (comma-separated) to
+# lock this down further; the default stays wildcard-but-uncredentialed.
+_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+_allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_origins=_allowed_origins,
+    allow_credentials=_allowed_origins != ["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -25,6 +34,25 @@ app.add_middleware(
 frontend_build_path = Path(__file__).parent.parent / "frontend" / "build"
 print(f"🔍 AstroBSM StockMaster Frontend path: {frontend_build_path}")
 
+
+def _safe_build_path(root: Path, user_path: str):
+    """Resolve user_path under root, refusing anything that escapes it.
+
+    Starlette hands us the URL-decoded path, so percent-encoded traversal
+    (%2e%2e) arrives here as literal '..' segments. Joining that with / and
+    passing it to FileResponse would serve any file the process can read --
+    including backend/.env. Resolve first, then require the result to still
+    be inside root. Returns None if it is not.
+    """
+    try:
+        candidate = (root / user_path).resolve()
+    except (OSError, ValueError):
+        return None
+    root_resolved = root.resolve()
+    if candidate != root_resolved and root_resolved not in candidate.parents:
+        return None
+    return candidate if candidate.exists() else None
+
 if frontend_build_path.exists():
     # Mount static files FIRST with HTMLResponse to prevent auth blocking
     from fastapi.responses import HTMLResponse, Response
@@ -32,8 +60,8 @@ if frontend_build_path.exists():
     @app.get("/static/{full_path:path}")
     async def serve_static(full_path: str):
         """Serve static files without authentication"""
-        static_file = frontend_build_path / "static" / full_path
-        if static_file.exists() and static_file.is_file():
+        static_file = _safe_build_path(frontend_build_path / "static", full_path)
+        if static_file is not None and static_file.is_file():
             # Determine content type
             content_type = "application/octet-stream"
             if full_path.endswith('.js'):
@@ -64,43 +92,132 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting
     
+    from fastapi import Depends
+    from app.api.auth import require_authenticated_user, require_admin
+
+    # Every authenticated user must present a valid bearer token; the
+    # dependency re-loads the User row, so locked/deactivated/demoted accounts
+    # lose access immediately rather than at token expiry.
+    authed = [Depends(require_authenticated_user)]
+    admin_only = [Depends(require_admin)]
+
+    # --- Public by design -------------------------------------------------
+    # auth:          login / register / password reset
+    # attendance:    /quick-attendance is the pre-login clock-in terminal
+    # public_orders: customer-facing ordering page (its /admin/* routes are
+    #                guarded individually inside the module)
+    # wifi:          captive-portal login; already enforces its own HTTPBearer
+    # profits:       already enforces its own _admin_only() on every route
     app.include_router(auth.router)
-    app.include_router(permissions.router)
-    app.include_router(staff.router)
     app.include_router(attendance.router)
-    app.include_router(products.router)
-    app.include_router(raw_materials.router)
-    app.include_router(stock.router)
-    app.include_router(warehouses.router)
-    app.include_router(production.router)
-    app.include_router(sales.router)
-    app.include_router(stock_management.router)
-    app.include_router(bom.router)
-    app.include_router(settings.router)
-    app.include_router(financial.router)
-    app.include_router(bulk_upload.router)
-    app.include_router(notifications.router)
-    app.include_router(production_consumables.router)
-    app.include_router(machines_equipment.router)
-    app.include_router(production_completions.router)
-    app.include_router(marketing.router)
-    app.include_router(hr_customercare.router)
-    app.include_router(payment_tracking.router)
-    app.include_router(procurement.router)
-    app.include_router(logistics.router)
-    app.include_router(warehouse_transfers.router)
-    app.include_router(returns.router)
-    app.include_router(damaged_transfers.router)
-    app.include_router(receive_transfers.router)
-    app.include_router(legacy_debts.router)
-    
-    print("All routers loaded including returns, damaged_transfers, receive_transfers, legacy_debts")
-except ImportError as e:
-    print(f"❌ Module import failed: {e}")
+    app.include_router(public_orders.router)
+    app.include_router(wifi.router)
+    app.include_router(profits.router)
+
+    # --- Admin only -------------------------------------------------------
+    app.include_router(permissions.router, dependencies=admin_only)
+    app.include_router(financial.router, dependencies=admin_only)
+
+    # --- Authenticated ----------------------------------------------------
+    for _router in (
+        staff, products, raw_materials, stock, warehouses, production, sales,
+        stock_management, bom, settings, bulk_upload, notifications,
+        production_consumables, machines_equipment, production_completions,
+        marketing, hr_customercare, payment_tracking, procurement, logistics,
+        warehouse_transfers, returns, damaged_transfers, receive_transfers,
+        legacy_debts, communication, sop, production_tasks, announcements,
+        radio, geo, regulatory, accounting, payroll, assets,
+        budgeting,
+    ):
+        app.include_router(_router.router, dependencies=authed)
+    app.include_router(assets.cash_router, dependencies=authed)
+
+    # Verify every imported API module actually contributed routes.
+    #
+    # A module can be imported at the top of this block and then simply not
+    # appear in any include_router call -- which is silent: the app boots,
+    # health checks pass, and that module's endpoints just do not exist.
+    # This happened when `budgeting` was added to the import list but not to
+    # the tuple above. Compare what was imported against what registered.
+    import sys as _sys
+    _registered_prefixes = {
+        r.path for r in app.routes if getattr(r, "path", "").startswith("/api")
+    }
+    _missing = []
+    for _name, _mod in list(vars().items()):
+        if not (hasattr(_mod, "__name__")
+                and str(getattr(_mod, "__name__", "")).startswith("app.api.")):
+            continue
+        _r = getattr(_mod, "router", None)
+        _prefix = getattr(_r, "prefix", None) if _r is not None else None
+        if not _prefix:
+            continue
+        if not any(p.startswith(_prefix) for p in _registered_prefixes):
+            _missing.append(f"{_name} (prefix {_prefix})")
+    if _missing:
+        raise RuntimeError(
+            "These API modules were imported but registered no routes, so "
+            "their endpoints would silently 404: " + ", ".join(sorted(_missing))
+        )
+
+    print(f"All routers loaded — {len(_registered_prefixes)} API routes registered")
 except Exception as e:
-    print(f"❌ Router setup failed: {e}")
+    # Previously this only printed. Because the import on the line above and
+    # every include_router() call share one try block, a single bad import
+    # produced a running app with ZERO API routes -- /api/health still returned
+    # ok, every readiness probe passed, and the whole ERP 404'd. Fail loudly so
+    # a broken deploy cannot go green.
+    import traceback
+    traceback.print_exc()
+    raise RuntimeError(f"API router registration failed, refusing to start: {e}") from e
+
+
+# Bootstrap geo columns (idempotent)
+@app.on_event("startup")
+async def _bootstrap_geo_schema():
+    try:
+        from app.db import AsyncSessionLocal
+        from app.api.geo import bootstrap_geo_schema
+        async with AsyncSessionLocal() as s:
+            await bootstrap_geo_schema(s)
+        print("✅ Geo schema bootstrap complete")
+    except Exception as e:
+        print(f"⚠️ Geo schema bootstrap failed: {e}")
+
+
+# Bootstrap regulatory compliance tables (idempotent)
+@app.on_event("startup")
+async def _bootstrap_regulatory_schema():
+    try:
+        from app.db import AsyncSessionLocal
+        from app.api.regulatory import bootstrap_regulatory_schema
+        async with AsyncSessionLocal() as s:
+            await bootstrap_regulatory_schema(s)
+        print("✅ Regulatory Compliance schema bootstrap complete")
+    except Exception as e:
+        print(f"⚠️ Regulatory Compliance schema bootstrap failed: {e}")
+
+
+# Background scheduler: auto clock-out at 17:10 Africa/Lagos
+@app.on_event("startup")
+async def _start_auto_clockout_scheduler():
+    try:
+        import asyncio
+        from app.api.attendance import auto_clockout_scheduler
+        app.state._auto_clockout_task = asyncio.create_task(auto_clockout_scheduler())
+        print("✅ Auto clock-out scheduler started (17:10 Africa/Lagos)")
+    except Exception as e:
+        print(f"❌ Failed to start auto clock-out scheduler: {e}")
+
+
+@app.on_event("shutdown")
+async def _stop_auto_clockout_scheduler():
+    task = getattr(app.state, "_auto_clockout_task", None)
+    if task:
+        task.cancel()
+
 
 # Frontend HTML routes (after API routers but before catch-all)
 if frontend_build_path.exists():
@@ -148,16 +265,16 @@ if frontend_build_path.exists():
         if filename.startswith("api") or "/" in filename:
             return {"error": "Not found"}
         
-        image_path = frontend_build_path / f"{filename}.png"
-        if image_path.exists():
+        image_path = _safe_build_path(frontend_build_path, f"{filename}.png")
+        if image_path is not None:
             return FileResponse(str(image_path), media_type="image/png")
         return {"error": "Image not found"}
     
     @app.get("/{filename}.ico")
     async def serve_favicon(filename: str):
         """Serve favicon"""
-        favicon_path = frontend_build_path / f"{filename}.ico"
-        if favicon_path.exists():
+        favicon_path = _safe_build_path(frontend_build_path, f"{filename}.ico")
+        if favicon_path is not None:
             return FileResponse(str(favicon_path), media_type="image/x-icon")
         return {"error": "Favicon not found"}
     
@@ -168,8 +285,8 @@ if frontend_build_path.exists():
             raise HTTPException(status_code=404, detail="Not Found")
         
         # Serve static assets from build directory
-        static_path = frontend_build_path / full_path
-        if static_path.exists() and static_path.is_file():
+        static_path = _safe_build_path(frontend_build_path, full_path)
+        if static_path is not None and static_path.is_file():
             return FileResponse(str(static_path))
         
         index_path = frontend_build_path / "index.html"

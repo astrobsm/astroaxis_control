@@ -5,8 +5,33 @@ from typing import Optional
 from datetime import datetime, date
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.models import User
+from app.services.inventory import apply_stock_movement
+from app.services.posting import (
+    post_production_completion, post_inventory_writeoff)
 
 router = APIRouter(prefix='/api/production-completions', tags=['Production Completions'])
+
+
+def _safe_float(v, default=0.0):
+    """Convert v to float, treating None/'' as default."""
+    if v is None or v == '':
+        return float(default)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _safe_int(v, default=0):
+    """Convert v to int, treating None/'' as default."""
+    if v is None or v == '':
+        return int(default)
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 @router.get('/daily-staff-summary')
@@ -116,24 +141,43 @@ async def get_product_bom_materials(
 
 
 @router.post('/')
-async def create_production_completion(data: dict, session: AsyncSession = Depends(get_session)):
-    """Record a production completion with full cost breakdown."""
+async def create_production_completion(
+    data: dict,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
+    """Record a production completion with full cost breakdown.
+
+    Booking the stock is part of this operation, not a separate step: the
+    finished goods and the materials they consumed move in the same
+    transaction that records the cost, so the three can never disagree.
+    """
     try:
+        user_id = current_user.id
         product_id = data['product_id']
         production_date_str = data.get('production_date', str(date.today()))
         try:
             production_date_val = date.fromisoformat(production_date_str)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-        qty_produced = int(data.get('qty_produced', 0))
-        qty_damaged = int(data.get('qty_damaged', 0))
+        qty_produced = _safe_int(data.get('qty_produced'))
+        qty_damaged = _safe_int(data.get('qty_damaged'))
         damage_notes = data.get('damage_notes', '')
-        staff_count = int(data.get('staff_count', 0))
-        total_hours_worked = float(data.get('total_hours_worked', 0))
-        total_wages_paid = float(data.get('total_wages_paid', 0))
-        energy_cost = float(data.get('energy_cost', 0))
-        lunch_cost = float(data.get('lunch_cost', 0))
+        staff_count = _safe_int(data.get('staff_count'))
+        total_hours_worked = _safe_float(data.get('total_hours_worked'))
+        total_wages_paid = _safe_float(data.get('total_wages_paid'))
+        energy_cost = _safe_float(data.get('energy_cost'))
+        lunch_cost = _safe_float(data.get('lunch_cost'))
         warehouse_id = data.get('warehouse_id')
+        # Required: finished goods and consumed materials have to move in and
+        # out of a specific warehouse. Without it the completion would record
+        # cost with no corresponding stock, which is how the two drifted apart.
+        if not warehouse_id:
+            raise HTTPException(
+                status_code=400,
+                detail="warehouse_id is required so produced stock and "
+                       "consumed materials can be recorded against a location.",
+            )
         notes = data.get('notes', '')
         consumables_list = data.get('consumables', [])  # [{consumable_id, quantity}]
         materials_list = data.get('materials', [])  # [{raw_material_id, quantity}]
@@ -146,8 +190,8 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
                 {"id": mat['raw_material_id']}
             )
             rm = rm_r.fetchone()
-            unit_cost = float(rm.unit_cost) if rm else 0
-            qty = float(mat.get('quantity', 0))
+            unit_cost = _safe_float(rm.unit_cost) if rm else 0.0
+            qty = _safe_float(mat.get('quantity'))
             raw_material_cost += unit_cost * qty
 
         # Calculate consumables cost
@@ -158,8 +202,8 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
                 {"id": con['consumable_id']}
             )
             c = con_r.fetchone()
-            unit_cost = float(c.unit_cost) if c else 0
-            qty = float(con.get('quantity', 0))
+            unit_cost = _safe_float(c.unit_cost) if c else 0.0
+            qty = _safe_float(con.get('quantity'))
             consumables_cost += unit_cost * qty
 
         # Total production cost
@@ -210,8 +254,8 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
                 {"id": con['consumable_id']}
             )
             c = con_r.fetchone()
-            uc = float(c.unit_cost) if c else 0
-            qty = float(con.get('quantity', 0))
+            uc = _safe_float(c.unit_cost) if c else 0.0
+            qty = _safe_float(con.get('quantity'))
             await session.execute(
                 text("""
                     INSERT INTO production_completion_consumables (id, completion_id, consumable_id, quantity, unit_cost, total_cost)
@@ -219,32 +263,130 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
                 """),
                 {"cid": completion_id, "con_id": con['consumable_id'], "qty": qty, "uc": uc, "tc": round(uc * qty, 2)}
             )
-            # Auto-deduct consumable stock
+            # Deduct consumable stock. Previously this clamped with
+            # GREATEST(..., 0), which did not prevent over-consumption -- it
+            # hid it, discarding the exact discrepancy that signals a mis-key
+            # or shrinkage. Reject instead.
             if qty > 0:
-                await session.execute(
+                updated = await session.execute(
                     text("""
                         UPDATE production_consumables
-                        SET current_stock = GREATEST(current_stock - :qty, 0)
-                        WHERE id = :id
+                           SET current_stock = current_stock - :qty
+                         WHERE id = :id AND current_stock >= :qty
+                     RETURNING id
                     """),
                     {"id": con['consumable_id'], "qty": qty}
                 )
+                if updated.fetchone() is None:
+                    avail = (await session.execute(
+                        text("SELECT name, current_stock FROM production_consumables WHERE id = :id"),
+                        {"id": con['consumable_id']}
+                    )).fetchone()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"Insufficient consumable stock for "
+                                f"{avail.name if avail else con['consumable_id']}: "
+                                f"available {avail.current_stock if avail else 0}, "
+                                f"required {qty}.")
+                    )
 
-        # Insert raw material line items
+        # Insert raw material line items and consume them from stock.
         for mat in materials_list:
             rm_r = await session.execute(
                 text("SELECT unit_cost FROM raw_materials WHERE id = :id"),
                 {"id": mat['raw_material_id']}
             )
             rm = rm_r.fetchone()
-            uc = float(rm.unit_cost) if rm else 0
-            qty = float(mat.get('quantity', 0))
+            uc = _safe_float(rm.unit_cost) if rm else 0.0
+            qty = _safe_float(mat.get('quantity'))
             await session.execute(
                 text("""
                     INSERT INTO production_completion_materials (id, completion_id, raw_material_id, quantity, unit_cost, total_cost)
                     VALUES (gen_random_uuid(), :cid, :rm_id, :qty, :uc, :tc)
                 """),
                 {"cid": completion_id, "rm_id": mat['raw_material_id'], "qty": qty, "uc": uc, "tc": round(uc * qty, 2)}
+            )
+            # Raw materials physically leave the warehouse when consumed.
+            # Without this the ledger showed materials still on hand after
+            # they had been used, and the finished goods appeared from nowhere.
+            if qty > 0:
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=warehouse_id,
+                    raw_material_id=mat['raw_material_id'],
+                    movement_type='PRODUCTION_OUT',
+                    quantity=qty,
+                    unit_cost=uc,
+                    reference=f"PRODCOMP-{completion_id}",
+                    notes="Consumed by production completion",
+                    created_by=user_id,
+                )
+
+        # Book the finished goods into the warehouse, at the cost actually
+        # incurred by this batch. unit_cost is snapshotted here on purpose:
+        # it is the historical cost of these units and must not be re-derived
+        # from a later price change.
+        if qty_produced > 0:
+            await apply_stock_movement(
+                session,
+                warehouse_id=warehouse_id,
+                product_id=product_id,
+                movement_type='PRODUCTION_IN',
+                quantity=qty_produced,
+                unit_cost=round(cost_per_unit, 2),
+                reference=f"PRODCOMP-{completion_id}",
+                notes="Finished goods from production completion",
+                created_by=user_id,
+            )
+
+        # Damaged output is booked in, then written off, so the loss is
+        # traceable rather than silently never existing.
+        if qty_damaged > 0:
+            await apply_stock_movement(
+                session,
+                warehouse_id=warehouse_id,
+                product_id=product_id,
+                movement_type='PRODUCTION_IN',
+                quantity=qty_damaged,
+                unit_cost=round(cost_per_unit, 2),
+                reference=f"PRODCOMP-{completion_id}",
+                notes="Damaged output booked in prior to write-off",
+                created_by=user_id,
+            )
+            await apply_stock_movement(
+                session,
+                warehouse_id=warehouse_id,
+                product_id=product_id,
+                movement_type='DAMAGE',
+                quantity=qty_damaged,
+                unit_cost=round(cost_per_unit, 2),
+                reference=f"PRODCOMP-{completion_id}",
+                notes=f"Damaged during production: {damage_notes}" if damage_notes
+                      else "Damaged during production",
+                created_by=user_id,
+            )
+
+        # Move the value from raw materials into finished goods. The good
+        # units are capitalised at the cost actually incurred; the damaged
+        # ones are written off rather than carried as an asset.
+        good_units = max(qty_produced - qty_damaged, 0)
+        await post_production_completion(
+            session,
+            completion_id=completion_id,
+            raw_material_cost=round(raw_material_cost + consumables_cost, 2),
+            finished_goods_value=round(cost_per_unit * good_units, 2),
+            reference=f"PRODCOMP-{completion_id}",
+            on=production_date_val,
+            created_by=user_id,
+        )
+        if qty_damaged > 0:
+            await post_inventory_writeoff(
+                session,
+                value=round(cost_per_unit * qty_damaged, 2),
+                reference=f"PRODCOMP-DMG-{completion_id}",
+                is_raw_material=False,
+                on=production_date_val,
+                created_by=user_id,
             )
 
         await session.commit()
@@ -268,6 +410,12 @@ async def create_production_completion(data: dict, session: AsyncSession = Depen
     except KeyError as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Missing required field: {e}")
+    except HTTPException:
+        # Deliberate, already-specific errors (insufficient stock, missing
+        # warehouse) must keep their status and message rather than being
+        # re-wrapped as a generic 400 by the handler below.
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         import traceback

@@ -1,3 +1,4 @@
+import { authedFetch } from './api';
 /**
  * ASTRO-ASIX ERP - Push Notification Service
  * Handles Web Push API integration for real-time notifications
@@ -85,7 +86,7 @@ export async function subscribeToPush() {
   
   // Send subscription to backend
   const token = localStorage.getItem('access_token');
-  const response = await fetch('/api/notifications/subscribe', {
+  const response = await authedFetch('/api/notifications/subscribe', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -113,7 +114,7 @@ export async function unsubscribeFromPush() {
   if (subscription) {
     // Notify server to remove subscription
     const token = localStorage.getItem('access_token');
-    await fetch('/api/notifications/unsubscribe', {
+    await authedFetch('/api/notifications/unsubscribe', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -186,7 +187,7 @@ export const NotificationTypes = {
  */
 export async function sendTestNotification() {
   const token = localStorage.getItem('access_token');
-  const response = await fetch('/api/notifications/test', {
+  const response = await authedFetch('/api/notifications/test', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`

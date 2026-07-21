@@ -23,6 +23,7 @@ from reportlab.platypus import (
 import os
 
 from app.db import get_session
+from app.services.receivables import revenue_between, outstanding_receivables
 from app.models import (
     SalesOrder, Product, RawMaterial, StockMovement,
     Staff, Attendance, ProductionOrder, Customer, Warehouse,
@@ -40,18 +41,20 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
     # =====================================================================
     # 1. REVENUE & SALES ANALYSIS (from sales_orders table)
     # =====================================================================
-    revenue_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
-        SalesOrder.payment_status == 'paid'
-    )
-    revenue_result = await session.execute(revenue_query)
-    total_revenue = float(revenue_result.scalar())
-    
-    # Outstanding payments (unpaid orders)
-    outstanding_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
-        SalesOrder.payment_status.in_(['unpaid', 'partial'])
-    )
-    outstanding_result = await session.execute(outstanding_query)
-    outstanding_payments = float(outstanding_result.scalar())
+    # Revenue is cash actually collected, read from the `payments` rows -- the
+    # same source profits.py and payment-tracking use.
+    #
+    # This used to sum sales_orders.total_amount WHERE payment_status = 'paid',
+    # which had two independent errors: an order with 99% collected counted as
+    # ZERO revenue AND its full value as outstanding, and orders settled via
+    # sales.py's mark-paid path (which wrote no Payment row) were counted here
+    # but were invisible to profits.py. The two dashboards disagreed by the
+    # entire value of every such sale.
+    total_revenue = float(await revenue_between(session))
+
+    # Outstanding is computed per invoice from what remains uncollected,
+    # not from a status flag.
+    outstanding_payments = float(await outstanding_receivables(session))
     
     # Order counts
     total_orders_result = await session.execute(select(func.count(SalesOrder.id)))
@@ -67,26 +70,39 @@ async def calculate_financial_metrics(session: AsyncSession) -> Dict[str, Any]:
     )
     unpaid_orders_count = unpaid_orders_result.scalar() or 0
     
-    # Revenue by month (last 12 months)
+    # Revenue by month (last 12 calendar months).
+    #
+    # The old loop stepped back by timedelta(days=30*i). Calendar months are
+    # not 30 days, so buckets drifted: run on 1 March, i=1 gives 30 January,
+    # and February vanished from the chart entirely. On other dates the same
+    # month appeared twice. Twelve 30-day steps also span only 330 days, so
+    # the "last 12 months" was missing roughly a month at the far end.
+    #
+    # Walk real calendar months instead, and read the same payments source as
+    # the headline figure so the chart sums to the total above it.
     revenue_by_month = []
-    for i in range(12):
-        month_start = (datetime.now(timezone.utc) - timedelta(days=30*i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(seconds=1)
-        
-        monthly_query = select(func.coalesce(func.sum(SalesOrder.total_amount), 0)).where(
-            and_(
-                SalesOrder.payment_status == 'paid',
-                SalesOrder.created_at >= month_start,
-                SalesOrder.created_at <= month_end
-            )
-        )
-        monthly_result = await session.execute(monthly_query)
-        monthly_revenue = float(monthly_result.scalar())
-        
+    now = datetime.now(timezone.utc)
+    year, month = now.year, now.month
+    for _ in range(12):
+        month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+        if month == 12:
+            next_start = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            next_start = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+
+        monthly_revenue = float(await revenue_between(
+            session, start=month_start, end=next_start))
+
         revenue_by_month.append({
             'month': month_start.strftime('%b %Y'),
             'revenue': monthly_revenue
         })
+
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+
+    revenue_by_month.reverse()  # oldest first, as a time series should read
     
     # =====================================================================
     # 2. PRODUCT INVENTORY VALUATION (from stock_levels + product_pricing)

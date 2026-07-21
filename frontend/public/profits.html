@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Profits — BONNESANTE MEDICALS</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#f4f6fb;color:#1d2433;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5}
+  header{background:linear-gradient(135deg,#0a3d62 0%,#1e6091 100%);color:#fff;
+    padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header img{height:34px;width:34px;border-radius:6px;background:#fff;padding:2px;object-fit:contain}
+  header h1{font-size:16px;margin:0;letter-spacing:.4px}
+  header p{margin:1px 0 0;font-size:11px;opacity:.85;color:#cfe2f3}
+  header .live{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px}
+  .pulse{width:8px;height:8px;border-radius:50%;background:#27ae60;
+    box-shadow:0 0 0 0 rgba(39,174,96,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(39,174,96,.7)}70%{box-shadow:0 0 0 10px rgba(39,174,96,0)}100%{box-shadow:0 0 0 0 rgba(39,174,96,0)}}
+  main{padding:14px;max-width:1400px;margin:0 auto}
+  .grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+  .kpi{background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.06);
+    border-left:4px solid #1e6091}
+  .kpi.k-today{border-left-color:#27ae60}
+  .kpi.k-week{border-left-color:#1e6091}
+  .kpi.k-month{border-left-color:#8e44ad}
+  .kpi.k-all{border-left-color:#0a3d62}
+  .kpi.k-pending{border-left-color:#e67e22}
+  .kpi.k-approved{border-left-color:#f1c40f}
+  .kpi.k-settled{border-left-color:#16a085}
+  .kpi .lbl{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+  .kpi .val{font-size:22px;font-weight:700;color:#0a3d62;margin-top:4px;font-variant-numeric:tabular-nums}
+  .kpi .sub{font-size:11.5px;color:#6b7280;margin-top:2px}
+  section{background:#fff;border-radius:10px;padding:14px;margin-top:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  section h2{margin:0 0 10px;font-size:15px;color:#0a3d62;letter-spacing:.4px;
+    text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  section h2 .count{background:#eef3f8;color:#1e6091;font-size:11px;padding:2px 8px;border-radius:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#f8fafc;color:#475569;text-align:left;padding:8px;font-size:11px;
+    text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e5e7eb}
+  td{padding:8px;border-bottom:1px solid #f0f3f7;vertical-align:top}
+  tr:hover td{background:#fafbfd}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  td.profit{color:#0d8050;font-weight:700}
+  td.capital{color:#1e6091;font-weight:600}
+  td.margin{color:#8e44ad;font-weight:600}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.4px}
+  .pill.pending{background:#fff3e0;color:#c0392b}
+  .pill.approved{background:#fff9db;color:#7a5d00}
+  .pill.settled{background:#d4f1e4;color:#0d6a45}
+  .pill.partial{background:#e8eaf6;color:#3949ab}
+  .btn{background:#1e6091;color:#fff;border:0;padding:6px 12px;border-radius:6px;
+    font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn:hover{background:#0a3d62}
+  .btn.btn-ok{background:#0d8050}
+  .btn.btn-ok:hover{background:#0a6a40}
+  .btn.btn-warn{background:#e67e22}
+  .btn.btn-warn:hover{background:#cf6f1e}
+  .btn.btn-danger{background:#c0392b}
+  .btn.btn-danger:hover{background:#a83227}
+  .btn.btn-ghost{background:transparent;color:#1e6091;border:1px solid #1e6091}
+  .btn.btn-ghost:hover{background:#eef3f8}
+  .empty{padding:30px;text-align:center;color:#9ca3af;font-style:italic}
+  .err{background:#fff0f0;color:#c0392b;border:1px solid #f5c6c6;padding:10px;border-radius:6px;margin:10px 0;font-size:13px}
+  .warn{background:#fff8e1;color:#92400e;border:1px solid #fcd34d;padding:12px 14px;border-radius:6px;margin:10px 0;font-size:13px;line-height:1.45}
+  .warn b{color:#78350f}
+  .warn-pill{display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:4px}
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .muted{color:#6b7280;font-size:12px}
+  .tabletwrap{overflow-x:auto}
+  .new-row{animation:flashin 1.2s ease}
+  @keyframes flashin{0%{background:#d4f1e4}100%{background:transparent}}
+  @media(max-width:600px){
+    .kpi .val{font-size:18px}
+    table{font-size:12px}
+    th,td{padding:6px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <img src="/company-logo.png" alt="BSM" onerror="this.style.display='none'">
+  <div>
+    <h1>Profits — Live</h1>
+    <p>Admin only · realtime profit per payment · weekly approval & settlement</p>
+  </div>
+  <div class="live"><span class="pulse"></span><span id="liveLabel">Updating…</span></div>
+</header>
+
+<main>
+  <div id="errBox"></div>
+  <div id="warnBox"></div>
+
+  <!-- KPI summary -->
+  <div class="grid-kpi" id="kpis">
+    <div class="kpi k-today"><div class="lbl">Today</div><div class="val" id="k_today_p">₦0</div><div class="sub" id="k_today_s">—</div></div>
+    <div class="kpi k-week"><div class="lbl">This week</div><div class="val" id="k_week_p">₦0</div><div class="sub" id="k_week_s">—</div></div>
+    <div class="kpi k-month"><div class="lbl">This month</div><div class="val" id="k_month_p">₦0</div><div class="sub" id="k_month_s">—</div></div>
+    <div class="kpi k-all"><div class="lbl">All-time profit</div><div class="val" id="k_all_p">₦0</div><div class="sub" id="k_all_s">—</div></div>
+    <div class="kpi k-pending"><div class="lbl">Pending profit (unapproved)</div><div class="val" id="k_pending">₦0</div><div class="sub" id="k_pending_s">awaiting weekly approval</div></div>
+    <div class="kpi k-approved"><div class="lbl">Approved profit (awaiting payout)</div><div class="val" id="k_approved">₦0</div><div class="sub" id="k_approved_s">ready to distribute</div></div>
+    <div class="kpi k-settled"><div class="lbl">Settled profit (paid out)</div><div class="val" id="k_settled">₦0</div><div class="sub" id="k_settled_s">distributed</div></div>
+  </div>
+
+  <!-- Real-time payments -->
+  <section>
+    <h2>Realtime payments &amp; profit <span class="count" id="rt_count">0</span></h2>
+    <div class="muted">Auto-refreshes every 5 seconds. Each payment is split into <b>Capital</b> (cost of goods recovered) + <b>Profit</b> (margin earned). Capital = payment × (1 − margin); Profit = payment × margin.</div>
+    <div class="tabletwrap">
+      <table id="rt_table">
+        <thead><tr>
+          <th>Date</th><th>Invoice</th><th>Customer</th><th>Method</th>
+          <th class="num">Payment</th><th class="num">Capital</th><th class="num">Profit</th><th class="num">Margin %</th><th>Status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Weekly aggregation + approve -->
+  <section>
+    <h2>Weekly profit (last 12 weeks) <span class="count" id="wk_count">0</span></h2>
+    <div class="muted">Approve a week to lock its profit for distribution. Once distributed, mark it as <b>settled</b>. Only the <b>Profit</b> column is distributable — the <b>Capital</b> column belongs to the business and must be retained to replace stock.</div>
+    <div class="tabletwrap">
+      <table id="wk_table">
+        <thead><tr>
+          <th>Week (Mon → Sun)</th><th class="num">Payments</th><th class="num">Revenue</th>
+          <th class="num">Capital</th><th class="num">Profit</th><th class="num">Margin %</th><th>Status</th><th>Action</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Settlements list -->
+  <section>
+    <h2>Settlement history <span class="count" id="st_count">0</span></h2>
+    <div class="tabletwrap">
+      <table id="st_table">
+        <thead><tr>
+          <th>Settlement #</th><th>Week</th><th class="num">Payments</th>
+          <th class="num">Revenue</th><th class="num">Capital</th><th class="num">Profit</th>
+          <th>Status</th><th>Approved by</th><th>Settled by</th><th>Action</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const fmtN = n => '₦' + (Number(n||0)).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtPct = n => (Number(n||0)).toFixed(1) + '%';
+const fmtDate = s => s ? new Date(s).toLocaleString('en-NG', {dateStyle:'medium', timeStyle:'short'}) : '—';
+const fmtDay = s => s ? new Date(s).toLocaleDateString('en-NG', {month:'short', day:'numeric'}) : '—';
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function token(){ return localStorage.getItem('access_token') || ''; }
+function authHeaders(){ const t = token(); return t ? {'Authorization':'Bearer ' + t} : {}; }
+
+function showErr(msg){
+  const box = document.getElementById('errBox');
+  box.innerHTML = msg ? `<div class="err">${esc(msg)}</div>` : '';
+}
+
+async function api(path, opts={}){
+  const r = await fetch(path, {
+    ...opts,
+    headers:{'Content-Type':'application/json', ...authHeaders(), ...(opts.headers||{})},
+  });
+  let body = null;
+  try { body = await r.json(); } catch(_){}
+  if (!r.ok){
+    const msg = (body && (body.detail || body.message)) || `HTTP ${r.status}`;
+    throw new Error(msg);
+  }
+  return body;
+}
+
+let lastSeenPaymentIds = new Set();
+
+async function refreshSummary(){
+  const s = await api('/api/profits/summary');
+  const cap = b => `Capital ${fmtN(b.capital||0)}`;
+  document.getElementById('k_today_p').textContent = fmtN(s.today.profit);
+  document.getElementById('k_today_s').textContent = `${fmtN(s.today.revenue)} revenue · ${cap(s.today)} · ${fmtPct(s.today.margin_pct)} margin`;
+  document.getElementById('k_week_p').textContent = fmtN(s.week.profit);
+  document.getElementById('k_week_s').textContent = `${fmtN(s.week.revenue)} · ${cap(s.week)} · ${fmtDay(s.week.week_start)}–${fmtDay(s.week.week_end)}`;
+  document.getElementById('k_month_p').textContent = fmtN(s.month.profit);
+  document.getElementById('k_month_s').textContent = `${fmtN(s.month.revenue)} revenue · ${cap(s.month)} · ${fmtPct(s.month.margin_pct)} margin`;
+  document.getElementById('k_all_p').textContent = fmtN(s.all_time.profit);
+  document.getElementById('k_all_s').textContent = `${fmtN(s.all_time.revenue)} revenue · ${cap(s.all_time)} · ${fmtPct(s.all_time.margin_pct)} margin`;
+  document.getElementById('k_pending').textContent = fmtN(s.pending_profit);
+  document.getElementById('k_pending_s').textContent = `Capital ${fmtN(s.pending_capital||0)} retained`;
+  document.getElementById('k_approved').textContent = fmtN(s.approved_profit);
+  document.getElementById('k_approved_s').textContent = `Capital ${fmtN(s.approved_capital||0)} retained`;
+  document.getElementById('k_settled').textContent = fmtN(s.settled_profit);
+  document.getElementById('k_settled_s').textContent = `Capital ${fmtN(s.settled_capital||0)} retained`;
+
+  // Cost-data warning banner — surfaces when products were sold without a cost price.
+  const wb = document.getElementById('warnBox');
+  const unkRev = Number(s.unknown_cost_revenue || 0);
+  const unkCnt = Number(s.unknown_cost_payment_count || 0);
+  if (unkRev > 0.01){
+    wb.innerHTML = `<div class="warn">
+      <b>⚠ Cost prices are missing for some sold products.</b>
+      ${unkCnt} payment(s) totalling <b>${fmtN(unkRev)}</b> in revenue cannot be split into capital + profit because the system has no <code>cost_price</code> for the underlying product/unit.
+      Those payments are shown with margin <i>n/a</i> and counted entirely as <b>capital</b> (zero profit) so the dashboard does not falsely report 100% profit.
+      <br><a href="#" id="showMissingCosts">View affected products →</a>
+      <div id="missingCostsList" style="display:none;margin-top:10px"></div>
+    </div>`;
+    document.getElementById('showMissingCosts').onclick = async (e) => {
+      e.preventDefault();
+      const box = document.getElementById('missingCostsList');
+      if (box.style.display === 'block'){ box.style.display='none'; return; }
+      box.style.display='block';
+      box.innerHTML = '<i>loading…</i>';
+      try {
+        const r = await api('/api/profits/missing-costs');
+        if (!r.items.length){ box.innerHTML = '<i>No products are missing cost data.</i>'; return; }
+        box.innerHTML = '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+          + '<thead><tr style="background:#fef3c7"><th style="text-align:left;padding:4px">SKU</th><th style="text-align:left;padding:4px">Product</th><th style="text-align:left;padding:4px">Sold as unit</th></tr></thead>'
+          + '<tbody>' + r.items.map(it => `<tr><td style="padding:4px;border-top:1px solid #fcd34d">${esc(it.sku)}</td><td style="padding:4px;border-top:1px solid #fcd34d">${esc(it.name)}</td><td style="padding:4px;border-top:1px solid #fcd34d">${esc(it.sold_as_unit||'—')}</td></tr>`).join('') + '</tbody></table>'
+          + '<div class="muted" style="margin-top:6px">Set the <b>cost price</b> on each of these products (or per-unit in <i>Product pricing</i>) and the profit split will populate automatically.</div>';
+      } catch(err){ box.innerHTML = '<span style="color:#c0392b">Failed to load: ' + esc(err.message) + '</span>'; }
+    };
+  } else {
+    wb.innerHTML = '';
+  }
+}
+
+async function refreshRealtime(){
+  const data = await api('/api/profits/realtime?limit=100');
+  const tbody = document.querySelector('#rt_table tbody');
+  document.getElementById('rt_count').textContent = data.total;
+  if (!data.items.length){
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No payments recorded yet.</td></tr>';
+    return;
+  }
+  const newSeen = new Set();
+  tbody.innerHTML = data.items.map(p => {
+    const isNew = !lastSeenPaymentIds.has(p.payment_id) && lastSeenPaymentIds.size > 0;
+    newSeen.add(p.payment_id);
+    return `<tr class="${isNew?'new-row':''}">
+      <td>${esc(fmtDate(p.payment_date))}</td>
+      <td>${esc(p.invoice_number || '')}<br><small class="muted">${esc(p.order_number || '')}</small></td>
+      <td>${esc(p.customer_name || '—')}</td>
+      <td>${esc(p.payment_method || '')}</td>
+      <td class="num">${fmtN(p.payment_amount)}</td>
+      <td class="num capital">${fmtN(p.payment_capital)}${p.cost_unknown?' <span class="warn-pill" title="No cost price set for this product — capital cannot be calculated">⚠ no cost</span>':''}</td>
+      <td class="num profit">${fmtN(p.payment_profit)}</td>
+      <td class="num margin">${p.cost_unknown?'<span class="muted">n/a</span>':fmtPct(p.profit_margin_pct)}</td>
+      <td><span class="pill ${esc(p.status)}">${esc(p.status)}</span></td>
+    </tr>`;
+  }).join('');
+  lastSeenPaymentIds = newSeen;
+}
+
+async function refreshWeeks(){
+  const data = await api('/api/profits/weeks?weeks_back=12');
+  const tbody = document.querySelector('#wk_table tbody');
+  document.getElementById('wk_count').textContent = data.total;
+  if (!data.items.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No payments in the last 12 weeks.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.items.map(w => {
+    const canApprove = w.pending_count > 0;
+    return `<tr>
+      <td><b>${esc(fmtDay(w.week_start))} → ${esc(fmtDay(w.week_end))}</b><br><small class="muted">${esc(w.week_start)}</small></td>
+      <td class="num">${w.payment_count}<br><small class="muted">P:${w.pending_count} A:${w.approved_count} S:${w.settled_count}</small></td>
+      <td class="num">${fmtN(w.revenue)}</td>
+      <td class="num capital">${fmtN(w.capital)}</td>
+      <td class="num profit">${fmtN(w.profit)}</td>
+      <td class="num margin">${fmtPct(w.margin_pct)}</td>
+      <td><span class="pill ${esc(w.status)}">${esc(w.status)}</span></td>
+      <td>${canApprove
+        ? `<button class="btn btn-ok" onclick="approveWeek('${esc(w.week_start)}')">✓ Approve week</button>`
+        : '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function refreshSettlements(){
+  const data = await api('/api/profits/settlements');
+  const tbody = document.querySelector('#st_table tbody');
+  document.getElementById('st_count').textContent = data.total;
+  if (!data.items.length){
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">No settlements yet. Approve a week above to create one.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.items.map(s => `<tr>
+    <td><b>${esc(s.settlement_number)}</b></td>
+    <td>${esc(fmtDay(s.week_start))} → ${esc(fmtDay(s.week_end))}</td>
+    <td class="num">${s.payment_count}</td>
+    <td class="num">${fmtN(s.total_revenue)}</td>
+    <td class="num capital">${fmtN(s.total_cost)}</td>
+    <td class="num profit">${fmtN(s.total_profit)}</td>
+    <td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td>
+    <td>${esc(s.approved_by_name || '—')}<br><small class="muted">${esc(fmtDate(s.approved_at))}</small></td>
+    <td>${s.settled_by_name ? `${esc(s.settled_by_name)}<br><small class="muted">${esc(fmtDate(s.settled_at))}</small>` : '<span class="muted">—</span>'}</td>
+    <td>
+      ${s.status === 'approved' ? `<button class="btn btn-ok" onclick="markSettled('${s.id}')">✓ Mark settled</button>` : ''}
+      ${s.status !== 'settled' ? `<button class="btn btn-danger" onclick="revoke('${s.id}','${esc(s.settlement_number)}')" style="margin-left:4px">Revoke</button>` : ''}
+    </td>
+  </tr>`).join('');
+}
+
+window.approveWeek = async function(weekStart){
+  const notes = prompt(`Approve all pending payments for week starting ${weekStart}?\n\nOptional notes:`, '');
+  if (notes === null) return;
+  try {
+    const r = await api('/api/profits/settlements/approve-week', {
+      method:'POST', body: JSON.stringify({week_start: weekStart, notes: notes || null})
+    });
+    alert(r.message || 'Week approved.');
+    await refreshAll();
+  } catch(e){ showErr(e.message); }
+};
+
+window.markSettled = async function(id){
+  if (!confirm('Mark this settlement as fully distributed/settled?\n\nThis records that the profit has been paid out.')) return;
+  try {
+    const r = await api('/api/profits/settlements/' + id + '/mark-settled', {method:'POST'});
+    alert(r.message || 'Marked settled.');
+    await refreshAll();
+  } catch(e){ showErr(e.message); }
+};
+
+window.revoke = async function(id, num){
+  if (!confirm(`Revoke settlement ${num}?\n\nLinked payments will return to pending.`)) return;
+  try {
+    const r = await api('/api/profits/settlements/' + id, {method:'DELETE'});
+    alert(r.message || 'Revoked.');
+    await refreshAll();
+  } catch(e){ showErr(e.message); }
+};
+
+async function refreshAll(){
+  try {
+    showErr('');
+    document.getElementById('liveLabel').textContent = 'Updating…';
+    await Promise.all([refreshSummary(), refreshRealtime(), refreshWeeks(), refreshSettlements()]);
+    document.getElementById('liveLabel').textContent = 'Live · ' + new Date().toLocaleTimeString();
+  } catch(e){
+    document.getElementById('liveLabel').textContent = 'Error';
+    showErr(e.message || 'Failed to load data. Are you signed in as admin?');
+  }
+}
+
+if (!token()){
+  showErr('You must be signed in as an admin user. Open this from inside the main app.');
+}
+
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

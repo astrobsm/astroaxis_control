@@ -7,7 +7,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from app.db import get_session
-from app.models import Staff, Product, RawMaterial, StockLevel, StockMovement, Warehouse, DamagedStock, BOM, BOMLine
+from app.api.auth import require_authenticated_user
+from app.services.inventory import apply_stock_movement
+from app.models import Staff, Product, RawMaterial, StockLevel, StockMovement, Warehouse, DamagedStock, BOM, BOMLine, User
 from datetime import datetime, timezone
 from decimal import Decimal
 import uuid
@@ -920,7 +922,9 @@ async def bulk_upload_raw_materials(file: UploadFile = File(...), session: Async
 
 
 @router.post("/product-stock-intake")
-async def bulk_upload_product_stock_intake(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+async def bulk_upload_product_stock_intake(file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
     """Bulk upload product stock intake from Excel file"""
     try:
         content = await file.read()
@@ -953,42 +957,21 @@ async def bulk_upload_product_stock_intake(file: UploadFile = File(...), session
                     errors.append(f"Row {row_idx}: Warehouse code '{warehouse_code}' not found")
                     continue
                 
-                # Update or create stock level
-                stock_result = await session.execute(
-                    select(StockLevel).where(
-                        StockLevel.warehouse_id == warehouse.id,
-                        StockLevel.product_id == product.id
-                    )
-                )
-                stock_level = stock_result.scalars().first()
-                
+                # 'INTAKE' was not a movement type any reader recognised, so
+                # these rows counted toward neither inbound nor outbound in a
+                # ledger replay. Booked as a normal IN through the service.
                 qty = Decimal(str(quantity))
-                
-                if stock_level:
-                    stock_level.current_stock += qty
-                    stock_level.updated_at = datetime.now(timezone.utc)
-                else:
-                    stock_level = StockLevel(
-                        id=uuid.uuid4(),
-                        warehouse_id=warehouse.id,
-                        product_id=product.id,
-                        current_stock=qty,
-                        reserved_stock=Decimal('0')
-                    )
-                    session.add(stock_level)
-                
-                # Create stock movement
-                movement = StockMovement(
-                    id=uuid.uuid4(),
+                await apply_stock_movement(
+                    session,
                     warehouse_id=warehouse.id,
                     product_id=product.id,
-                    movement_type='INTAKE',
+                    movement_type='IN',
                     quantity=qty,
                     unit_cost=Decimal(str(unit_cost)),
                     reference=f"Bulk Upload - {batch_number or 'N/A'}",
-                    notes=str(notes) if notes else f"Supplier: {supplier or 'N/A'}"
+                    notes=str(notes) if notes else f"Supplier: {supplier or 'N/A'}",
+                    created_by=current_user.id,
                 )
-                session.add(movement)
                 
                 created_count += 1
                 
@@ -1010,7 +993,9 @@ async def bulk_upload_product_stock_intake(file: UploadFile = File(...), session
 
 
 @router.post("/raw-material-stock-intake")
-async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
     """Bulk upload raw material stock intake from Excel file (production DB compatible)."""
     try:
         content = await file.read()
@@ -1065,43 +1050,20 @@ async def bulk_upload_raw_material_stock_intake(file: UploadFile = File(...), se
                 wh_id = wh.id
                 rm_id = rm.id
                 
-                # Update or create stock level
-                sl = await session.execute(
-                    text("SELECT id, current_stock FROM stock_levels WHERE warehouse_id = :wid AND raw_material_id = :rmid"),
-                    {"wid": str(wh_id), "rmid": str(rm_id)}
+                # The movement insert was wrapped in `except Exception: pass`,
+                # so a failure there left the balance raised with no ledger
+                # entry at all. Both now succeed or fail together.
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=wh_id,
+                    raw_material_id=rm_id,
+                    movement_type='IN',
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    reference=f"Bulk Upload - {batch_number}",
+                    notes=notes or f"Supplier: {supplier}",
+                    created_by=current_user.id,
                 )
-                existing = sl.fetchone()
-                
-                if existing:
-                    await session.execute(
-                        text("UPDATE stock_levels SET current_stock = current_stock + :qty, updated_at = NOW() WHERE id = :id"),
-                        {"qty": quantity, "id": existing.id}
-                    )
-                else:
-                    await session.execute(
-                        text("""
-                            INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock, min_stock, max_stock, updated_at)
-                            VALUES (gen_random_uuid(), :wid::uuid, :rmid::uuid, :qty, 0, 0, NOW())
-                        """),
-                        {"wid": str(wh_id), "rmid": str(rm_id), "qty": quantity}
-                    )
-                
-                # Create stock movement
-                try:
-                    await session.execute(
-                        text("""
-                            INSERT INTO stock_movements (id, warehouse_id, raw_material_id, movement_type, quantity, unit_cost, reference, notes, created_at)
-                            VALUES (gen_random_uuid(), :wid::uuid, :rmid::uuid, 'INTAKE', :qty, :cost, :ref, :notes, NOW())
-                        """),
-                        {
-                            "wid": str(wh_id), "rmid": str(rm_id), "qty": quantity,
-                            "cost": unit_cost,
-                            "ref": f"Bulk Upload - {batch_number}",
-                            "notes": notes or f"Supplier: {supplier}"
-                        }
-                    )
-                except Exception:
-                    pass  # stock_movements schema may differ
                 
                 created_count += 1
                 
@@ -1268,7 +1230,9 @@ async def bulk_upload_damaged_products(file: UploadFile = File(...), session: As
 
 
 @router.post("/damaged-raw-materials")
-async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
     """Bulk upload damaged raw materials from Excel file (production DB compatible)."""
     try:
         content = await file.read()
@@ -1317,11 +1281,19 @@ async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), sessio
                     {"wid": str(wh.id), "rmid": str(rm.id)}
                 )
                 existing = sl.fetchone()
-                if existing:
-                    await session.execute(
-                        text("UPDATE stock_levels SET current_stock = GREATEST(0, current_stock - :qty), updated_at = NOW() WHERE id = :id"),
-                        {"qty": quantity, "id": existing.id}
-                    )
+                # GREATEST(0, ...) hid over-consumption rather than preventing
+                # it, and no movement was written at all -- damaged material
+                # left inventory with nothing in the ledger to explain it.
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=wh.id,
+                    raw_material_id=rm.id,
+                    movement_type='DAMAGE',
+                    quantity=quantity,
+                    reference=f"Bulk Upload - damaged raw material",
+                    notes=notes or damage_reason,
+                    created_by=current_user.id,
+                )
                 
                 # Insert damaged record
                 try:
@@ -1355,7 +1327,9 @@ async def bulk_upload_damaged_raw_materials(file: UploadFile = File(...), sessio
 
 
 @router.post("/product-returns")
-async def bulk_upload_product_returns(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+async def bulk_upload_product_returns(file: UploadFile = File(...), session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
     """Bulk upload product returns from Excel file (production DB compatible)"""
     try:
         content = await file.read()
@@ -1418,18 +1392,23 @@ async def bulk_upload_product_returns(file: UploadFile = File(...), session: Asy
                 except Exception:
                     pass  # Table schema may vary
                 
-                # Add back to stock if condition is good
+                # Add back to stock if condition is good.
+                #
+                # This UPDATE had NO warehouse filter, so it added the returned
+                # quantity to EVERY warehouse holding the product -- a 5-unit
+                # return across four warehouses invented 20 units. It also
+                # wrote no movement and swallowed all errors.
                 if return_condition.lower() == 'good':
-                    try:
-                        await session.execute(
-                            text("""
-                                UPDATE stock_levels SET current_stock = COALESCE(current_stock, 0) + :qty
-                                WHERE product_id = :pid::uuid
-                            """),
-                            {"qty": quantity, "pid": str(prod.id)}
-                        )
-                    except Exception:
-                        pass
+                    await apply_stock_movement(
+                        session,
+                        warehouse_id=wh.id,
+                        product_id=prod.id,
+                        movement_type='RETURN',
+                        quantity=quantity,
+                        reference="Bulk Upload - product return",
+                        notes=notes or return_reason,
+                        created_by=current_user.id,
+                    )
                 
                 created_count += 1
                 

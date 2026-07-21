@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a3d62" />
+<title>Production Tasks — BONNESANTE MEDICALS</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root{
+    --brand:#0a3d62; --brand2:#1e6091; --accent:#e1b12c;
+    --bg:#f4f6fb; --card:#ffffff; --text:#1d2433; --muted:#6b7280;
+    --ok:#0d8050; --warn:#c0392b; --info:#1e6091; --border:#e5e7eb;
+    --pending:#9aa6b2; --inprog:#e1b12c; --done:#1e6091; --conf:#0d8050; --rej:#c0392b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;-webkit-font-smoothing:antialiased}
+  a{color:var(--brand2);text-decoration:none}
+  header{background:linear-gradient(135deg,var(--brand) 0%,var(--brand2) 100%);
+    color:#fff;padding:14px 16px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+  .h-wrap{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .h-wrap img{height:42px;width:42px;border-radius:10px;background:#fff;padding:4px;object-fit:contain}
+  .h-wrap h1{font-size:17px;margin:0;letter-spacing:.4px}
+  .h-wrap p{margin:2px 0 0;font-size:11.5px;opacity:.85}
+  .h-spacer{flex:1}
+  .h-link{font-size:12.5px;color:#fff;background:rgba(255,255,255,.14);padding:6px 12px;border-radius:8px}
+  main{max-width:1200px;margin:14px auto 100px;padding:0 14px}
+  .tabs{display:flex;background:#eef2f7;border-radius:12px;padding:4px;margin-bottom:14px;gap:4px}
+  .tabs button{flex:1;background:transparent;border:0;padding:10px;border-radius:9px;font-weight:600;
+    cursor:pointer;color:var(--muted);font-size:14px}
+  .tabs button.on{background:var(--brand);color:#fff;box-shadow:0 1px 3px rgba(10,61,98,.25)}
+  .panel{display:none}
+  .panel.on{display:block}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:980px){.grid.split{grid-template-columns:1.1fr .9fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+    box-shadow:0 1px 3px rgba(15,23,42,.04);padding:16px}
+  .card h2{font-size:15px;margin:0 0 12px;color:var(--brand);text-transform:uppercase;letter-spacing:.4px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row1{display:grid;grid-template-columns:1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  @media(max-width:640px){.row,.row3{grid-template-columns:1fr}}
+  label{display:block;font-size:11.5px;color:var(--muted);font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.3px}
+  input,select,textarea,button{font-family:inherit}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:9px;font-size:13.5px;background:#fff}
+  textarea{min-height:60px;resize:vertical}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--brand);
+    color:#fff;border:0;padding:10px 14px;border-radius:9px;font-size:13.5px;font-weight:600;cursor:pointer}
+  .btn:hover{background:var(--brand2)}
+  .btn.sm{padding:6px 10px;font-size:12px}
+  .btn.ghost{background:transparent;color:var(--brand);border:1px solid var(--brand)}
+  .btn.warn{background:var(--warn)}
+  .btn.ok{background:var(--ok)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .err{background:#fdecea;color:var(--warn);padding:10px;border-radius:8px;font-size:13px;margin-bottom:10px;display:none}
+  .err.show{display:block}
+  .ok{background:#e6f4ee;color:var(--ok);padding:10px;border-radius:8px;font-size:13px;margin-bottom:10px;display:none}
+  .ok.show{display:block}
+  /* Catalog (task pickers) */
+  .group{border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:#fafbfd}
+  .group h4{margin:2px 0 6px;font-size:12px;color:var(--brand);text-transform:uppercase;letter-spacing:.5px}
+  .task-row{display:grid;grid-template-columns:1fr 1.4fr 90px;gap:6px;align-items:start;
+    padding:5px 0;border-top:1px dashed var(--border)}
+  .task-row:first-of-type{border-top:0}
+  .task-row .nm{font-size:13px}
+  .task-row input[type=number]{padding:5px 6px;font-size:12.5px;text-align:center}
+  .staff-box{border:1px solid var(--border);border-radius:8px;background:#fff;padding:6px 8px;
+    max-height:120px;overflow-y:auto;font-size:12px}
+  .staff-box.disabled{opacity:.45;pointer-events:none;background:#f4f6fb}
+  .staff-box label{display:flex;align-items:center;gap:6px;font-weight:500;text-transform:none;
+    letter-spacing:0;color:var(--text);font-size:12px;margin:0;padding:2px 0;cursor:pointer}
+  .staff-box label input{width:14px;height:14px;margin:0;flex:none}
+  .staff-box .hint{color:var(--muted);font-size:11px;font-style:italic}
+  /* Lists */
+  .alist{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .alist .hdr{background:#fafbfd;padding:8px 12px;font-size:11px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.4px;display:grid;grid-template-columns:1.6fr 1fr .9fr .9fr;gap:6px}
+  .alist .lr{padding:10px 12px;border-top:1px solid var(--border);display:grid;grid-template-columns:1.6fr 1fr .9fr .9fr;
+    gap:6px;align-items:center;font-size:13px;cursor:pointer}
+  .alist .lr:hover{background:#f7faff}
+  .alist .lr.on{background:#eef5ff}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.4px}
+  .pill.pending{background:var(--pending)}
+  .pill.in_progress{background:var(--inprog);color:#3a2c00}
+  .pill.completed{background:var(--done)}
+  .pill.confirmed{background:var(--conf)}
+  .pill.rejected{background:var(--rej)}
+  .pill.cancelled{background:#444}
+  .pill.assigned{background:var(--pending)}
+  .meta{font-size:11px;color:var(--muted);margin-top:2px}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:18px 0}
+  /* Detail items */
+  .item{border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;background:#fff}
+  .item .top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+  .item .nm{font-weight:700;font-size:13.5px}
+  .item .sm{font-size:11.5px;color:var(--muted)}
+  .item .qa{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .item .qa input{width:90px;padding:5px;font-size:12px}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .filters select,.filters input{max-width:200px;font-size:12.5px;padding:7px 8px}
+  /* Staff view list */
+  .stask{border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px;background:#fff}
+  .stask .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap}
+  .stask .pn{font-weight:700;color:var(--brand);font-size:14px}
+  .stask .tn{font-size:13.5px;font-weight:600}
+  .stask .info{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .stask .actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .stask .actions input{width:110px}
+  footer{text-align:center;font-size:12px;color:var(--muted);padding:24px 14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="h-wrap">
+    <img src="/company-logo.png" alt="BSM" onerror="this.style.display='none'">
+    <div>
+      <h1>Production Tasks Tracker</h1>
+      <p>BONNESANTE MEDICALS — assign, track and confirm production work</p>
+    </div>
+    <div class="h-spacer"></div>
+    <a class="h-link" href="/">← Main App</a>
+  </div>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button type="button" id="tabMgr"   class="on" data-p="manager">Manager / Admin</button>
+    <button type="button" id="tabStaff"            data-p="staff">Staff Self-Service</button>
+  </div>
+
+  <!-- ───────────────────────── MANAGER PANEL ───────────────────────── -->
+  <section id="panelManager" class="panel on">
+    <div class="grid split">
+      <!-- LEFT: create assignment -->
+      <div class="card">
+        <h2>Assign New Tasks</h2>
+        <div id="mgrErr" class="err"></div>
+        <div id="mgrOk" class="ok"></div>
+
+        <form id="formAssign" autocomplete="off">
+          <div class="row">
+            <div><label for="aProduct">Product *</label>
+              <select id="aProduct" required></select></div>
+            <div><label for="aBatch">Batch (optional)</label>
+              <input id="aBatch" placeholder="e.g. BCH-2026-04-01"></div>
+          </div>
+          <div class="row">
+            <div><label for="aDate">Scheduled Date *</label>
+              <input id="aDate" type="date" required></div>
+            <div><label for="aTime">Start Time</label>
+              <input id="aTime" type="time"></div>
+          </div>
+          <div class="row1"><div>
+            <label for="aNotes">Notes (optional)</label>
+            <textarea id="aNotes" placeholder="Special instructions for the team"></textarea>
+          </div></div>
+
+          <h2 style="margin-top:18px">Tasks &amp; Assignees</h2>
+          <p class="meta" style="margin-top:-6px;margin-bottom:8px">
+            Tick the tasks for this run, then assign each to a staff member. Planned qty optional.
+          </p>
+          <div id="catalog"><div class="empty">Loading tasks…</div></div>
+
+          <button type="submit" class="btn" id="btnAssign" style="margin-top:14px;width:100%">
+            ✓ Create Assignment
+          </button>
+        </form>
+      </div>
+
+      <!-- RIGHT: list + detail -->
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <h2>Filter Assignments</h2>
+          <div class="filters">
+            <select id="fStatus">
+              <option value="">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="in_progress">In progress</option>
+              <option value="completed">Completed (awaiting confirm)</option>
+              <option value="confirmed">Confirmed</option>
+            </select>
+            <input id="fFrom" type="date" title="From date">
+            <input id="fTo"   type="date" title="To date">
+            <button type="button" class="btn sm ghost" id="btnRefresh">Refresh</button>
+          </div>
+          <div class="alist">
+            <div class="hdr"><div>Assignment</div><div>Product</div><div>Date</div><div>Status</div></div>
+            <div id="aList"><div class="empty">Loading…</div></div>
+          </div>
+        </div>
+
+        <div class="card" id="detailCard" style="display:none">
+          <h2 id="detailTitle">Assignment</h2>
+          <div id="detailMeta" class="meta" style="margin-bottom:10px"></div>
+          <div id="detailItems"></div>
+          <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+            <a id="btnPdf" class="btn sm" href="#" target="_blank" rel="noopener">⬇ Download PDF</a>
+            <button type="button" class="btn sm" id="btnPrint">🖨 Print</button>
+            <button type="button" class="btn sm warn" id="btnDelete">Delete assignment</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── STAFF PANEL ───────────────────────── -->
+  <section id="panelStaff" class="panel">
+    <div class="card">
+      <h2>Sign In With Your Clock PIN</h2>
+      <div id="staffErr" class="err"></div>
+      <div id="staffOk" class="ok"></div>
+      <form id="formStaff" autocomplete="off">
+        <div class="row">
+          <div><label for="sPin">Clock PIN (4 digits) *</label>
+            <input id="sPin" inputmode="numeric" pattern="\d{4}" maxlength="4" required placeholder="••••"></div>
+          <div style="display:flex;align-items:flex-end">
+            <button type="submit" class="btn" id="btnLoadMine" style="width:100%">Load my tasks</button>
+          </div>
+        </div>
+      </form>
+      <p class="meta" style="margin-top:8px">Use the same PIN you use to clock in / out for attendance.</p>
+    </div>
+
+    <div id="staffTasks" style="margin-top:14px"></div>
+  </section>
+</main>
+
+<footer>© BONNESANTE MEDICALS</footer>
+
+<script>
+(function(){
+  const API = location.origin || '';
+  const NGN = n => '₦' + Number(n||0).toLocaleString('en-NG',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const escapeHtml = s => String(s||'').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmtDate = s => s ? new Date(s + (s.length===10?'T00:00:00':'')).toLocaleDateString('en-NG') : '—';
+  const fmtTime = s => s ? s.slice(0,5) : '';
+
+  // ── Tabs ──
+  const setPanel = p => {
+    document.getElementById('tabMgr').classList.toggle('on', p==='manager');
+    document.getElementById('tabStaff').classList.toggle('on', p==='staff');
+    document.getElementById('panelManager').classList.toggle('on', p==='manager');
+    document.getElementById('panelStaff').classList.toggle('on', p==='staff');
+  };
+  document.getElementById('tabMgr').onclick   = () => setPanel('manager');
+  document.getElementById('tabStaff').onclick = () => setPanel('staff');
+
+  // ── Manager auth ──
+  function authHeader(){
+    const t = localStorage.getItem('access_token');
+    return t ? {'Authorization':'Bearer ' + t} : {};
+  }
+  async function api(path, opts={}){
+    opts.headers = Object.assign(
+      {'Content-Type':'application/json'}, authHeader(), opts.headers||{});
+    const r = await fetch(API + path, opts);
+    let data = null;
+    try { data = await r.json(); } catch(_){}
+    if (!r.ok) {
+      const msg = (data && (data.detail || data.message)) || ('HTTP ' + r.status);
+      throw new Error(msg);
+    }
+    return data;
+  }
+  function showErr(id, msg){const e=document.getElementById(id); e.textContent=msg||''; e.classList.toggle('show',!!msg);}
+  function showOk(id, msg){const e=document.getElementById(id); e.textContent=msg||''; e.classList.toggle('show',!!msg);}
+
+  // ── Manager state ──
+  let products = [], staff = [], catalog = [], assignments = [], currentAssign = null;
+
+  async function loadDropdowns(){
+    try{
+      [products, staff, catalog] = await Promise.all([
+        api('/api/production-tasks/products'),
+        api('/api/production-tasks/staff'),
+        api('/api/production-tasks/catalog'),
+      ]);
+      const ps = document.getElementById('aProduct');
+      ps.innerHTML = '<option value="">— Select product —</option>' +
+        products.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.sku)})</option>`).join('');
+      renderCatalog();
+    }catch(err){
+      showErr('mgrErr', 'Failed to load dropdowns: ' + err.message);
+    }
+  }
+
+  function staffCheckboxes(task){
+    if (!staff.length) return '<div class="hint">No active staff found.</div>';
+    const t = escapeHtml(task);
+    return staff.map(s =>
+      `<label><input type="checkbox" data-staff data-task="${t}" value="${s.id}"> <span>${escapeHtml(s.name)} <span style="color:var(--muted)">(${escapeHtml(s.employee_id||'')})</span></span></label>`
+    ).join('');
+  }
+
+  function renderCatalog(){
+    const el = document.getElementById('catalog');
+    if (!catalog.length){ el.innerHTML = '<div class="empty">No tasks defined.</div>'; return; }
+    el.innerHTML = catalog.map((g, gi) => `
+      <div class="group">
+        <h4>${escapeHtml(g.group)}</h4>
+        ${g.tasks.map((t, ti) => `
+          <div class="task-row">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:500;text-transform:none;letter-spacing:0;font-size:13px;color:var(--text)">
+              <input type="checkbox" data-cb data-task="${escapeHtml(t)}" style="width:16px;height:16px;margin:0">
+              <span class="nm">${escapeHtml(t)}</span>
+            </label>
+            <div class="staff-box disabled" data-staffbox data-task="${escapeHtml(t)}">${staffCheckboxes(t)}</div>
+            <input type="number" min="0" step="any" placeholder="Qty" data-qty data-task="${escapeHtml(t)}" disabled>
+          </div>`).join('')}
+      </div>`).join('');
+    el.querySelectorAll('[data-cb]').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const t = e.target.dataset.task;
+        const box = el.querySelector(`[data-staffbox][data-task="${CSS.escape(t)}"]`);
+        const qty = el.querySelector(`[data-qty][data-task="${CSS.escape(t)}"]`);
+        const enabled = e.target.checked;
+        box.classList.toggle('disabled', !enabled);
+        qty.disabled = !enabled;
+        if (!enabled){
+          box.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+          qty.value='';
+        }
+      });
+    });
+  }
+
+  document.getElementById('formAssign').addEventListener('submit', async e => {
+    e.preventDefault(); showErr('mgrErr',''); showOk('mgrOk','');
+    if (!localStorage.getItem('access_token')){
+      showErr('mgrErr', 'You must be logged in to the main app first.'); return;
+    }
+    const product_id = document.getElementById('aProduct').value;
+    const scheduled_date = document.getElementById('aDate').value;
+    if (!product_id){ showErr('mgrErr','Please select a product.'); return; }
+    if (!scheduled_date){ showErr('mgrErr','Please select a date.'); return; }
+
+    const items = [];
+    let bad = null;
+    document.querySelectorAll('#catalog [data-cb]').forEach(cb => {
+      if (!cb.checked) return;
+      const t = cb.dataset.task;
+      const box = document.querySelector(`#catalog [data-staffbox][data-task="${CSS.escape(t)}"]`);
+      const qty = document.querySelector(`#catalog [data-qty][data-task="${CSS.escape(t)}"]`).value;
+      const sids = Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+      if (!sids.length){ bad = t; return; }
+      items.push({task_name:t, assigned_staff_ids:sids,
+        planned_qty: qty ? Number(qty) : null});
+    });
+    if (bad){ showErr('mgrErr','Tick at least one staff member for "'+bad+'".'); return; }
+    if (!items.length){ showErr('mgrErr','Pick at least one task.'); return; }
+
+    const btn = document.getElementById('btnAssign');
+    btn.disabled = true; btn.textContent='Submitting…';
+    try{
+      const data = await api('/api/production-tasks/assignments', {
+        method:'POST',
+        body: JSON.stringify({
+          product_id, batch_number: document.getElementById('aBatch').value || null,
+          scheduled_date, scheduled_start_time: document.getElementById('aTime').value || null,
+          notes: document.getElementById('aNotes').value || null,
+          items
+        })
+      });
+      showOk('mgrOk', 'Assignment ' + data.assignment_number + ' created.');
+      document.getElementById('formAssign').reset();
+      renderCatalog();
+      await loadAssignments();
+      openDetail(data.id);
+    }catch(err){
+      showErr('mgrErr', err.message);
+    }finally{
+      btn.disabled = false; btn.textContent='✓ Create Assignment';
+    }
+  });
+
+  // ── Manager: list + detail ──
+  async function loadAssignments(){
+    const params = new URLSearchParams();
+    const st = document.getElementById('fStatus').value;
+    const df = document.getElementById('fFrom').value;
+    const dt = document.getElementById('fTo').value;
+    if (st) params.set('status', st);
+    if (df) params.set('date_from', df);
+    if (dt) params.set('date_to', dt);
+    const el = document.getElementById('aList');
+    el.innerHTML = '<div class="empty">Loading…</div>';
+    try{
+      assignments = await api('/api/production-tasks/assignments?' + params.toString());
+      if (!assignments.length){ el.innerHTML = '<div class="empty">No assignments yet.</div>'; return; }
+      el.innerHTML = assignments.map(a => `
+        <div class="lr" data-id="${a.id}">
+          <div><div style="font-weight:700">${escapeHtml(a.assignment_number)}</div>
+               <div class="meta">${a.batch_number ? 'Batch '+escapeHtml(a.batch_number)+' · ' : ''}${a.items_total} task(s) · ${a.items_open} open · ${a.items_pending_confirm} to confirm</div></div>
+          <div>${escapeHtml(a.product_name)}<div class="meta">${escapeHtml(a.product_sku||'')}</div></div>
+          <div>${fmtDate(a.scheduled_date)}<div class="meta">${fmtTime(a.scheduled_start_time)}</div></div>
+          <div><span class="pill ${a.status}">${a.status.replace('_',' ')}</span>
+               <div class="meta" style="margin-top:4px"><a href="/api/production-tasks/assignments/${a.id}/pdf" target="_blank" rel="noopener" onclick="event.stopPropagation()">⬇ PDF</a></div></div>
+        </div>`).join('');
+      el.querySelectorAll('.lr').forEach(n =>
+        n.addEventListener('click', () => openDetail(n.dataset.id)));
+    }catch(err){
+      el.innerHTML = '<div class="empty">Failed to load: ' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  async function openDetail(id){
+    document.querySelectorAll('#aList .lr').forEach(n => n.classList.toggle('on', n.dataset.id===id));
+    const card = document.getElementById('detailCard');
+    card.style.display = 'block';
+    document.getElementById('detailTitle').textContent = 'Loading…';
+    document.getElementById('detailItems').innerHTML = '';
+    try{
+      currentAssign = await api('/api/production-tasks/assignments/' + id);
+      document.getElementById('btnPdf').href = '/api/production-tasks/assignments/' + id + '/pdf';
+      document.getElementById('detailTitle').textContent = currentAssign.assignment_number;
+      document.getElementById('detailMeta').innerHTML =
+        `<b>${escapeHtml(currentAssign.product_name)}</b> · ${escapeHtml(currentAssign.product_sku||'')}<br>
+         Date ${fmtDate(currentAssign.scheduled_date)} ${fmtTime(currentAssign.scheduled_start_time)} ·
+         Status <span class="pill ${currentAssign.status}">${currentAssign.status.replace('_',' ')}</span>
+         ${currentAssign.batch_number ? ' · Batch '+escapeHtml(currentAssign.batch_number) : ''}
+         ${currentAssign.created_by_name ? '<div class="meta">Created by '+escapeHtml(currentAssign.created_by_name)+'</div>' : ''}
+         ${currentAssign.notes ? '<div class="meta">Notes: '+escapeHtml(currentAssign.notes)+'</div>' : ''}`;
+      const itemsEl = document.getElementById('detailItems');
+      itemsEl.innerHTML = currentAssign.items.map(it => `
+        <div class="item" data-iid="${it.id}">
+          <div class="top">
+            <div>
+              <div class="nm">${escapeHtml(it.task_name)}</div>
+              <div class="sm">${escapeHtml(it.task_group||'')} · 👤 ${escapeHtml(it.assigned_staff_name)} (${escapeHtml(it.assigned_staff_employee_id||'')})</div>
+              <div class="sm">Planned: ${it.planned_qty ?? '—'} · Done: <b>${it.completed_qty ?? 0}</b> ${escapeHtml(it.unit||'')}</div>
+              ${it.staff_notes ? '<div class="sm">Staff notes: '+escapeHtml(it.staff_notes)+'</div>' : ''}
+              ${it.confirmed_by_name ? '<div class="sm" style="color:var(--ok)">Confirmed by '+escapeHtml(it.confirmed_by_name)+'</div>' : ''}
+              ${it.confirmation_notes ? '<div class="sm">Note: '+escapeHtml(it.confirmation_notes)+'</div>' : ''}
+            </div>
+            <span class="pill ${it.status}">${it.status.replace('_',' ')}</span>
+          </div>
+          <div class="qa">
+            ${it.status==='completed' ? `
+              <input type="text" placeholder="Optional confirm note" data-cnote>
+              <button type="button" class="btn sm ok"   data-act="confirm">✓ Confirm</button>
+              <button type="button" class="btn sm warn" data-act="reject">✗ Reject</button>` : ''}
+            ${it.status==='confirmed' ? `
+              <button type="button" class="btn sm warn" data-act="reject">↩ Reopen</button>` : ''}
+          </div>
+        </div>`).join('');
+      itemsEl.querySelectorAll('.item').forEach(card => {
+        const iid = card.dataset.iid;
+        card.querySelectorAll('button[data-act]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const act = btn.dataset.act;
+            const cnote = card.querySelector('[data-cnote]')?.value || '';
+            try{
+              if (act==='confirm'){
+                await api('/api/production-tasks/items/'+iid+'/confirm', {method:'POST', body: JSON.stringify({notes: cnote||null})});
+              } else {
+                const reason = prompt('Reason for rejection?');
+                if (!reason) return;
+                await api('/api/production-tasks/items/'+iid+'/reject', {method:'POST', body: JSON.stringify({reason})});
+              }
+              await loadAssignments();
+              await openDetail(id);
+            }catch(err){ alert(err.message); }
+          });
+        });
+      });
+    }catch(err){
+      document.getElementById('detailTitle').textContent = 'Error';
+      document.getElementById('detailItems').innerHTML = '<div class="empty">'+escapeHtml(err.message)+'</div>';
+    }
+  }
+
+  document.getElementById('btnRefresh').onclick = loadAssignments;
+  document.getElementById('fStatus').onchange = loadAssignments;
+  document.getElementById('fFrom').onchange = loadAssignments;
+  document.getElementById('fTo').onchange = loadAssignments;
+  document.getElementById('btnPrint').onclick = () => {
+    if (!currentAssign) return;
+    window.open('/api/production-tasks/assignments/' + currentAssign.id + '/pdf', '_blank');
+  };
+  document.getElementById('btnDelete').onclick = async () => {
+    if (!currentAssign) return;
+    if (!confirm('Delete assignment ' + currentAssign.assignment_number + '? This cannot be undone.')) return;
+    try{
+      await api('/api/production-tasks/assignments/'+currentAssign.id, {method:'DELETE'});
+      document.getElementById('detailCard').style.display='none';
+      currentAssign = null;
+      await loadAssignments();
+    }catch(err){ alert(err.message); }
+  };
+
+  // ── Staff view ──
+  let staffPin = '';
+  document.getElementById('formStaff').addEventListener('submit', async e => {
+    e.preventDefault(); showErr('staffErr',''); showOk('staffOk','');
+    const pin = document.getElementById('sPin').value.trim();
+    if (!/^\d{4}$/.test(pin)){ showErr('staffErr','PIN must be 4 digits.'); return; }
+    staffPin = pin;
+    await loadMyTasks();
+  });
+
+  async function loadMyTasks(){
+    const el = document.getElementById('staffTasks');
+    el.innerHTML = '<div class="card"><div class="empty">Loading your tasks…</div></div>';
+    try{
+      const data = await api('/api/production-tasks/my-tasks?clock_pin=' + encodeURIComponent(staffPin) + '&include_done=true');
+      showOk('staffOk', 'Hello, ' + data.staff_name + '. ' + data.items.length + ' task(s) found.');
+      if (!data.items.length){ el.innerHTML = '<div class="card"><div class="empty">You have no tasks assigned.</div></div>'; return; }
+      el.innerHTML = data.items.map(t => `
+        <div class="stask" data-iid="${t.id}" data-status="${t.status}">
+          <div class="hd">
+            <div>
+              <div class="pn">${escapeHtml(t.product_name)} ${t.batch_number ? '· Batch '+escapeHtml(t.batch_number) : ''}</div>
+              <div class="tn">${escapeHtml(t.task_name)} <span class="meta">(${escapeHtml(t.task_group||'')})</span></div>
+              <div class="info">📅 ${fmtDate(t.scheduled_date)} ${fmtTime(t.scheduled_start_time)} · Assignment ${escapeHtml(t.assignment_number)}</div>
+              <div class="info">Planned: ${t.planned_qty ?? '—'} · Logged: <b>${t.completed_qty ?? 0}</b> ${escapeHtml(t.unit||'')}</div>
+            </div>
+            <span class="pill ${t.status}">${t.status.replace('_',' ')}</span>
+          </div>
+          ${['assigned','in_progress','completed'].includes(t.status) ? `
+            <div class="actions">
+              ${t.status==='assigned' ? `<button type="button" class="btn sm" data-act="start">▶ Start</button>` : ''}
+              <input type="number" min="0" step="any" placeholder="Qty done" data-qty value="${t.completed_qty||''}">
+              <input type="text" placeholder="Notes (optional)" data-notes style="flex:1;min-width:120px" value="${escapeHtml(t.staff_notes||'')}">
+              <button type="button" class="btn sm ok" data-act="complete">✓ ${t.status==='completed' ? 'Update' : 'Mark complete'}</button>
+            </div>` : ''}
+        </div>`).join('');
+      el.querySelectorAll('.stask').forEach(card => {
+        const iid = card.dataset.iid;
+        card.querySelectorAll('button[data-act]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const act = btn.dataset.act;
+            const qty = card.querySelector('[data-qty]')?.value;
+            const notes = card.querySelector('[data-notes]')?.value;
+            try{
+              if (act==='start'){
+                await api('/api/production-tasks/items/'+iid+'/start', {
+                  method:'POST', body: JSON.stringify({clock_pin: staffPin})});
+              } else {
+                if (qty === undefined || qty === '' || Number(qty) < 0){
+                  alert('Enter the quantity you processed.'); return;
+                }
+                await api('/api/production-tasks/items/'+iid+'/complete', {
+                  method:'POST',
+                  body: JSON.stringify({clock_pin: staffPin, completed_qty: Number(qty), notes: notes||null})
+                });
+              }
+              await loadMyTasks();
+            }catch(err){ alert(err.message); }
+          });
+        });
+      });
+    }catch(err){
+      showErr('staffErr', err.message);
+      el.innerHTML = '';
+    }
+  }
+
+  // ── Boot ──
+  document.getElementById('aDate').value = new Date().toISOString().slice(0,10);
+  loadDropdowns();
+  loadAssignments();
+})();
+</script>
+</body>
+</html>

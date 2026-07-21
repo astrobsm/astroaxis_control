@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.db import get_session
 from app.models import User, UserSession, AuditLog, RolePermission, UserModuleAccess, user_warehouses, Warehouse
 from sqlalchemy import delete, and_
@@ -10,15 +11,29 @@ from uuid import UUID
 import uuid
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
+import os
 import secrets
+import bcrypt
 from jose import jwt, JWTError
+from app.services.geocoding import reverse_geocode
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 # Configuration
-SECRET_KEY = "astroasix-secret-key-change-in-production"
+# SECRET_KEY must come from the environment. There is deliberately no default:
+# a shared fallback lets anyone with repo access forge admin tokens, and a
+# per-process random fallback breaks multi-worker deployments (a token minted
+# by one worker is rejected by the next). Fail loudly at import instead.
+SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY is not set. Generate one with "
+        "`python -c \"import secrets; print(secrets.token_urlsafe(64))\"` "
+        "and set it in the environment before starting the application."
+    )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
 # Pydantic schemas
 class UserRegister(BaseModel):
@@ -32,6 +47,9 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -43,13 +61,48 @@ class PasswordChange(BaseModel):
     new_password: str
 
 # Utility functions
+def _bcrypt_input(password: str) -> bytes:
+    """Normalise a password to <=72 bytes for bcrypt.
+
+    bcrypt silently truncates at 72 bytes, which would make two long
+    passwords sharing a 72-byte prefix interchangeable. SHA-256 the input
+    first so the full password always contributes to the hash.
+    """
+    return hashlib.sha256(password.encode("utf-8")).hexdigest().encode("ascii")
+
+
 def hash_password(password: str) -> str:
-    """Hash password using SHA-256"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password with bcrypt (salted, work factor 12)."""
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt(rounds=12)).decode()
+
+
+def is_legacy_hash(hashed_password: str) -> bool:
+    """True for the old unsalted SHA-256 hex digests (64 hex chars)."""
+    return len(hashed_password) == 64 and all(
+        c in "0123456789abcdef" for c in hashed_password.lower()
+    )
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash"""
-    return hash_password(plain_password) == hashed_password
+    """Verify a password against either a bcrypt or a legacy SHA-256 hash.
+
+    Legacy hashes are accepted so existing accounts keep working; callers
+    should re-hash with bcrypt on successful login (see needs_rehash).
+    """
+    if not hashed_password:
+        return False
+    if is_legacy_hash(hashed_password):
+        legacy = hashlib.sha256(plain_password.encode()).hexdigest()
+        return hmac.compare_digest(legacy, hashed_password.lower())
+    try:
+        return bcrypt.checkpw(_bcrypt_input(plain_password), hashed_password.encode())
+    except (ValueError, TypeError):
+        return False
+
+
+def needs_rehash(hashed_password: str) -> bool:
+    """True if the stored hash should be upgraded to bcrypt on next login."""
+    return is_legacy_hash(hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
@@ -72,20 +125,91 @@ def decode_token(token: str) -> dict:
     except jwt.JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
+# ---------------------------------------------------------------------------
+# Reusable authentication / authorization dependencies
+#
+# These re-load the User row on every request rather than trusting the JWT's
+# claims. A token minted before an account was locked, deactivated, or demoted
+# would otherwise keep its old privileges until it expired.
+# ---------------------------------------------------------------------------
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def require_authenticated_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    """Resolve the authenticated user, or raise 401."""
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = decode_token(credentials.credentials)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    try:
+        user_uuid = UUID(str(user_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is inactive")
+    if user.is_locked:
+        raise HTTPException(status_code=403, detail="Account is locked")
+    return user
+
+
+def require_roles(*roles: str):
+    """Dependency factory restricting a route to the given roles."""
+    allowed = set(roles)
+
+    async def _guard(user: User = Depends(require_authenticated_user)) -> User:
+        if user.role not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to perform this action",
+            )
+        return user
+
+    return _guard
+
+
+require_admin = require_roles("admin")
+
+
 # Register new user
 @router.post("/register")
 async def register(user_data: UserRegister, db: AsyncSession = Depends(get_session)):
     """Register a new user"""
-    result = await db.execute(select(User).where(User.email == user_data.email))
-    existing_user = result.scalar_one_or_none()
-    
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
     valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff", "warehouse_logistics"]
     if user_data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
-    
+
+    # Self-registration must never grant privileged roles. An admin can
+    # promote the account afterwards via PUT /users/{id}/role, which is
+    # itself admin-guarded.
+    if user_data.role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="The admin role cannot be self-assigned. Register with a "
+                   "standard role; an administrator can promote the account.",
+        )
+
+    result = await db.execute(select(User).where(User.email == user_data.email))
+    existing_user = result.scalar_one_or_none()
+
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
     new_user = User(
         id=uuid.uuid4(),
         email=user_data.email,
@@ -128,7 +252,7 @@ async def register(user_data: UserRegister, db: AsyncSession = Depends(get_sessi
 
 # Login
 @router.post("/login", response_model=TokenResponse)
-async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session)):
+async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_session)):
     """Authenticate user and return access token"""
     result = await db.execute(select(User).where(User.email == credentials.email))
     user = result.scalar_one_or_none()
@@ -155,11 +279,16 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
     
     user.failed_login_attempts = 0
     user.last_login = datetime.now(timezone.utc)
-    
+
+    # Transparently upgrade legacy SHA-256 hashes now that we have the
+    # plaintext in hand -- existing accounts migrate to bcrypt on first login.
+    if needs_rehash(user.hashed_password):
+        user.hashed_password = hash_password(credentials.password)
+
     access_token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role}
     )
-    
+
     session_token = secrets.token_urlsafe(32)
     user_session = UserSession(
         id=uuid.uuid4(),
@@ -174,11 +303,29 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_session))
         user_id=user.id,
         action="USER_LOGIN",
         module="auth",
-        details=f"User logged in: {user.email}"
+        details=f"User logged in: {user.email}",
+        ip_address=(request.client.host if request and request.client else None),
+        user_agent=(request.headers.get('user-agent') if request else None),
     )
     db.add(audit_log)
     
     await db.commit()
+
+    # Best-effort geo enrichment for this audit log entry
+    if credentials.latitude is not None and credentials.longitude is not None:
+        try:
+            address = await reverse_geocode(credentials.latitude, credentials.longitude)
+            await db.execute(text(
+                "UPDATE audit_logs SET latitude=:lat, longitude=:lng, accuracy=:acc, "
+                "location_address=:addr WHERE id=:id"
+            ), {
+                'lat': credentials.latitude, 'lng': credentials.longitude,
+                'acc': credentials.accuracy, 'addr': address,
+                'id': audit_log.id,
+            })
+            await db.commit()
+        except Exception:
+            await db.rollback()
     
     # Fetch module access for user
     access_result = await db.execute(
@@ -214,9 +361,12 @@ class PhoneLogin(BaseModel):
     phone: str
     password: str
     role: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
 
 @router.post("/login-phone", response_model=TokenResponse)
-async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_session)):
+async def login_phone(credentials: PhoneLogin, request: Request, db: AsyncSession = Depends(get_session)):
     """Authenticate user by phone number, password, and role"""
     result = await db.execute(
         select(User).where(
@@ -248,11 +398,16 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
     
     user.failed_login_attempts = 0
     user.last_login = datetime.now(timezone.utc)
-    
+
+    # Transparently upgrade legacy SHA-256 hashes now that we have the
+    # plaintext in hand -- existing accounts migrate to bcrypt on first login.
+    if needs_rehash(user.hashed_password):
+        user.hashed_password = hash_password(credentials.password)
+
     access_token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role}
     )
-    
+
     session_token = secrets.token_urlsafe(32)
     user_session = UserSession(
         id=uuid.uuid4(),
@@ -267,11 +422,29 @@ async def login_phone(credentials: PhoneLogin, db: AsyncSession = Depends(get_se
         user_id=user.id,
         action="USER_LOGIN_PHONE",
         module="auth",
-        details=f"User logged in via phone: {user.phone} with role {user.role}"
+        details=f"User logged in via phone: {user.phone} with role {user.role}",
+        ip_address=(request.client.host if request and request.client else None),
+        user_agent=(request.headers.get('user-agent') if request else None),
     )
     db.add(audit_log)
     
     await db.commit()
+
+    # Best-effort geo enrichment
+    if credentials.latitude is not None and credentials.longitude is not None:
+        try:
+            address = await reverse_geocode(credentials.latitude, credentials.longitude)
+            await db.execute(text(
+                "UPDATE audit_logs SET latitude=:lat, longitude=:lng, accuracy=:acc, "
+                "location_address=:addr WHERE id=:id"
+            ), {
+                'lat': credentials.latitude, 'lng': credentials.longitude,
+                'acc': credentials.accuracy, 'addr': address,
+                'id': audit_log.id,
+            })
+            await db.commit()
+        except Exception:
+            await db.rollback()
     
     # Fetch module access for user
     access_result = await db.execute(
@@ -439,7 +612,7 @@ async def check_permission(
 
 # User Management Endpoints
 @router.get("/users")
-async def list_all_users(db: AsyncSession = Depends(get_session)):
+async def list_all_users(db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Get all users with their status"""
     try:
         result = await db.execute(
@@ -463,7 +636,7 @@ async def list_all_users(db: AsyncSession = Depends(get_session)):
 
 
 @router.post("/users/{user_id}/approve")
-async def approve_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def approve_user(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Approve a pending user registration"""
     try:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -497,7 +670,7 @@ async def approve_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
 
 
 @router.post("/users/{user_id}/reject")
-async def reject_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def reject_user(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Reject and delete a pending user registration"""
     try:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -523,7 +696,7 @@ async def reject_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
 
 
 @router.post("/users/{user_id}/toggle-lock")
-async def toggle_user_lock(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def toggle_user_lock(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Lock or unlock a user account"""
     try:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -559,7 +732,7 @@ async def toggle_user_lock(user_id: UUID, db: AsyncSession = Depends(get_session
 
 
 @router.post("/users/{user_id}/deactivate")
-async def deactivate_user(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def deactivate_user(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Deactivate an active user account"""
     try:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -588,7 +761,7 @@ class UpdateRoleRequest(BaseModel):
     role: str
 
 @router.put("/users/{user_id}/role")
-async def update_user_role(user_id: UUID, body: UpdateRoleRequest, db: AsyncSession = Depends(get_session)):
+async def update_user_role(user_id: UUID, body: UpdateRoleRequest, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Update a user's role"""
     valid_roles = ["admin", "sales_staff", "marketer", "customer_care", "production_staff", "warehouse_logistics"]
     if body.role not in valid_roles:
@@ -618,7 +791,7 @@ async def update_user_role(user_id: UUID, body: UpdateRoleRequest, db: AsyncSess
 
 
 @router.post("/users/{user_id}/reset-password")
-async def admin_reset_password(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def admin_reset_password(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Reset user password to a temporary default (user must change on next login)"""
     try:
         result = await db.execute(select(User).where(User.id == user_id))
@@ -681,7 +854,7 @@ async def list_all_modules():
 
 
 @router.get("/modules/access/{user_id}")
-async def get_user_module_access(user_id: UUID, db: AsyncSession = Depends(get_session)):
+async def get_user_module_access(user_id: UUID, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Get module access for a specific user"""
     result = await db.execute(
         select(UserModuleAccess).where(UserModuleAccess.user_id == user_id)
@@ -702,7 +875,7 @@ async def get_user_module_access(user_id: UUID, db: AsyncSession = Depends(get_s
 
 
 @router.get("/modules/access-all")
-async def get_all_users_module_access(db: AsyncSession = Depends(get_session)):
+async def get_all_users_module_access(db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Get module access for all users (admin view)"""
     users_result = await db.execute(select(User).order_by(User.full_name))
     users = users_result.scalars().all()
@@ -737,7 +910,7 @@ async def get_all_users_module_access(db: AsyncSession = Depends(get_session)):
 
 
 @router.put("/modules/access/{user_id}")
-async def set_user_module_access(user_id: UUID, body: ModuleAccessUpdate, db: AsyncSession = Depends(get_session)):
+async def set_user_module_access(user_id: UUID, body: ModuleAccessUpdate, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Set module access for a specific user"""
     try:
         for module_key, is_granted in body.modules.items():
@@ -777,7 +950,7 @@ async def set_user_module_access(user_id: UUID, body: ModuleAccessUpdate, db: As
 # ======================== WAREHOUSE ACCESS MANAGEMENT ========================
 
 @router.get("/warehouse-access")
-async def get_all_warehouse_access(db: AsyncSession = Depends(get_session)):
+async def get_all_warehouse_access(db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Get warehouse access for all users (admin settings view)"""
     # All users
     users_result = await db.execute(select(User).order_by(User.full_name))
@@ -811,7 +984,7 @@ class WarehouseAccessUpdate(BaseModel):
     warehouse_access: dict  # { "warehouse_id": true/false, ... }
 
 @router.put("/warehouse-access/{user_id}")
-async def set_user_warehouse_access(user_id: UUID, body: WarehouseAccessUpdate, db: AsyncSession = Depends(get_session)):
+async def set_user_warehouse_access(user_id: UUID, body: WarehouseAccessUpdate, db: AsyncSession = Depends(get_session), _admin: User = Depends(require_admin)):
     """Set warehouse access for a user — replaces all grants with the new set"""
     try:
         # Remove all existing grants for this user

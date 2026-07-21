@@ -248,7 +248,13 @@ class SalesOrderLine(Base):
     quantity = sa.Column(sa.Numeric(18,6), nullable=False)
     unit_price = sa.Column(sa.Numeric(18,6), nullable=False)
     line_total = sa.Column(sa.Numeric(18,2), nullable=False)
-    
+    # Cost of goods sold, snapshotted when the sale is made. Never recompute
+    # these from the current price list: doing so restates the profit of
+    # periods already closed and paid out.
+    unit_cost = sa.Column(sa.Numeric(18,6))
+    cost_total = sa.Column(sa.Numeric(18,2))
+    cost_source = sa.Column(sa.String(32))  # wac_warehouse|wac_global|price_list_unit|product_cost_price|unknown|backfill_estimate
+
     # Relationships
     sales_order = relationship("SalesOrder", back_populates="lines")
     product = relationship("Product", foreign_keys=[product_id])
@@ -389,6 +395,10 @@ class InvoiceLine(Base):
     quantity = sa.Column(sa.Numeric(18,6), nullable=False)
     unit_price = sa.Column(sa.Numeric(18,6), nullable=False)
     line_total = sa.Column(sa.Numeric(18,2), nullable=False)
+    # Cost snapshot, carried so an invoice stands alone as a document.
+    unit_cost = sa.Column(sa.Numeric(18,6))
+    cost_total = sa.Column(sa.Numeric(18,2))
+    cost_source = sa.Column(sa.String(32))
 
 class Payment(Base):
     __tablename__ = 'payments'
@@ -560,6 +570,87 @@ class UserModuleAccess(Base):
     updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
     __table_args__ = (sa.UniqueConstraint('user_id', 'module_key', name='uq_user_module'),)
 
+
+# ============ COMMUNICATION MODULE ============
+
+class Notice(Base):
+    __tablename__ = 'notices'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = sa.Column(sa.String(255), nullable=False)
+    content = sa.Column(sa.Text, nullable=False)
+    priority = sa.Column(sa.String(20), nullable=False, default='normal')  # urgent, high, normal, low
+    category = sa.Column(sa.String(50), nullable=False, default='general')  # general, announcement, hr, policy, event, safety
+    author = sa.Column(sa.String(255), nullable=False)
+    author_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    pinned = sa.Column(sa.Boolean, default=False)
+    is_active = sa.Column(sa.Boolean, default=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    channel = sa.Column(sa.String(50), nullable=False, default='general', index=True)  # general, sales, production, hr, management
+    sender = sa.Column(sa.String(255), nullable=False)
+    sender_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    text = sa.Column(sa.Text, nullable=False)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class Letter(Base):
+    __tablename__ = 'letters'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = sa.Column(sa.String(255), nullable=False)
+    recipient = sa.Column(sa.String(255), nullable=True)
+    body = sa.Column(sa.Text, nullable=False)
+    author = sa.Column(sa.String(255), nullable=False)
+    author_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+
+
+class SOPTemplate(Base):
+    __tablename__ = 'sop_templates'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sop_code = sa.Column(sa.String(64), unique=True, nullable=False, index=True)
+    title = sa.Column(sa.String(255), nullable=False)
+    sop_number = sa.Column(sa.String(64), nullable=False)
+    version = sa.Column(sa.String(32), nullable=False)
+    effective_date = sa.Column(sa.Date, nullable=False)
+    document = sa.Column(sa.JSON, nullable=False)
+    form_schema = sa.Column(sa.JSON, nullable=False)
+    db_table_structure = sa.Column(sa.JSON, nullable=False)
+    validation_rules = sa.Column(sa.JSON, nullable=False)
+    is_active = sa.Column(sa.Boolean, default=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+
+
+class SOPExecutionLog(Base):
+    __tablename__ = 'sop_execution_logs'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    template_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('sop_templates.id', ondelete='CASCADE'), nullable=False)
+    sop_code = sa.Column(sa.String(64), nullable=False, index=True)
+    operator_name = sa.Column(sa.String(255), nullable=False)
+    supervisor_name = sa.Column(sa.String(255), nullable=False)
+    executed_at = sa.Column(sa.TIMESTAMP(timezone=True), nullable=False)
+    batch_number = sa.Column(sa.String(100), nullable=False, index=True)
+    material_equipment_used = sa.Column(sa.JSON, nullable=False)
+    checklist = sa.Column(sa.JSON, nullable=False)
+    numeric_inputs = sa.Column(sa.JSON, nullable=False)
+    operator_signature = sa.Column(sa.String(255), nullable=False)
+    supervisor_signature = sa.Column(sa.String(255), nullable=False)
+    comments = sa.Column(sa.Text)
+    deviation = sa.Column(sa.Text)
+    status = sa.Column(sa.String(32), nullable=False, default='submitted')
+    approved_by = sa.Column(sa.String(255))
+    approved_at = sa.Column(sa.TIMESTAMP(timezone=True))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+
+    template = relationship("SOPTemplate")
+
 class WarehouseTransfer(Base):
     __tablename__ = 'warehouse_transfers'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -593,3 +684,160 @@ class CustomField(Base):
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
 
+
+# ============ NETWORK & WIFI MANAGEMENT MODULE ============
+# Centralized Wi-Fi authentication / captive portal system. Wi-Fi access is tied
+# to existing employee accounts (User table) via RADIUS + captive portal — this
+# module does NOT introduce a separate credential store.
+
+class WifiSettings(Base):
+    """Single-row configuration table for the company Wi-Fi / RADIUS environment.
+
+    All passwords / secrets are stored AES-encrypted (see app.services.encryption)
+    and are never returned to the client in plaintext.
+    """
+    __tablename__ = 'wifi_settings'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_ssid = sa.Column(sa.String(64))
+    encrypted_company_password = sa.Column(sa.Text)            # AES encrypted
+    guest_ssid = sa.Column(sa.String(64))
+    encrypted_guest_password = sa.Column(sa.Text)             # AES encrypted
+    # "Current WiFi Password" for BONNESANTE MEDICALS management (AES encrypted)
+    encrypted_current_wifi_password = sa.Column(sa.Text)
+    radius_server_ip = sa.Column(sa.String(45))               # IPv4/IPv6
+    encrypted_radius_secret = sa.Column(sa.Text)              # AES encrypted
+    captive_portal_url = sa.Column(sa.String(255))
+    session_timeout = sa.Column(sa.Integer, default=60)        # minutes
+    max_devices = sa.Column(sa.Integer, default=3)            # per employee
+    bandwidth_limit = sa.Column(sa.Integer, default=0)        # Mbps per employee (0 = unlimited)
+    guest_network_enabled = sa.Column(sa.Boolean, default=False)
+    attendance_on_login = sa.Column(sa.Boolean, default=False)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), onupdate=func.now())
+
+
+class WifiSession(Base):
+    __tablename__ = 'wifi_sessions'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    device_mac = sa.Column(sa.String(64), index=True)
+    device_name = sa.Column(sa.String(255))
+    ip_address = sa.Column(sa.String(45))
+    login_time = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now(), index=True)
+    logout_time = sa.Column(sa.TIMESTAMP(timezone=True))
+    session_status = sa.Column(sa.String(20), default='active', index=True)  # active, closed, expired
+    data_used_mb = sa.Column(sa.Numeric(18, 2), default=0)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    employee = relationship("User", foreign_keys=[employee_id])
+
+
+class WifiDevice(Base):
+    __tablename__ = 'wifi_devices'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    device_name = sa.Column(sa.String(255))
+    device_mac = sa.Column(sa.String(64), nullable=False, index=True)
+    device_type = sa.Column(sa.String(50))  # phone, laptop, tablet, other
+    last_connected = sa.Column(sa.TIMESTAMP(timezone=True))
+    status = sa.Column(sa.String(20), default='active', index=True)  # active, blocked
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    __table_args__ = (sa.UniqueConstraint('employee_id', 'device_mac', name='uq_employee_device_mac'),)
+
+    employee = relationship("User", foreign_keys=[employee_id])
+
+
+class WifiAuthLog(Base):
+    __tablename__ = 'wifi_auth_logs'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    username = sa.Column(sa.String(255), index=True)
+    ip_address = sa.Column(sa.String(45))
+    device_mac = sa.Column(sa.String(64))
+    authentication_result = sa.Column(sa.String(20), index=True)  # success, failure
+    failure_reason = sa.Column(sa.String(255))
+    timestamp = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now(), index=True)
+
+
+
+# ============ ACCOUNTING: GENERAL LEDGER ============
+# Double-entry bookkeeping. Every financial event in the ERP produces a
+# balanced journal entry here; nothing writes account balances directly.
+
+class Account(Base):
+    """A line in the Chart of Accounts."""
+    __tablename__ = 'gl_accounts'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = sa.Column(sa.String(20), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(255), nullable=False)
+    # ASSET | LIABILITY | EQUITY | INCOME | EXPENSE
+    account_type = sa.Column(sa.String(20), nullable=False, index=True)
+    # Which side increases this account: 'DEBIT' for assets/expenses,
+    # 'CREDIT' for liabilities/equity/income. Stored rather than derived so
+    # contra accounts can be modelled explicitly.
+    normal_balance = sa.Column(sa.String(6), nullable=False)
+    parent_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('gl_accounts.id'))
+    description = sa.Column(sa.Text)
+    is_active = sa.Column(sa.Boolean, default=True, nullable=False)
+    # Postable accounts accept entries; headers only aggregate their children.
+    is_postable = sa.Column(sa.Boolean, default=True, nullable=False)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class JournalEntry(Base):
+    """A balanced set of debits and credits recording one business event."""
+    __tablename__ = 'gl_journal_entries'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Monotonic insertion order for stable ledger sequencing (see migration).
+    seq = sa.Column(sa.BigInteger, autoincrement=True)
+    entry_number = sa.Column(sa.String(64), unique=True, nullable=False, index=True)
+    entry_date = sa.Column(sa.Date, nullable=False, index=True)
+    description = sa.Column(sa.Text, nullable=False)
+    # What caused this entry, so a ledger line can be traced back to the
+    # sale / production run / payment that produced it.
+    source_module = sa.Column(sa.String(50), nullable=False, index=True)
+    source_reference = sa.Column(sa.String(128), index=True)
+    # DRAFT | POSTED | REVERSED. Posted entries are immutable.
+    status = sa.Column(sa.String(16), nullable=False, default='POSTED', index=True)
+    # A reversal points at what it reverses; corrections never edit history.
+    reverses_entry_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('gl_journal_entries.id'))
+    posted_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    lines = relationship("JournalLine", back_populates="entry",
+                         cascade="all, delete-orphan")
+
+
+class JournalLine(Base):
+    """One debit or credit against one account."""
+    __tablename__ = 'gl_journal_lines'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id = sa.Column(UUID(as_uuid=True),
+                         sa.ForeignKey('gl_journal_entries.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    account_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('gl_accounts.id'),
+                           nullable=False, index=True)
+    # Exactly one of these is non-zero; enforced by a CHECK constraint.
+    debit = sa.Column(sa.Numeric(18, 2), nullable=False, default=0)
+    credit = sa.Column(sa.Numeric(18, 2), nullable=False, default=0)
+    description = sa.Column(sa.Text)
+    cost_centre = sa.Column(sa.String(50), index=True)
+    line_number = sa.Column(sa.Integer, nullable=False, default=0)
+
+    entry = relationship("JournalEntry", back_populates="lines")
+
+
+class AccountingPeriod(Base):
+    """A financial period that can be locked against further posting."""
+    __tablename__ = 'gl_periods'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = sa.Column(sa.String(50), unique=True, nullable=False)
+    start_date = sa.Column(sa.Date, nullable=False)
+    end_date = sa.Column(sa.Date, nullable=False)
+    # OPEN | CLOSED. Closing prevents back-dated entries silently changing a
+    # period that has already been reported.
+    status = sa.Column(sa.String(16), nullable=False, default='OPEN', index=True)
+    closed_at = sa.Column(sa.TIMESTAMP(timezone=True))
+    closed_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())

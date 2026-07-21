@@ -18,6 +18,11 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 import os
 
 from app.db import get_session
+from app.services.receivables import (
+    ensure_invoice_for_order, record_payment, recompute_invoice_paid, money)
+from app.services.inventory import apply_stock_movement
+from app.services.costing import snapshot_line_cost
+from app.services.posting import post_sale
 from app.models import (
     Customer,
     SalesOrder,
@@ -33,6 +38,11 @@ from app.schemas import (
     PaginatedResponse, ApiResponse
 )
 from app.api.auth import get_current_user
+from app.api.notifications import (
+    fire_notification,
+    notify_sale_created,
+    notify_payment_received,
+)
 from decimal import Decimal
 from sqlalchemy import and_
 
@@ -48,50 +58,20 @@ async def deduct_stock_for_order(session: AsyncSession, order: SalesOrder):
     lines = lines_result.scalars().all()
     
     for line in lines:
-        # Get stock level for product in warehouse
-        stock_result = await session.execute(
-            select(StockLevel).where(
-                and_(
-                    StockLevel.warehouse_id == order.warehouse_id,
-                    StockLevel.product_id == line.product_id
-                )
-            )
-        )
-        stock_level = stock_result.scalars().first()
-        
-        if not stock_level:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"No stock record found for product in selected warehouse"
-            )
-        
-        quantity = Decimal(str(line.quantity))
-        
-        if stock_level.current_stock < quantity:
-            # Get product name for error message
-            product_result = await session.execute(
-                select(Product).where(Product.id == line.product_id)
-            )
-            product = product_result.scalars().first()
-            product_name = product.name if product else "Unknown"
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient stock for {product_name}. Available: {stock_level.current_stock}, Required: {quantity}"
-            )
-        
-        # Deduct stock
-        stock_level.current_stock -= quantity
-        
-        # Create stock movement record
-        movement = StockMovement(
+        # One locked, validated path. The old code read the balance, checked
+        # it, then mutated it in Python -- with no row lock, so two concurrent
+        # orders for the same product both passed the check and both wrote,
+        # overselling stock that was never there.
+        await apply_stock_movement(
+            session,
             warehouse_id=order.warehouse_id,
             product_id=line.product_id,
             movement_type='OUT',
-            quantity=quantity,
+            quantity=Decimal(str(line.quantity)),
             reference=f"Sales Order: {order.order_number}",
-            notes=f"Stock deducted for sales order {order.order_number}"
+            notes=f"Stock deducted for sales order {order.order_number}",
+            created_by=order.created_by,
         )
-        session.add(movement)
 
 
 async def restore_stock_for_order(session: AsyncSession, order: SalesOrder):
@@ -103,31 +83,20 @@ async def restore_stock_for_order(session: AsyncSession, order: SalesOrder):
     lines = lines_result.scalars().all()
     
     for line in lines:
-        # Get stock level for product in warehouse
-        stock_result = await session.execute(
-            select(StockLevel).where(
-                and_(
-                    StockLevel.warehouse_id == order.warehouse_id,
-                    StockLevel.product_id == line.product_id
-                )
-            )
+        # Cancelling returns the committed stock. Previously this silently did
+        # nothing when no StockLevel row existed, so cancelling an order whose
+        # balance row had since been removed quietly lost the units.
+        await apply_stock_movement(
+            session,
+            warehouse_id=order.warehouse_id,
+            product_id=line.product_id,
+            movement_type='RETURN',
+            quantity=Decimal(str(line.quantity)),
+            reference=f"Cancelled Order: {order.order_number}",
+            notes=f"Stock restored from cancelled order {order.order_number}",
+            created_by=order.created_by,
         )
-        stock_level = stock_result.scalars().first()
-        
-        if stock_level:
-            quantity = Decimal(str(line.quantity))
-            stock_level.current_stock += quantity
-            
-            # Create stock movement record for return
-            movement = StockMovement(
-                warehouse_id=order.warehouse_id,
-                product_id=line.product_id,
-                movement_type='RETURN',
-                quantity=quantity,
-                reference=f"Cancelled Order: {order.order_number}",
-                notes=f"Stock restored from cancelled order {order.order_number}"
-            )
-            session.add(movement)
+
 
 # Customer endpoints
 @router.post('/customers', response_model=ApiResponse)
@@ -350,9 +319,16 @@ async def create_sales_order(
             if not product:
                 raise HTTPException(status_code=404, detail=f"Product {line_data.product_id} not found")
             
-            line_total = line_data.quantity * line_data.unit_price
+            # Round each line to the 2dp the column stores, THEN sum.
+            # Previously total_amount summed the unrounded products while the
+            # database rounded each line_total on insert, so the printed line
+            # totals could sum to a different figure than the printed TOTAL
+            # (three lines at 1.005 -> lines 3.03, total 3.02). That drift
+            # propagated into invoices and was then absorbed by the payment
+            # tolerance, which masked it rather than fixing it.
+            line_total = money(line_data.quantity * line_data.unit_price)
             total_amount += line_total
-            
+
             order_line = SalesOrderLine(
                 sales_order_id=sales_order.id,
                 **line_data.model_dump(),
@@ -360,15 +336,37 @@ async def create_sales_order(
             )
             order_lines.append(order_line)
             session.add(order_line)
-        
+
+        await session.flush()  # order lines need ids before costing them
+
+        # Snapshot cost of goods sold at the moment of sale. Recomputing this
+        # later from the price list restates the profit of closed periods.
+        for order_line in order_lines:
+            await snapshot_line_cost(
+                session,
+                line_id=order_line.id,
+                table='sales_order_lines',
+                product_id=order_line.product_id,
+                quantity=order_line.quantity,
+                unit=order_line.unit,
+                warehouse_id=sales_order.warehouse_id,
+            )
+
         sales_order.total_amount = total_amount
         
         # Always deduct stock when a sales order is created (order commits inventory)
         sales_order.status = 'confirmed'
         await deduct_stock_for_order(session, sales_order)
-        
+
+        # Recognise the sale in the general ledger, in this same transaction:
+        # revenue, receivable, and the cost of the goods just shipped. If the
+        # posting fails the whole order rolls back, so stock can never move
+        # without the books knowing. No-ops unless ACCOUNTING_POSTING_ENABLED.
+        await post_sale(session, order_id=sales_order.id,
+                        created_by=sales_order.created_by)
+
         await session.commit()
-        
+
         # Reload with relationships
         result = await session.execute(
             select(SalesOrder)
@@ -376,6 +374,23 @@ async def create_sales_order(
             .where(SalesOrder.id == sales_order.id)
         )
         order = result.scalars().first()
+        
+        # Fire push notification (non-blocking)
+        try:
+            fire_notification(notify_sale_created(
+                order_number=order.order_number,
+                customer_name=customer.name if customer else "Customer",
+                total_amount=float(order.total_amount or 0),
+                line_count=len(order.lines or []),
+            ))
+            if order.payment_status == 'paid':
+                fire_notification(notify_payment_received(
+                    order_number=order.order_number,
+                    amount=float(order.total_amount or 0),
+                    customer_name=customer.name if customer else "Customer",
+                ))
+        except Exception as _notif_err:
+            print(f"[sales] notification dispatch error: {_notif_err}")
         
         return ApiResponse(
             message=f"Sales order {order.order_number} created successfully",
@@ -392,7 +407,7 @@ async def create_sales_order(
 @router.get('/orders', response_model=PaginatedResponse[SalesOrderSchema])
 async def list_sales_orders(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     status: Optional[str] = Query(None),
     customer_id: Optional[UUID] = Query(None),
     session: AsyncSession = Depends(get_session)
@@ -432,6 +447,72 @@ async def list_sales_orders(
         size=size,
         pages=(total + size - 1) // size if size > 0 else 1
     )
+
+
+@router.get('/customer/{customer_id}/unpaid')
+async def get_customer_unpaid_orders(
+    customer_id: UUID,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get all unpaid/partial orders for a customer with line-item details"""
+    try:
+        # Verify customer exists
+        cust_result = await session.execute(
+            select(Customer).where(Customer.id == customer_id)
+        )
+        customer = cust_result.scalars().first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        # Fetch unpaid and partial orders
+        result = await session.execute(
+            select(SalesOrder)
+            .options(selectinload(SalesOrder.lines).selectinload(SalesOrderLine.product))
+            .where(
+                SalesOrder.customer_id == customer_id,
+                SalesOrder.payment_status.in_(['unpaid', 'partial']),
+                SalesOrder.status != 'cancelled'
+            )
+            .order_by(SalesOrder.order_date.desc())
+        )
+        orders = result.scalars().all()
+
+        unpaid_orders = []
+        total_outstanding = 0.0
+        for order in orders:
+            order_total = float(order.total_amount or 0)
+            total_outstanding += order_total
+            lines_desc = []
+            for line in order.lines:
+                product_name = line.product.name if line.product else 'Unknown Product'
+                lines_desc.append({
+                    "product_name": product_name,
+                    "quantity": float(line.quantity),
+                    "unit_price": float(line.unit_price),
+                    "line_total": float(line.quantity * line.unit_price)
+                })
+            unpaid_orders.append({
+                "order_id": str(order.id),
+                "order_number": order.order_number,
+                "order_date": str(order.order_date) if order.order_date else None,
+                "payment_status": order.payment_status,
+                "total_amount": order_total,
+                "notes": order.notes,
+                "lines": lines_desc
+            })
+
+        return {
+            "customer_id": str(customer_id),
+            "customer_name": customer.name,
+            "unpaid_orders": unpaid_orders,
+            "total_outstanding": total_outstanding,
+            "count": len(unpaid_orders)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching unpaid orders: {str(e)}")
+
 
 @router.get('/orders/{order_id}', response_model=ApiResponse)
 async def get_sales_order(
@@ -776,7 +857,11 @@ async def process_order_and_deduct_stock(
         
         if order.status == 'completed':
             raise HTTPException(status_code=400, detail="Order already processed")
-        
+
+        if order.status == 'cancelled':
+            raise HTTPException(
+                status_code=400, detail="Cannot process a cancelled order")
+
         # Use the warehouse from the sales order itself
         if order.warehouse_id:
             warehouse_result = await session.execute(
@@ -789,14 +874,22 @@ async def process_order_and_deduct_stock(
                 select(Warehouse).where(Warehouse.is_active == True)
             )
             warehouse = warehouse_result.scalars().first()
-        
+
         if not warehouse:
             raise HTTPException(status_code=404, detail="No warehouse found for this order")
-        
-        # Process each line item
+
+        # Stock was already committed when the order was created (see
+        # create_sales_order, which sets status='confirmed' and calls
+        # deduct_stock_for_order). This endpoint used to deduct a SECOND time,
+        # because its only guard was status == 'completed' and creation left
+        # the order at 'confirmed'. Every processed order therefore shipped
+        # twice as much stock as it sold, and deleting the order restored only
+        # one deduction -- so the shortfall was permanent.
+        #
+        # Processing is now purely a state transition. It reports low stock so
+        # the UI keeps working, but moves no inventory.
         low_stock_items = []
-        insufficient_stock_items = []
-        
+
         for line in order.lines:
             # Get current stock level
             stock_result = await session.execute(
@@ -806,62 +899,19 @@ async def process_order_and_deduct_stock(
                 )
             )
             stock_level = stock_result.scalars().first()
-            
-            if not stock_level:
-                # Create stock level entry if it doesn't exist
-                stock_level = StockLevel(
-                    product_id=line.product_id,
-                    warehouse_id=warehouse.id,
-                    current_stock=0,
-                    reserved_stock=0,
-                    min_stock=0
-                )
-                session.add(stock_level)
-                await session.flush()
-            
-            # Check if sufficient stock is available
-            if stock_level.current_stock < line.quantity:
-                insufficient_stock_items.append({
-                    'product_name': line.product.name if line.product else f"Product {line.product_id}",
-                    'requested': line.quantity,
-                    'available': stock_level.current_stock
-                })
-                continue
-            
-            # Deduct stock
-            old_stock = stock_level.current_stock
-            stock_level.current_stock -= line.quantity
-            
-            # Create stock movement record
-            movement = StockMovement(
-                product_id=line.product_id,
-                movement_type='OUT',
-                quantity=line.quantity,
-                warehouse_id=warehouse.id,
-                reference=f"Sales Order {order.order_number}",
-                notes=(f"Stock deducted for sales order "
-                       f"{order.order_number} - was {old_stock}, "
-                       f"now {stock_level.current_stock}")
-            )
-            session.add(movement)
-            
-            # Check if stock is now below reorder level
-            if (stock_level.current_stock <= (
-                    line.product.reorder_level or 0) and
-                    line.product and line.product.reorder_level):
+
+            # Read-only: report anything now at or below its reorder level so
+            # the caller still gets restock warnings. No mutation here.
+            if (stock_level and line.product and line.product.reorder_level
+                    and stock_level.current_stock <= line.product.reorder_level):
                 low_stock_items.append({
                     'product_id': str(line.product_id),
                     'product_name': line.product.name,
                     'current_stock': stock_level.current_stock,
                     'reorder_level': line.product.reorder_level
                 })
-        
-        if insufficient_stock_items:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient stock: {insufficient_stock_items}"
-            )
-        
+
+
         # Update order status
         order.status = 'completed'
         
@@ -911,13 +961,58 @@ async def mark_order_paid(
                 message="Order already marked as paid",
                 data=SalesOrderSchema.model_validate(order)
             )
-        
-        # Update payment status
-        order.payment_status = 'paid'
-        order.payment_date = datetime.now(timezone.utc)
-        
+
+        # Marking an order paid means cash was received, so it must produce an
+        # actual Payment row against an actual Invoice.
+        #
+        # This endpoint used to set payment_status = 'paid' and nothing else --
+        # no Payment, no Invoice, not even an import of Invoice in this module.
+        # profits.py and payment-tracking both read from payments/invoices, so
+        # every sale settled through here was invisible to them: profit
+        # reported zero on it while the debtors list still chased the customer
+        # for money they had already handed over.
+        invoice_id = await ensure_invoice_for_order(
+            session, order_id=order.id, created_by=order.created_by)
+
+        remaining = (await session.execute(
+            text("""
+                SELECT i.total_amount - COALESCE((
+                           SELECT SUM(p.amount) FROM payments p
+                            WHERE p.invoice_id = i.id), 0) AS remaining
+                  FROM invoices i WHERE i.id = :iid
+            """),
+            {"iid": str(invoice_id)},
+        )).scalar()
+
+        remaining = money(remaining)
+        if remaining > 0:
+            await record_payment(
+                session,
+                invoice_id=invoice_id,
+                amount=remaining,
+                payment_method='unspecified',
+                reference=f"MARK-PAID-{order.order_number}",
+                notes="Settled in full via order mark-paid",
+            )
+        else:
+            # Already fully covered by existing payments; just resync the
+            # derived flags rather than inventing a zero-value payment.
+            await recompute_invoice_paid(session, invoice_id)
+
         await session.commit()
         await session.refresh(order)
+        await session.refresh(order)
+        
+        # Fire payment notification
+        try:
+            customer_name = order.customer.name if order.customer else "Customer"
+            fire_notification(notify_payment_received(
+                order_number=order.order_number,
+                amount=float(order.total_amount or 0),
+                customer_name=customer_name,
+            ))
+        except Exception as _notif_err:
+            print(f"[sales] notification dispatch error: {_notif_err}")
         
         return ApiResponse(
             message=f"Order {order.order_number} marked as paid. Receipt can be generated.",
@@ -1211,3 +1306,170 @@ async def generate_invoice(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
+
+
+def _thermal_styles():
+    """Shared CSS for 80mm thermal printer: Georgia font, 12px, company branding."""
+    return """
+@page { size: 80mm auto; margin: 2mm; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: Georgia, 'Times New Roman', serif; font-size: 12px; width: 76mm; max-width: 76mm; margin: 0 auto; padding: 2mm; color: #000; }
+.logo { text-align: center; margin-bottom: 4px; }
+.logo img { max-width: 50mm; max-height: 20mm; }
+.company-name { text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 2px; }
+.company-info { text-align: center; font-size: 10px; margin-bottom: 6px; line-height: 1.3; }
+.doc-title { text-align: center; font-weight: bold; font-size: 14px; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 3px 0; margin-bottom: 6px; }
+.info-section { font-size: 11px; margin-bottom: 6px; line-height: 1.5; }
+.info-section strong { font-weight: bold; }
+.separator { border-top: 1px dashed #000; margin: 4px 0; }
+.items-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
+.items-table th { background: #333; color: #fff; padding: 2px 3px; text-align: left; font-size: 10px; }
+.items-table td { padding: 2px 3px; border-bottom: 1px solid #ddd; }
+.items-table .right { text-align: right; }
+.total-row { font-weight: bold; font-size: 12px; border-top: 2px solid #000; padding-top: 3px; margin-top: 3px; text-align: right; }
+.payment-info { font-size: 10px; margin-top: 6px; line-height: 1.4; }
+.payment-info strong { font-weight: bold; }
+.whatsapp { font-size: 10px; margin-top: 4px; font-weight: bold; }
+.footer { text-align: center; font-size: 9px; margin-top: 6px; font-style: italic; border-top: 1px solid #000; padding-top: 3px; }
+.status-paid { font-weight: bold; }
+.status-unpaid { font-weight: bold; }
+@media print { body { width: 80mm; } @page { size: 80mm auto; margin: 2mm; } }
+"""
+
+
+def _thermal_header():
+    """Shared header HTML for thermal prints."""
+    return """<div class="logo"><img src="/company-logo.png" onerror="this.style.display='none'" alt="Logo"></div>
+<div class="company-name">BONNESANTE MEDICALS</div>
+<div class="company-info">NO 6B PEACE AVE/17A ISUOFIA ST, FED HOUSING TRANS EKULU, ENUGU<br>Tel: +234 702 575 5406, +234 707 679 3866<br>Email: astrobsm@gmail.com</div>"""
+
+
+@router.get('/orders/{order_id}/thermal-receipt')
+@router.post('/orders/{order_id}/thermal-receipt')
+async def thermal_receipt(order_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Generate thermal-printer-optimized HTML receipt (80mm, Georgia 12pt, logo)."""
+    try:
+        from fastapi.responses import HTMLResponse
+        result = await session.execute(
+            select(SalesOrder)
+            .options(
+                selectinload(SalesOrder.lines).selectinload(SalesOrderLine.product),
+                selectinload(SalesOrder.customer)
+            )
+            .where(SalesOrder.id == order_id)
+        )
+        order = result.scalars().first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Sales order not found")
+        if order.payment_status == 'unpaid':
+            raise HTTPException(status_code=400, detail="Cannot print receipt for unpaid order")
+
+        payment_label = 'PAID' if order.payment_status == 'paid' else 'PARTIAL PAYMENT'
+        items_rows = ""
+        for line in order.lines:
+            items_rows += f"""<tr>
+                <td>{line.product.name}</td>
+                <td class="right">{line.quantity}</td>
+                <td class="right">&#8358;{float(line.unit_price):,.2f}</td>
+                <td class="right">&#8358;{float(line.line_total):,.2f}</td>
+            </tr>"""
+
+        receipt_date = order.payment_date.strftime('%Y-%m-%d %H:%M') if order.payment_date else datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Receipt {order.order_number}</title>
+<style>{_thermal_styles()}</style></head><body>
+{_thermal_header()}
+<div class="doc-title">PAYMENT RECEIPT</div>
+<div class="info-section">
+    <div><strong>Receipt #:</strong> {order.order_number}</div>
+    <div><strong>Date:</strong> {receipt_date}</div>
+    <div><strong>Customer:</strong> {order.customer.name}</div>
+    <div><strong>Status:</strong> <span class="status-paid">{payment_label}</span></div>
+</div>
+<div class="separator"></div>
+<table class="items-table">
+    <thead><tr><th>Product</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+    <tbody>{items_rows}</tbody>
+</table>
+<div class="total-row">TOTAL: &#8358;{float(order.total_amount):,.2f}</div>
+<div class="separator"></div>
+<div class="whatsapp">After payment, send evidence via WhatsApp: +234 702 575 5406</div>
+<div class="footer">Thank you for your business!<br>AstroBSM - Bonnesante Medicals</div>
+<script>window.onload=function(){{window.print();}}</script>
+</body></html>"""
+        return HTMLResponse(content=html)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating thermal receipt: {str(e)}")
+
+
+@router.get('/orders/{order_id}/thermal-invoice')
+@router.post('/orders/{order_id}/thermal-invoice')
+async def thermal_invoice(order_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Generate thermal-printer-optimized HTML invoice (80mm, Georgia 12pt, logo)."""
+    try:
+        from fastapi.responses import HTMLResponse
+        result = await session.execute(
+            select(SalesOrder)
+            .options(
+                selectinload(SalesOrder.lines).selectinload(SalesOrderLine.product),
+                selectinload(SalesOrder.customer)
+            )
+            .where(SalesOrder.id == order_id)
+        )
+        order = result.scalars().first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Sales order not found")
+
+        due_date = order.required_date.strftime('%Y-%m-%d') if order.required_date else 'Upon Receipt'
+        payment_status_display = 'PAID' if order.payment_status == 'paid' else 'UNPAID'
+
+        items_rows = ""
+        for line in order.lines:
+            items_rows += f"""<tr>
+                <td>{line.product.name}</td>
+                <td class="right">{line.quantity}</td>
+                <td class="right">&#8358;{float(line.unit_price):,.2f}</td>
+                <td class="right">&#8358;{float(line.line_total):,.2f}</td>
+            </tr>"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Invoice {order.order_number}</title>
+<style>{_thermal_styles()}</style></head><body>
+{_thermal_header()}
+<div class="doc-title">INVOICE</div>
+<div class="info-section">
+    <div><strong>Invoice #:</strong> {order.order_number}</div>
+    <div><strong>Date:</strong> {order.order_date.strftime('%Y-%m-%d')}</div>
+    <div><strong>Due:</strong> {due_date}</div>
+    <div><strong>Customer:</strong> {order.customer.name}</div>
+    <div><strong>Status:</strong> <span class="status-unpaid">{payment_status_display}</span></div>
+</div>
+<div class="separator"></div>
+<table class="items-table">
+    <thead><tr><th>Product</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+    <tbody>{items_rows}</tbody>
+</table>
+<div class="total-row">TOTAL DUE: &#8358;{float(order.total_amount):,.2f}</div>
+<div class="separator"></div>
+<div class="payment-info">
+    <strong>Payment Terms:</strong><br>
+    Payment is due upon receipt. Pay to:<br><br>
+    <strong>ACCESS BANK NIG PLC</strong><br>
+    Acct: 1379643548<br>
+    Name: BONNESANTE MEDICALS<br><br>
+    <strong>MONIEPOINT MFB</strong><br>
+    Acct: 8259518195<br>
+    Name: BONNESANTE MEDICALS
+</div>
+<div class="whatsapp">After payment, send evidence via WhatsApp: +234 702 575 5406</div>
+<div class="footer">AstroBSM - Bonnesante Medicals<br>Computer-generated invoice</div>
+<script>window.onload=function(){{window.print();}}</script>
+</body></html>"""
+        return HTMLResponse(content=html)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating thermal invoice: {str(e)}")

@@ -180,106 +180,22 @@ async def receive_transfer(
     session: AsyncSession = Depends(get_session),
     authorization: Optional[str] = Header(None),
 ):
+    """Receive a damaged product transfer at the destination warehouse.
+
+    This genuinely delegates to the damaged-transfers implementation rather
+    than reimplementing it. It previously carried its own copy of the receive
+    logic against the same table, and the two copies had already drifted --
+    both suffered the same double-receive race, and fixing one would have left
+    the other able to double-add stock. One implementation, one place to fix.
     """
-    Receive a damaged product transfer at the destination warehouse.
-    This is a convenience endpoint that delegates to the damaged-transfers receive endpoint.
-    """
-    user_id, user_role, user_name = await _auth_user(authorization, session)
+    from app.api.damaged_transfers import receive_damaged_transfer
 
-    # Check if this is a damaged transfer
-    result = await session.execute(text(
-        "SELECT * FROM damaged_product_transfers WHERE id = :tid"
-    ), {"tid": transfer_id})
-    row = result.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Transfer not found or not receivable")
-    if row.status == 'received':
-        raise HTTPException(status_code=400, detail="Transfer already received")
-    if row.status == 'cancelled':
-        raise HTTPException(status_code=400, detail="Transfer was cancelled")
-
-    receipt_notes = data.get('receipt_notes', '')
-    receipt_condition = data.get('receipt_condition', 'as_expected')
-
-    try:
-        quantity = float(row.quantity)
-
-        # Add stock to destination warehouse
-        if row.product_id:
-            dest_stock = await session.execute(text("""
-                SELECT id FROM stock_levels
-                WHERE warehouse_id = :wid AND product_id = :pid
-            """), {"wid": str(row.to_warehouse_id), "pid": str(row.product_id)})
-            if dest_stock.fetchone():
-                await session.execute(text("""
-                    UPDATE stock_levels SET current_stock = current_stock + :qty
-                    WHERE warehouse_id = :wid AND product_id = :pid
-                """), {"qty": quantity, "wid": str(row.to_warehouse_id), "pid": str(row.product_id)})
-            else:
-                await session.execute(text("""
-                    INSERT INTO stock_levels (id, warehouse_id, product_id, current_stock)
-                    VALUES (gen_random_uuid(), :wid, :pid, :qty)
-                """), {"wid": str(row.to_warehouse_id), "pid": str(row.product_id), "qty": quantity})
-
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, product_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :pid, 'DAMAGE_TRANSFER_IN', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": str(row.to_warehouse_id), "pid": str(row.product_id),
-                "qty": quantity, "ref": row.transfer_number,
-                "notes": f"Received damaged transfer: {receipt_condition} - {receipt_notes}",
-                "uid": user_id,
-            })
-
-        elif row.raw_material_id:
-            dest_stock = await session.execute(text("""
-                SELECT id FROM stock_levels
-                WHERE warehouse_id = :wid AND raw_material_id = :rid
-            """), {"wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id)})
-            if dest_stock.fetchone():
-                await session.execute(text("""
-                    UPDATE stock_levels SET current_stock = current_stock + :qty
-                    WHERE warehouse_id = :wid AND raw_material_id = :rid
-                """), {"qty": quantity, "wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id)})
-            else:
-                await session.execute(text("""
-                    INSERT INTO stock_levels (id, warehouse_id, raw_material_id, current_stock)
-                    VALUES (gen_random_uuid(), :wid, :rid, :qty)
-                """), {"wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id), "qty": quantity})
-
-            await session.execute(text("""
-                INSERT INTO stock_movements (id, warehouse_id, raw_material_id, movement_type, quantity, reference, notes, created_by, created_at)
-                VALUES (gen_random_uuid(), :wid, :rid, 'DAMAGE_TRANSFER_IN', :qty, :ref, :notes, :uid, NOW())
-            """), {
-                "wid": str(row.to_warehouse_id), "rid": str(row.raw_material_id),
-                "qty": quantity, "ref": row.transfer_number,
-                "notes": f"Received damaged transfer: {receipt_condition} - {receipt_notes}",
-                "uid": user_id,
-            })
-
-        # Mark as received
-        await session.execute(text("""
-            UPDATE damaged_product_transfers
-            SET status = 'received', received_by = :uid,
-                received_at = NOW(), receipt_notes = :rn, receipt_condition = :rc
-            WHERE id = :tid
-        """), {
-            "uid": user_id, "rn": receipt_notes,
-            "rc": receipt_condition, "tid": transfer_id,
-        })
-
-        await session.commit()
-        return {
-            "success": True,
-            "message": f"Transfer {row.transfer_number} received successfully. Stock updated.",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        await session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to receive transfer: {str(e)}")
+    return await receive_damaged_transfer(
+        transfer_id=transfer_id,
+        data=data,
+        session=session,
+        authorization=authorization,
+    )
 
 
 @router.get('/summary')

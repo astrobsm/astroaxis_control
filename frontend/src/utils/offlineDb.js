@@ -3,6 +3,7 @@
  * Provides cross-device data sync and offline support
  */
 import { openDB } from 'idb';
+import { authedFetch } from './api';
 
 const DB_NAME = 'astroaxis-erp';
 const DB_VERSION = 1;
@@ -216,21 +217,21 @@ export async function processPendingSync(getAuthHeaders) {
       let response;
       switch (item.action) {
         case 'create':
-          response = await fetch(item.endpoint, {
+          response = await authedFetch(item.endpoint, {
             method: 'POST',
             headers,
             body: JSON.stringify(item.data)
           });
           break;
         case 'update':
-          response = await fetch(item.endpoint, {
+          response = await authedFetch(item.endpoint, {
             method: 'PUT',
             headers,
             body: JSON.stringify(item.data)
           });
           break;
         case 'delete':
-          response = await fetch(item.endpoint, {
+          response = await authedFetch(item.endpoint, {
             method: 'DELETE',
             headers
           });

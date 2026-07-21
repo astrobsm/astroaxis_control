@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pydantic import BaseModel
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.services.inventory import apply_stock_movement, get_available_stock
 from app.models import (
     BOM, BOMLine, RawMaterial, ProductCost, Product, 
     StockLevel, StockMovement, Warehouse
@@ -369,37 +371,33 @@ async def approve_production_and_deduct_stock(
         for line, raw_material in lines_result:
             required_qty = Decimal(str(request.quantity)) * line.qty_per_unit
             
-            # Get stock level
-            stock_result = await session.execute(
-                select(StockLevel).where(and_(
-                    StockLevel.warehouse_id == UUID(request.warehouse_id),
-                    StockLevel.raw_material_id == raw_material.id
-                ))
-            )
-            stock_level = stock_result.scalars().first()
-            
-            # Deduct from stock
-            stock_level.current_stock -= required_qty
-            stock_level.updated_at = datetime.now(timezone.utc)
-            
-            # Create stock movement record
-            movement = StockMovement(
-                id=uuid.uuid4(),
+            # Consume the material. The old code dereferenced stock_level
+            # without a null check (AttributeError when the item had never
+            # been stocked in that warehouse) and used movement_type
+            # 'PRODUCTION', which no reader recognised -- so those movements
+            # counted toward neither inbound nor outbound in any replay.
+            await apply_stock_movement(
+                session,
                 warehouse_id=UUID(request.warehouse_id),
                 raw_material_id=raw_material.id,
-                movement_type='PRODUCTION',
+                movement_type='PRODUCTION_OUT',
                 quantity=required_qty,
                 unit_cost=raw_material.unit_cost,
                 reference=f"Production: {request.quantity} units of product {request.product_id}",
-                notes=request.notes or f"Raw material consumed for production"
+                notes=request.notes or "Raw material consumed for production",
+                created_by=current_user.id,
             )
-            session.add(movement)
-            
+            remaining = await get_available_stock(
+                session,
+                warehouse_id=UUID(request.warehouse_id),
+                raw_material_id=raw_material.id,
+            )
+
             deductions.append({
                 "raw_material_name": raw_material.name,
                 "quantity_deducted": float(required_qty),
                 "unit": raw_material.unit or 'unit',
-                "remaining_stock": float(stock_level.current_stock)
+                "remaining_stock": float(remaining)
             })
         
         # Get product details
@@ -436,11 +434,17 @@ async def list_products_with_bom(session: AsyncSession = Depends(get_session)):
         
         products = []
         for product, bom in result:
-            # Count BOM lines
-            lines_count_result = await session.execute(
-                select(func.count(BOMLine.id)).where(BOMLine.bom_id == bom.id)
+            # Count BOM lines and get total cost
+            lines_result = await session.execute(
+                select(BOMLine, RawMaterial)
+                .join(RawMaterial, BOMLine.raw_material_id == RawMaterial.id)
+                .where(BOMLine.bom_id == bom.id)
             )
-            lines_count = lines_count_result.scalar_one()
+            lines_count = 0
+            total_cost = Decimal('0')
+            for line, rm in lines_result:
+                lines_count += 1
+                total_cost += line.qty_per_unit * rm.unit_cost
             
             products.append({
                 "product_id": str(product.id),
@@ -448,12 +452,47 @@ async def list_products_with_bom(session: AsyncSession = Depends(get_session)):
                 "product_sku": product.sku,
                 "bom_id": str(bom.id),
                 "bom_created_at": str(bom.created_at) if bom.created_at else None,
-                "raw_materials_count": lines_count
+                "raw_materials_count": lines_count,
+                "total_material_cost": float(total_cost)
             })
         
         return products
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching products: {str(e)}")
+
+
+@router.delete('/product/{product_id}')
+async def delete_product_bom(
+    product_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Delete BOM for a specific product"""
+    try:
+        bom_result = await session.execute(
+            select(BOM).where(BOM.product_id == UUID(product_id))
+        )
+        bom = bom_result.scalars().first()
+        
+        if not bom:
+            raise HTTPException(status_code=404, detail="No BOM found for this product")
+        
+        # Delete BOM lines first
+        await session.execute(
+            delete(BOMLine).where(BOMLine.bom_id == bom.id)
+        )
+        # Delete BOM
+        await session.execute(
+            delete(BOM).where(BOM.id == bom.id)
+        )
+        
+        await session.commit()
+        
+        return {"success": True, "message": "BOM deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting BOM: {str(e)}")
 
 
 @router.get('/{bom_id}/cost')

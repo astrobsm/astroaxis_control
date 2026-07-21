@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, validator, ConfigDict
-from typing import Optional, List, Generic, TypeVar, Any
+from typing import Optional, List, Generic, TypeVar, Any, Dict
 from decimal import Decimal
 from datetime import datetime, date
 from uuid import UUID
@@ -424,18 +424,135 @@ class StaffSchema(StaffBase):
     is_active: bool
     created_at: datetime
     full_name: Optional[str] = None  # Computed field
-    
-    @validator('full_name', always=True, pre=False)
-    def compute_full_name(cls, v, values):
-        """Compute full_name from first_name and last_name"""
-        if v:
-            return v
-        first = values.get('first_name', '')
-        last = values.get('last_name', '')
-        return f"{first} {last}".strip()
-    
+
+
+# ============ COMMUNICATION SCHEMAS ============
+
+class NoticeCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1)
+    priority: str = Field(default='normal', max_length=20)
+    category: str = Field(default='general', max_length=50)
+    pinned: bool = False
+
+class NoticeUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    content: Optional[str] = Field(None, min_length=1)
+    priority: Optional[str] = Field(None, max_length=20)
+    category: Optional[str] = Field(None, max_length=50)
+    pinned: Optional[bool] = None
+
+class NoticeSchema(BaseModel):
+    id: UUID
+    title: str
+    content: str
+    priority: str
+    category: str
+    author: str
+    author_id: Optional[UUID] = None
+    pinned: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
     class Config:
         from_attributes = True
+
+class ChatMessageCreate(BaseModel):
+    channel: str = Field(default='general', max_length=50)
+    text: str = Field(..., min_length=1)
+
+class ChatMessageSchema(BaseModel):
+    id: UUID
+    channel: str
+    sender: str
+    sender_id: Optional[UUID] = None
+    text: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class LetterCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    recipient: Optional[str] = Field(None, max_length=255)
+    body: str = Field(..., min_length=1)
+
+class LetterUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    recipient: Optional[str] = Field(None, max_length=255)
+    body: Optional[str] = Field(None, min_length=1)
+
+class LetterSchema(BaseModel):
+    id: UUID
+    title: str
+    recipient: Optional[str] = None
+    body: str
+    author: str
+    author_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
+
+class SOPTemplateSchema(BaseModel):
+    id: UUID
+    sop_code: str
+    title: str
+    sop_number: str
+    version: str
+    effective_date: date
+    document: Dict[str, Any]
+    form_schema: Dict[str, Any]
+    db_table_structure: Dict[str, Any]
+    validation_rules: List[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SOPExecutionCreate(BaseModel):
+    sop_code: str = Field(..., min_length=3, max_length=64)
+    form_data: Dict[str, Any]
+    comments: Optional[str] = None
+    deviation: Optional[str] = None
+
+
+class SOPExecutionSchema(BaseModel):
+    id: UUID
+    template_id: UUID
+    sop_code: str
+    operator_name: str
+    supervisor_name: str
+    executed_at: datetime
+    batch_number: str
+    material_equipment_used: Dict[str, Any]
+    checklist: Dict[str, Any]
+    numeric_inputs: Dict[str, Any]
+    operator_signature: str
+    supervisor_signature: str
+    comments: Optional[str] = None
+    deviation: Optional[str] = None
+    status: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SOPApprovalUpdate(BaseModel):
+    approved_by: str = Field(..., min_length=3, max_length=255)
+    comments: Optional[str] = None
+
+
+class SOPDeviationUpdate(BaseModel):
+    deviation: str = Field(..., min_length=10)
+    comments: Optional[str] = None
 
 # Payroll Schema
 class PayrollEntryBase(BaseModel):
@@ -473,6 +590,10 @@ class AttendanceBase(BaseModel):
 class AttendanceCreate(BaseModel):
     staff_id: UUID
     notes: Optional[str] = None
+    # Optional geolocation captured at clock-in
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
 
 class AttendanceSchema(AttendanceBase):
     id: UUID
@@ -487,11 +608,16 @@ class QuickAttendanceRequest(BaseModel):
     pin: str = Field(..., min_length=4, max_length=4, pattern="^[0-9]{4}$")
     action: str = Field(..., pattern="^(clock_in|clock_out)$")
     notes: Optional[str] = Field(None, max_length=255)
+    # Optional geolocation captured at the moment of the action
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
 
 class QuickAttendanceResponse(BaseModel):
     success: bool
     message: str
     staff_name: Optional[str] = None
+    staff_id: Optional[str] = None
     action: Optional[str] = None
     timestamp: Optional[datetime] = None
     hours_worked: Optional[Decimal] = None

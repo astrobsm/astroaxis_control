@@ -4,13 +4,23 @@ from sqlalchemy.future import select
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, date, time, timedelta, timezone
+import asyncio
+import logging
 
-from app.db import get_session
+from app.db import get_session, AsyncSessionLocal
 from app.models import Attendance, Staff
 from app.schemas import AttendanceSchema, AttendanceCreate, PaginatedResponse, QuickAttendanceRequest, QuickAttendanceResponse
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func, and_, or_, text
+from app.services.geocoding import reverse_geocode
 
 router = APIRouter(prefix='/api/attendance')
+
+# ---- Auto clock-out scheduler config ----
+# Lagos is UTC+1 year-round (no DST). Auto clock-out triggers at 17:10 local.
+LAGOS_TZ = timezone(timedelta(hours=1))
+AUTO_CLOCKOUT_HOUR = 17
+AUTO_CLOCKOUT_MINUTE = 10
+_AUTO_CLOCKOUT_LOG = logging.getLogger("attendance.auto_clockout")
 
 @router.post('/clock-in', response_model=AttendanceSchema)
 async def clock_in(att: AttendanceCreate, session: AsyncSession = Depends(get_session)):
@@ -28,6 +38,21 @@ async def clock_in(att: AttendanceCreate, session: AsyncSession = Depends(get_se
         session.add(attendance)
         await session.commit()
         await session.refresh(attendance)
+        # Best-effort geo persist (separate UPDATE so failure can't block clock-in)
+        if att.latitude is not None and att.longitude is not None:
+            try:
+                address = await reverse_geocode(att.latitude, att.longitude)
+                await session.execute(text(
+                    "UPDATE attendance SET clock_in_lat=:lat, clock_in_lng=:lng, "
+                    "clock_in_accuracy=:acc, clock_in_address=:addr WHERE id=:id"
+                ), {
+                    'lat': att.latitude, 'lng': att.longitude,
+                    'acc': att.accuracy, 'addr': address,
+                    'id': attendance.id,
+                })
+                await session.commit()
+            except Exception:
+                await session.rollback()
         return attendance
     except HTTPException:
         await session.rollback()
@@ -37,7 +62,13 @@ async def clock_in(att: AttendanceCreate, session: AsyncSession = Depends(get_se
         raise HTTPException(status_code=400, detail=f"Error clocking in: {str(e)}")
 
 @router.post('/clock-out', response_model=AttendanceSchema)
-async def clock_out(staff_id: UUID = Query(...), session: AsyncSession = Depends(get_session)):
+async def clock_out(
+    staff_id: UUID = Query(...),
+    latitude: Optional[float] = Query(None),
+    longitude: Optional[float] = Query(None),
+    accuracy: Optional[float] = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
     """Clock out the latest open attendance for a staff member and compute hours worked"""
     try:
         # find latest open attendance
@@ -57,6 +88,21 @@ async def clock_out(staff_id: UUID = Query(...), session: AsyncSession = Depends
         attendance.status = 'completed'
         await session.commit()
         await session.refresh(attendance)
+        # Best-effort geo persist
+        if latitude is not None and longitude is not None:
+            try:
+                address = await reverse_geocode(latitude, longitude)
+                await session.execute(text(
+                    "UPDATE attendance SET clock_out_lat=:lat, clock_out_lng=:lng, "
+                    "clock_out_accuracy=:acc, clock_out_address=:addr WHERE id=:id"
+                ), {
+                    'lat': latitude, 'lng': longitude,
+                    'acc': accuracy, 'addr': address,
+                    'id': attendance.id,
+                })
+                await session.commit()
+            except Exception:
+                await session.rollback()
         return attendance
     except HTTPException:
         await session.rollback()
@@ -64,6 +110,135 @@ async def clock_out(staff_id: UUID = Query(...), session: AsyncSession = Depends
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error clocking out: {str(e)}")
+
+@router.post('/bulk-clock-out')
+async def bulk_clock_out(
+    payload: Optional[dict] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk clock-out: closes ALL currently-open attendance records (or only the
+    given staff_ids if provided in the request body as {"staff_ids": [...]}).
+
+    Used by admins / production supervisor to close out forgotten clock-ins at
+    the end of a shift.
+    """
+    try:
+        staff_ids: List[UUID] = []
+        if payload and isinstance(payload, dict):
+            raw_ids = payload.get('staff_ids') or []
+            for sid in raw_ids:
+                try:
+                    staff_ids.append(UUID(str(sid)))
+                except (ValueError, TypeError):
+                    continue
+        result = await _close_open_attendance(
+            session,
+            staff_ids=staff_ids or None,
+            marker='BULK CLOCK-OUT',
+        )
+        return {'success': True, **result}
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Bulk clock-out failed: {str(e)}")
+
+
+async def _close_open_attendance(
+    session: AsyncSession,
+    staff_ids: Optional[List[UUID]] = None,
+    marker: str = 'AUTO CLOCK-OUT',
+) -> dict:
+    """Close all open Attendance rows (clock_out IS NULL).
+
+    Optionally restrict to specific staff_ids. Computes hours_worked and stamps
+    a marker into notes. Commits the session before returning.
+    """
+    query = select(Attendance).where(Attendance.clock_out == None)  # noqa: E711
+    if staff_ids:
+        query = query.where(Attendance.staff_id.in_(staff_ids))
+
+    res = await session.execute(query)
+    open_records = res.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    closed = 0
+    details = []
+    for att in open_records:
+        try:
+            att.clock_out = now
+            delta = now - att.clock_in
+            hours = round(delta.total_seconds() / 3600.0, 2)
+            att.hours_worked = hours
+            att.status = 'completed'
+            att.notes = (
+                f"{att.notes or ''}\n[{marker} at {now.strftime('%Y-%m-%d %H:%M UTC')}]"
+            ).strip()
+            closed += 1
+            details.append({
+                'attendance_id': str(att.id),
+                'staff_id': str(att.staff_id),
+                'hours_worked': hours,
+            })
+        except Exception as inner:
+            details.append({
+                'attendance_id': str(att.id),
+                'staff_id': str(att.staff_id),
+                'error': str(inner),
+            })
+    await session.commit()
+    return {
+        'closed_count': closed,
+        'total_open_found': len(open_records),
+        'closed_at': now.isoformat(),
+        'details': details,
+    }
+
+
+async def auto_clockout_scheduler():
+    """Background loop: every 60s, check Lagos local time. Once we're past
+    17:10 local on a given date, close any still-open attendance records.
+
+    The operation is naturally idempotent — once records are closed, the next
+    pass finds nothing to do until new clock-ins occur.
+    """
+    _AUTO_CLOCKOUT_LOG.info(
+        "Auto clock-out scheduler started (target %02d:%02d Africa/Lagos)",
+        AUTO_CLOCKOUT_HOUR, AUTO_CLOCKOUT_MINUTE,
+    )
+    last_run_date = None
+    while True:
+        try:
+            await asyncio.sleep(60)
+            local_now = datetime.now(LAGOS_TZ)
+            trigger = local_now.replace(
+                hour=AUTO_CLOCKOUT_HOUR,
+                minute=AUTO_CLOCKOUT_MINUTE,
+                second=0,
+                microsecond=0,
+            )
+            if local_now < trigger:
+                continue
+            if last_run_date == local_now.date():
+                # Already swept today; still run again to catch any post-17:10
+                # late clock-ins, but limit work by only touching open rows.
+                pass
+            async with AsyncSessionLocal() as session:
+                result = await _close_open_attendance(
+                    session, marker=f'AUTO CLOCK-OUT 17:10'
+                )
+            if result.get('closed_count'):
+                _AUTO_CLOCKOUT_LOG.info(
+                    "Auto clock-out closed %s open record(s) at %s",
+                    result['closed_count'], result['closed_at'],
+                )
+            last_run_date = local_now.date()
+        except asyncio.CancelledError:
+            _AUTO_CLOCKOUT_LOG.info("Auto clock-out scheduler cancelled")
+            raise
+        except Exception:
+            _AUTO_CLOCKOUT_LOG.exception("Auto clock-out iteration failed")
+            await asyncio.sleep(30)
+
+
 
 @router.get('/', response_model=PaginatedResponse[AttendanceSchema])
 async def list_attendance(
@@ -144,6 +319,21 @@ async def quick_attendance(request: QuickAttendanceRequest, session: AsyncSessio
             )
             session.add(attendance)
             await session.commit()
+            # Best-effort geo persist
+            if request.latitude is not None and request.longitude is not None:
+                try:
+                    address = await reverse_geocode(request.latitude, request.longitude)
+                    await session.execute(text(
+                        "UPDATE attendance SET clock_in_lat=:lat, clock_in_lng=:lng, "
+                        "clock_in_accuracy=:acc, clock_in_address=:addr WHERE id=:id"
+                    ), {
+                        'lat': request.latitude, 'lng': request.longitude,
+                        'acc': request.accuracy, 'addr': address,
+                        'id': attendance.id,
+                    })
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
             
             return QuickAttendanceResponse(
                 success=True,
@@ -179,6 +369,21 @@ async def quick_attendance(request: QuickAttendanceRequest, session: AsyncSessio
                 attendance.notes = f"{attendance.notes or ''}\nClock-out: {request.notes}".strip()
             
             await session.commit()
+            # Best-effort geo persist (clock-out)
+            if request.latitude is not None and request.longitude is not None:
+                try:
+                    address = await reverse_geocode(request.latitude, request.longitude)
+                    await session.execute(text(
+                        "UPDATE attendance SET clock_out_lat=:lat, clock_out_lng=:lng, "
+                        "clock_out_accuracy=:acc, clock_out_address=:addr WHERE id=:id"
+                    ), {
+                        'lat': request.latitude, 'lng': request.longitude,
+                        'acc': request.accuracy, 'addr': address,
+                        'id': attendance.id,
+                    })
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
             
             return QuickAttendanceResponse(
                 success=True,
@@ -461,3 +666,4 @@ async def get_best_performing_staff(
         return performance_data[:limit]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calculating best performers: {str(e)}")
+

@@ -87,7 +87,7 @@ async def create_department(
 @router.get('/departments', response_model=PaginatedResponse[DepartmentSchema])
 async def list_departments(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     active_only: bool = Query(True),
     session: AsyncSession = Depends(get_session)
 ):
@@ -231,7 +231,7 @@ async def create_employee(
 @router.get('/employees', response_model=PaginatedResponse[EmployeeSchema])
 async def list_employees(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     active_only: bool = Query(True),
     department_id: Optional[UUID] = Query(None),
     search: Optional[str] = Query(None),
@@ -395,7 +395,7 @@ async def create_work_log(
 @router.get('/work-logs', response_model=PaginatedResponse[WorkLogSchema])
 async def list_work_logs(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     employee_id: Optional[UUID] = Query(None),
     production_order_id: Optional[UUID] = Query(None),
     work_date: Optional[date] = Query(None),
@@ -522,7 +522,7 @@ async def create_staff(staff_data: StaffCreate, session: AsyncSession = Depends(
 
 
 @router.get('/staffs', response_model=PaginatedResponse[StaffSchema])
-async def list_staffs(skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500), session: AsyncSession = Depends(get_session)):
+async def list_staffs(skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000), session: AsyncSession = Depends(get_session)):
     query = select(Staff)
     count_result = await session.execute(select(func.count(Staff.id)))
     total = count_result.scalar_one()
@@ -583,6 +583,25 @@ async def delete_staff(staff_id: UUID, session: AsyncSession = Depends(get_sessi
 @router.post('/payroll/calculate', response_model=PayrollEntrySchema)
 async def calculate_payroll(pay_data: PayrollEntryCreate, session: AsyncSession = Depends(get_session)):
     """Calculate payroll for a staff member over a pay period based on attendance records"""
+    # DISABLED: this calculator paid every staff member a hardcoded
+    # NGN 425/hour regardless of their actual rate, and deducted NOTHING --
+    # no PAYE, no pension, no NHF, no NHIA. Under-deducted PAYE is
+    # recoverable from the COMPANY, so leaving it reachable would keep
+    # accruing a statutory liability.
+    #
+    # Use POST /api/payroll/runs, which reads each staff member's own pay
+    # structure and applies the configured statutory deductions.
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This payroll calculator has been retired. It ignored each staff "
+            "member's actual pay rate and deducted no PAYE, pension, NHF or "
+            "NHIA. Use POST /api/payroll/runs instead. Existing payroll "
+            "history is unchanged."
+        ),
+    )
+
+
     try:
         # verify staff
         staff_result = await session.execute(select(Staff).where(Staff.id == pay_data.staff_id))
@@ -897,6 +916,25 @@ async def bulk_calculate_payroll(
     session: AsyncSession = Depends(get_session)
 ):
     """Calculate payroll for ALL active staff for a given period. Uses each staff member's actual rates."""
+    # DISABLED: this calculator paid every staff member a hardcoded
+    # NGN 425/hour regardless of their actual rate, and deducted NOTHING --
+    # no PAYE, no pension, no NHF, no NHIA. Under-deducted PAYE is
+    # recoverable from the COMPANY, so leaving it reachable would keep
+    # accruing a statutory liability.
+    #
+    # Use POST /api/payroll/runs, which reads each staff member's own pay
+    # structure and applies the configured statutory deductions.
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This payroll calculator has been retired. It ignored each staff "
+            "member's actual pay rate and deducted no PAYE, pension, NHF or "
+            "NHIA. Use POST /api/payroll/runs instead. Existing payroll "
+            "history is unchanged."
+        ),
+    )
+
+
     try:
         result = await session.execute(select(Staff).where(Staff.is_active == True))
         all_staff = result.scalars().all()
@@ -1022,6 +1060,25 @@ async def update_payroll_status(
 @router.post('/payroll/calculate-v2', response_model=PayrollEntrySchema)
 async def calculate_payroll_v2(pay_data: PayrollEntryCreate, session: AsyncSession = Depends(get_session)):
     """Calculate payroll for a single staff member using their actual configured rates"""
+    # DISABLED: this calculator paid every staff member a hardcoded
+    # NGN 425/hour regardless of their actual rate, and deducted NOTHING --
+    # no PAYE, no pension, no NHF, no NHIA. Under-deducted PAYE is
+    # recoverable from the COMPANY, so leaving it reachable would keep
+    # accruing a statutory liability.
+    #
+    # Use POST /api/payroll/runs, which reads each staff member's own pay
+    # structure and applies the configured statutory deductions.
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This payroll calculator has been retired. It ignored each staff "
+            "member's actual pay rate and deducted no PAYE, pension, NHF or "
+            "NHIA. Use POST /api/payroll/runs instead. Existing payroll "
+            "history is unchanged."
+        ),
+    )
+
+
     try:
         staff_result = await session.execute(select(Staff).where(Staff.id == pay_data.staff_id))
         staff = staff_result.scalars().first()

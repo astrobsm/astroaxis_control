@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a3d62" />
+<title>Place an Order — BONNESANTE MEDICALS</title>
+<link rel="icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<style>
+  :root{
+    --brand:#0a3d62; --brand2:#1e6091; --accent:#e1b12c;
+    --bg:#f4f6fb; --card:#ffffff; --text:#1d2433; --muted:#6b7280;
+    --ok:#0d8050; --warn:#c0392b; --border:#e5e7eb;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;-webkit-font-smoothing:antialiased}
+  a{color:var(--brand2);text-decoration:none}
+  header{background:linear-gradient(135deg,var(--brand) 0%,var(--brand2) 100%);
+    color:#fff;padding:18px 16px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+  .h-wrap{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:14px}
+  .h-wrap img{height:48px;width:48px;border-radius:10px;background:#fff;padding:4px;object-fit:contain}
+  .h-wrap h1{font-size:18px;margin:0;letter-spacing:.5px}
+  .h-wrap p{margin:2px 0 0;font-size:12px;opacity:.85}
+  main{max-width:1100px;margin:18px auto 120px;padding:0 14px}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:920px){.grid{grid-template-columns:1.45fr .9fr}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+    box-shadow:0 1px 3px rgba(15,23,42,.04);padding:16px}
+  .card h2{font-size:16px;margin:0 0 12px;color:var(--brand)}
+  /* Customer-type toggle */
+  .ctype{display:flex;background:#eef2f7;border-radius:12px;padding:4px;margin-bottom:14px;gap:4px}
+  .ctype button{flex:1;background:transparent;border:0;padding:10px;border-radius:9px;font-weight:600;
+    cursor:pointer;color:var(--muted);font-size:14px}
+  .ctype button.on{background:var(--brand);color:#fff;box-shadow:0 1px 3px rgba(10,61,98,.25)}
+  .hint{background:#fff7e0;border:1px solid #f5d976;color:#7a5b00;
+    padding:8px 10px;border-radius:8px;font-size:12.5px;margin-bottom:12px}
+  .search{display:flex;gap:8px;margin-bottom:10px}
+  .search input{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px}
+  /* Price-list table */
+  table.pl{width:100%;border-collapse:collapse;font-size:13px}
+  table.pl th,table.pl td{padding:8px 6px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
+  table.pl th{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);background:#fafbfd}
+  table.pl td.price{text-align:right;font-weight:700;color:var(--brand);white-space:nowrap}
+  table.pl td.unit{font-size:11px;color:var(--muted);text-transform:uppercase}
+  table.pl td.qty{width:90px}
+  table.pl td.qty input{width:62px;padding:6px;border:1px solid var(--border);border-radius:8px;font-size:13px;text-align:center}
+  table.pl td.act{width:88px;text-align:right}
+  table.pl button.add{background:var(--brand);color:#fff;border:0;padding:7px 10px;border-radius:8px;
+    font-size:12px;cursor:pointer;font-weight:600}
+  table.pl button.add:hover{background:var(--brand2)}
+  table.pl button.add:disabled{background:#9aa6b2;cursor:not-allowed}
+  table.pl tr.unavail td{opacity:.5}
+  .badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;margin-left:4px}
+  .badge.no{background:#fdecea;color:var(--warn)}
+  .badge.ok{background:#e6f4ee;color:var(--ok)}
+  /* Cart */
+  .cart{position:sticky;top:14px}
+  .cart-line{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;
+    padding:8px 0;border-bottom:1px dashed var(--border);font-size:13px}
+  .cart-line .pn{font-weight:600;line-height:1.25}
+  .cart-line .pm{font-size:11px;color:var(--muted);margin-top:2px}
+  .cart-line input{width:60px;padding:4px;border:1px solid var(--border);border-radius:6px;font-size:13px;text-align:center}
+  .cart-line button{background:transparent;border:0;color:var(--warn);cursor:pointer;font-size:18px;line-height:1}
+  .totals{display:flex;justify-content:space-between;font-size:16px;font-weight:700;margin-top:12px;color:var(--brand)}
+  .form-row{display:grid;gap:6px;margin-bottom:10px}
+  .form-row label{font-size:12px;color:var(--muted);font-weight:600}
+  .form-row input,.form-row textarea{padding:10px;border:1px solid var(--border);border-radius:10px;font-size:14px;font-family:inherit}
+  .form-row textarea{min-height:64px;resize:vertical}
+  .submit{width:100%;background:var(--brand);color:#fff;border:0;padding:14px;border-radius:12px;
+    font-size:16px;font-weight:700;cursor:pointer;margin-top:8px}
+  .submit:hover{background:var(--brand2)}
+  .submit:disabled{opacity:.55;cursor:wait}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:18px 0}
+  .modal{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;
+    justify-content:center;padding:16px;z-index:50}
+  .modal.show{display:flex}
+  .modal .box{background:#fff;border-radius:16px;max-width:480px;width:100%;padding:22px;text-align:center}
+  .modal .box h3{margin:0 0 8px;color:var(--ok);font-size:20px}
+  .modal .box p{margin:6px 0;color:var(--text);font-size:14px}
+  .modal .box .order-no{font-size:18px;font-weight:700;color:var(--brand);margin:10px 0 4px}
+  .modal .actions{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+  .modal .actions a,.modal .actions button{display:block;padding:12px;border-radius:10px;
+    font-size:14px;font-weight:600;text-align:center;border:0;cursor:pointer;text-decoration:none}
+  .wa{background:#25d366;color:#fff}
+  .close{background:#f1f5f9;color:var(--text)}
+  .err{background:#fdecea;color:var(--warn);padding:10px;border-radius:8px;font-size:13px;margin-bottom:10px;display:none}
+  .err.show{display:block}
+  /* Payment warning + bank details */
+  .pay-warn{
+    border:2px solid #c0392b; background:#fff5f4;
+    border-radius:12px; padding:14px 16px; margin:6px 0 14px;
+    box-shadow:0 2px 8px rgba(192,57,43,.08);
+  }
+  .pay-warn h3{
+    margin:0 0 8px; color:#c0392b; font-size:15px;
+    text-transform:uppercase; letter-spacing:.6px; font-weight:800;
+    display:flex; align-items:center; gap:8px;
+  }
+  .pay-warn h3::before{content:"\26A0"; font-size:18px}
+  .pay-warn p{margin:6px 0; font-size:13px; color:#3a1a17; font-weight:600; line-height:1.5}
+  .pay-warn .strong{color:#c0392b; font-weight:800; text-transform:uppercase}
+  .bank-box{
+    background:#fff; border:1px solid #f0c6c1; border-radius:10px;
+    padding:10px 12px; margin-top:10px;
+  }
+  .bank-box h4{
+    margin:0 0 6px; font-size:12px; color:#0a3d62; letter-spacing:.5px;
+    text-transform:uppercase; font-weight:700;
+  }
+  .bank-box .row{
+    display:grid; grid-template-columns:1fr; gap:4px; font-size:13px;
+    padding:6px 0; border-top:1px dashed #f0c6c1;
+  }
+  .bank-box .row:first-of-type{border-top:0}
+  .bank-box .lbl{color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:.4px}
+  .bank-box .val{font-weight:700; color:#0a3d62; font-family:monospace; font-size:14px}
+  .bank-box .val.acc{font-size:16px; letter-spacing:.5px}
+  .bank-box .copy-btn{
+    margin-left:8px; background:#0a3d62; color:#fff; border:0;
+    border-radius:6px; padding:3px 8px; font-size:11px; cursor:pointer;
+  }
+  .pay-warn .footnote{font-size:11.5px; color:#6b7280; font-weight:500; margin-top:8px}
+  /* Payment evidence upload */
+  .evidence-row{
+    border:1px dashed #b6d4fe; background:#f6faff; border-radius:10px;
+    padding:10px 12px; margin-bottom:10px;
+  }
+  .evidence-row .head{
+    display:flex; justify-content:space-between; align-items:baseline;
+    font-size:12px; color:var(--muted); font-weight:600; margin-bottom:6px;
+  }
+  .evidence-row .head .opt{color:#1e6091; font-weight:700; font-size:11px;
+    text-transform:uppercase; letter-spacing:.4px}
+  .evidence-row input[type=file]{font-size:13px; width:100%}
+  .evidence-row .pre{
+    margin-top:6px; font-size:12px; color:#0d8050; font-weight:600;
+    display:none;
+  }
+  .evidence-row .pre.show{display:block}
+  footer{text-align:center;font-size:12px;color:var(--muted);padding:24px 14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="h-wrap">
+    <img src="/company-logo.png" alt="BSM" onerror="this.style.display='none'">
+    <div>
+      <h1>BONNESANTE MEDICALS</h1>
+      <p>Place your order online — we'll call you back to confirm.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <section class="card">
+      <h2>Product Price List</h2>
+
+      <div class="ctype" role="tablist" aria-label="Customer type">
+        <button type="button" id="btnRetail"    class="on" data-t="retail">End User</button>
+        <button type="button" id="btnWholesale" data-t="wholesale">Wholesaler</button>
+      </div>
+
+      <div class="search">
+        <input id="q" type="search" placeholder="Search by product name or SKU…" autocomplete="off">
+      </div>
+
+      <div id="products"><div class="empty">Loading products…</div></div>
+    </section>
+
+    <aside class="card cart">
+      <h2>Your Cart</h2>
+      <div id="cart"><div class="empty">No items yet. Add a product from the list.</div></div>
+      <div id="totals" class="totals" style="display:none"><span>Total</span><span id="total-amt">₦0.00</span></div>
+
+      <h2 style="margin-top:18px">Your Details</h2>
+      <div id="formError" class="err"></div>
+
+      <!-- ============== PAYMENT POLICY WARNING ============== -->
+      <div class="pay-warn" role="alert" aria-live="polite">
+        <h3>Important Payment Notice</h3>
+        <p><span class="strong">Cash payments are NOT accepted</span> under any circumstance.
+           Please <span class="strong">DO NOT</span> hand cash to any staff member, dispatch rider,
+           agent, or third party.</p>
+        <p>All payments <span class="strong">MUST</span> be made by bank transfer to the
+           <span class="strong">official BONNESANTE MEDICALS company account below</span>.
+           Payments made into any other account — personal or otherwise — will
+           <span class="strong">not be recognised</span> and the order will not be processed.</p>
+
+        <div class="bank-box" id="bankBox">
+          <h4>Official Company Bank Accounts</h4>
+          <div class="row">
+            <span class="lbl">Bank</span>
+            <span class="val">ACCESS BANK NIG PLC</span>
+          </div>
+          <div class="row">
+            <span class="lbl">Account Name</span>
+            <span class="val">BONNESANTE MEDICALS</span>
+          </div>
+          <div class="row">
+            <span class="lbl">Account Number</span>
+            <span>
+              <span class="val acc" data-acct="1">1379643548</span>
+              <button type="button" class="copy-btn" data-copy="1">Copy</button>
+            </span>
+          </div>
+          <div class="row" style="border-top:2px solid #f0c6c1; padding-top:10px; margin-top:6px">
+            <span class="lbl">Bank</span>
+            <span class="val">MONIEPOINT MICROFINANCE BANK</span>
+          </div>
+          <div class="row">
+            <span class="lbl">Account Name</span>
+            <span class="val">BONNESANTE MEDICALS</span>
+          </div>
+          <div class="row">
+            <span class="lbl">Account Number</span>
+            <span>
+              <span class="val acc" data-acct="2">8259518195</span>
+              <button type="button" class="copy-btn" data-copy="2">Copy</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="footnote" style="font-size:12.5px; color:#3a1a17; font-weight:600; margin-top:10px">
+          After making payment, kindly send evidence of payment via WhatsApp to:
+          <a href="https://wa.me/2347025755406" target="_blank" rel="noopener"
+             style="color:#25d366; font-weight:800; text-decoration:none">
+            +234 702 575 5406
+          </a>
+          — or upload it directly using the field below.
+        </div>
+      </div>
+      <!-- ====================================================== -->
+
+      <form id="orderForm" autocomplete="on">
+        <div class="form-row"><label for="cname">Full Name *</label>
+          <input id="cname" name="name" required maxlength="120" placeholder="e.g. John Adeyemi"></div>
+        <div class="form-row"><label for="cphone">Phone Number *</label>
+          <input id="cphone" name="phone" required type="tel" placeholder="e.g. 08012345678"></div>
+        <div class="form-row"><label for="cemail">Email (optional)</label>
+          <input id="cemail" name="email" type="email" placeholder="you@example.com"></div>
+        <div class="form-row"><label for="caddr">Delivery Address (optional)</label>
+          <textarea id="caddr" name="address" placeholder="Street, City, State"></textarea></div>
+        <div class="form-row"><label for="cnotes">Notes (optional)</label>
+          <textarea id="cnotes" name="notes" placeholder="Any special instructions"></textarea></div>
+
+        <!-- Payment evidence upload (optional) -->
+        <div class="evidence-row">
+          <div class="head">
+            <label for="cevidence">Upload Payment Evidence</label>
+            <span class="opt">Optional · JPG/PNG/PDF · max 10MB</span>
+          </div>
+          <input id="cevidence" name="evidence" type="file"
+                 accept="image/*,application/pdf">
+          <div class="pre" id="evidencePre"></div>
+        </div>
+
+        <button type="submit" class="submit" id="submitBtn">Place Order</button>
+      </form>
+    </aside>
+  </div>
+</main>
+
+<div id="successModal" class="modal" role="dialog" aria-modal="true">
+  <div class="box">
+    <h3>✓ Order Received</h3>
+    <p>Thank you! Your order has been received.</p>
+    <div class="order-no" id="okOrderNo">—</div>
+    <p id="okMessage">Our sales team will contact you shortly.</p>
+    <div class="actions">
+      <a id="okWa" class="wa" href="#" target="_blank" rel="noopener">📱 Confirm via WhatsApp</a>
+      <button class="close" type="button" onclick="closeModal()">Place another order</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  © BONNESANTE MEDICALS · For support call <a href="tel:+2347025755406">+234 702 575 5406</a>
+</footer>
+
+<script>
+(function(){
+  const API = (location.origin || '');
+  const NGN = n => '₦' + Number(n||0).toLocaleString('en-NG',
+      {minimumFractionDigits:2,maximumFractionDigits:2});
+  let products = [];          // PublicProductVariant[]
+  let customerType = 'retail';// 'retail' | 'wholesale'
+  // Cart key = product_id|UNIT (so different units of same product are separate lines)
+  const cart = new Map();
+
+  function escapeHtml(s){return String(s||'').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+  function unitKey(p){ return p.product_id + '|' + p.unit.toUpperCase(); }
+
+  function priceFor(p){
+    return customerType === 'wholesale' ? p.wholesale_price : p.retail_price;
+  }
+
+  function isAvailable(p){
+    if (customerType === 'retail') {
+      // Retail not allowed for wholesale_only units (CTN), or no retail price
+      return !p.wholesale_only && p.retail_price > 0;
+    }
+    return p.wholesale_price > 0;
+  }
+
+  function defaultQty(p){
+    if (customerType === 'wholesale') return p.wholesale_min_qty || 1;
+    return 1;
+  }
+
+  function qtyValid(p, qty){
+    if (!(qty > 0)) return 'Quantity must be greater than 0.';
+    const u = (p.unit||'').toUpperCase();
+    if (customerType === 'wholesale') {
+      const min = p.wholesale_min_qty || 1;
+      if (qty < min) return `Wholesale minimum for ${u} is ${min}.`;
+    } else {
+      if (p.wholesale_only) return `${u} is wholesale only — switch to Wholesaler.`;
+      const max = p.wholesale_min_qty;
+      if (max && max > 1 && qty >= max) return `Retail max for ${u} is ${max - 1}. For ${max}+ switch to Wholesaler.`;
+    }
+    return '';
+  }
+
+  function renderProducts(filter){
+    const el = document.getElementById('products');
+    const q = (filter||'').toLowerCase().trim();
+    const list = products.filter(p =>
+      !q || p.name.toLowerCase().includes(q) || (p.sku||'').toLowerCase().includes(q));
+    if (!list.length) { el.innerHTML = '<div class="empty">No products match your search.</div>'; return; }
+
+    let html = `<div style="overflow-x:auto"><table class="pl">
+      <thead><tr>
+        <th>#</th><th>Product</th><th>Unit</th>
+        <th style="text-align:right">${customerType === 'wholesale' ? 'Wholesale' : 'Retail'} Price</th>
+        <th>Qty</th><th></th>
+      </tr></thead><tbody>`;
+    list.forEach((p, i) => {
+      const avail = isAvailable(p);
+      const price = priceFor(p);
+      const dq = defaultQty(p);
+      const stockBadge = p.in_stock
+        ? '<span class="badge ok">In stock</span>'
+        : '<span class="badge no">Out of stock</span>';
+      html += `<tr class="${avail ? '' : 'unavail'}" data-key="${unitKey(p)}">
+        <td>${i + 1}</td>
+        <td><div style="font-weight:600">${escapeHtml(p.name)}${stockBadge}</div>
+            <div style="font-size:11px;color:var(--muted)">${escapeHtml(p.sku)}</div></td>
+        <td class="unit">${escapeHtml(p.unit)}</td>
+        <td class="price">${avail ? NGN(price) : '—'}</td>
+        <td class="qty"><input type="number" min="1" step="1" value="${dq}" ${avail?'':'disabled'}></td>
+        <td class="act"><button type="button" class="add" ${avail?'':'disabled'}>Add</button></td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+
+    el.querySelectorAll('tr[data-key]').forEach(row => {
+      const key = row.dataset.key;
+      const p = products.find(x => unitKey(x) === key);
+      if (!p) return;
+      const btn = row.querySelector('button.add');
+      const inp = row.querySelector('input');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const qty = Math.max(1, parseInt(inp.value, 10) || 1);
+        const err = qtyValid(p, qty);
+        if (err) { showError(err); return; }
+        clearError();
+        const cur = cart.get(key);
+        cart.set(key, { product: p, qty: cur ? cur.qty + qty : qty });
+        renderCart();
+      });
+    });
+  }
+
+  function renderCart(){
+    const el = document.getElementById('cart');
+    if (!cart.size) {
+      el.innerHTML = '<div class="empty">No items yet. Add a product from the list.</div>';
+      document.getElementById('totals').style.display = 'none';
+      return;
+    }
+    let total = 0;
+    el.innerHTML = Array.from(cart.entries()).map(([key, {product, qty}]) => {
+      const price = priceFor(product);
+      const lt = price * qty; total += lt;
+      const warn = qtyValid(product, qty);
+      return `<div class="cart-line" data-key="${key}">
+        <div><div class="pn">${escapeHtml(product.name)}</div>
+             <div class="pm">${NGN(price)} × <input type="number" min="1" step="1" value="${qty}"> ${escapeHtml(product.unit)}</div>
+             ${warn ? `<div class="pm" style="color:var(--warn)">${escapeHtml(warn)}</div>` : ''}</div>
+        <div>${NGN(lt)}</div>
+        <button type="button" title="Remove" aria-label="Remove">×</button>
+      </div>`;
+    }).join('');
+    document.getElementById('total-amt').textContent = NGN(total);
+    document.getElementById('totals').style.display = 'flex';
+    el.querySelectorAll('.cart-line').forEach(n => {
+      const key = n.dataset.key;
+      n.querySelector('input').addEventListener('change', e => {
+        const v = Math.max(1, parseInt(e.target.value, 10) || 1);
+        const c = cart.get(key); if (c) { c.qty = v; renderCart(); }
+      });
+      n.querySelector('button').addEventListener('click', () => {
+        cart.delete(key); renderCart();
+      });
+    });
+  }
+
+  function showError(msg){
+    const e = document.getElementById('formError');
+    e.textContent = msg; e.classList.add('show');
+    e.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  function clearError(){ document.getElementById('formError').classList.remove('show'); }
+
+  function setCustomerType(t){
+    customerType = t;
+    document.getElementById('btnRetail').classList.toggle('on', t === 'retail');
+    document.getElementById('btnWholesale').classList.toggle('on', t === 'wholesale');
+    // Drop cart items that became unavailable
+    for (const [key, {product}] of Array.from(cart.entries())) {
+      if (!isAvailable(product)) cart.delete(key);
+    }
+    renderProducts(document.getElementById('q').value);
+    renderCart();
+  }
+
+  async function loadProducts(){
+    try{
+      const r = await fetch(API + '/api/public/products', {cache:'no-store'});
+      if (!r.ok) throw new Error('Failed to load products');
+      products = await r.json();
+      renderProducts('');
+    }catch(err){
+      document.getElementById('products').innerHTML =
+        '<div class="empty">Could not load products. Please try again later.</div>';
+    }
+  }
+
+  document.getElementById('q').addEventListener('input',
+    e => renderProducts(e.target.value));
+  document.getElementById('btnRetail').addEventListener('click',
+    () => setCustomerType('retail'));
+  document.getElementById('btnWholesale').addEventListener('click',
+    () => setCustomerType('wholesale'));
+
+  document.getElementById('orderForm').addEventListener('submit', async e => {
+    e.preventDefault(); clearError();
+    if (!cart.size) { showError('Please add at least one product to your cart.'); return; }
+    // Pre-validate locally
+    for (const {product, qty} of cart.values()) {
+      const err = qtyValid(product, qty);
+      if (err) { showError(err); return; }
+    }
+    const name = document.getElementById('cname').value.trim();
+    const phone = document.getElementById('cphone').value.trim();
+    if (name.length < 2) { showError('Please enter your full name.'); return; }
+    if (phone.replace(/\D/g,'').length < 7) { showError('Please enter a valid phone number.'); return; }
+    const evidenceInput = document.getElementById('cevidence');
+    const evidenceFile = evidenceInput && evidenceInput.files && evidenceInput.files[0];
+    if (evidenceFile && evidenceFile.size > 10 * 1024 * 1024) {
+      showError('Payment evidence file is too large (max 10 MB).'); return;
+    }
+    const body = {
+      customer: {
+        name, phone,
+        email: document.getElementById('cemail').value.trim() || null,
+        address: document.getElementById('caddr').value.trim() || null
+      },
+      customer_type: customerType,
+      notes: document.getElementById('cnotes').value.trim() || null,
+      items: Array.from(cart.values()).map(({product, qty}) => ({
+        product_id: product.product_id, unit: product.unit, quantity: qty
+      }))
+    };
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try{
+      const r = await fetch(API + '/api/public/orders', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Order failed. Please try again.');
+
+      // Upload payment evidence (if provided) tied to the new order_number
+      let evidenceMsg = '';
+      if (evidenceFile && data.order_number) {
+        try {
+          btn.textContent = 'Uploading payment evidence…';
+          const fd = new FormData();
+          fd.append('file', evidenceFile);
+          const note = document.getElementById('cnotes').value.trim();
+          if (note) fd.append('payer_note', note);
+          const ur = await fetch(
+            API + '/api/public/orders/' + encodeURIComponent(data.order_number) +
+                  '/payment-evidence',
+            { method: 'POST', body: fd }
+          );
+          if (ur.ok) {
+            evidenceMsg = ' Your payment evidence was received — finance will reconcile shortly.';
+          } else {
+            const ud = await ur.json().catch(() => ({}));
+            evidenceMsg = ' (Note: payment evidence upload failed: ' +
+                          (ud.detail || ur.statusText) + '. Please send via WhatsApp.)';
+          }
+        } catch (uerr) {
+          evidenceMsg = ' (Note: payment evidence could not be uploaded — please send via WhatsApp.)';
+        }
+      }
+
+      document.getElementById('okOrderNo').textContent = data.order_number;
+      document.getElementById('okMessage').textContent = (data.message
+        || 'Our sales team will contact you shortly.') + evidenceMsg;
+      document.getElementById('okWa').href = data.whatsapp_url || '#';
+      document.getElementById('successModal').classList.add('show');
+      cart.clear(); renderCart();
+      document.getElementById('orderForm').reset();
+      const pre = document.getElementById('evidencePre');
+      if (pre) { pre.textContent = ''; pre.classList.remove('show'); }
+    }catch(err){
+      showError(err.message || String(err));
+    }finally{
+      btn.disabled = false; btn.textContent = 'Place Order';
+    }
+  });
+
+  // File-name preview for payment evidence
+  (function(){
+    const inp = document.getElementById('cevidence');
+    const pre = document.getElementById('evidencePre');
+    if (inp && pre) {
+      inp.addEventListener('change', () => {
+        const f = inp.files && inp.files[0];
+        if (f) {
+          const kb = (f.size / 1024).toFixed(0);
+          pre.textContent = '✓ Selected: ' + f.name + ' (' + kb + ' KB)';
+          pre.classList.add('show');
+        } else {
+          pre.textContent = ''; pre.classList.remove('show');
+        }
+      });
+    }
+  })();
+
+  // Copy account-number buttons (multiple accounts)
+  (function(){
+    document.querySelectorAll('button.copy-btn[data-copy]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-copy');
+        const target = document.querySelector('span.val.acc[data-acct="' + id + '"]');
+        if (!target) return;
+        const v = (target.textContent || '').replace(/\s+/g, '');
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(v);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = v; document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+          }
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1400);
+        } catch (e) { /* no-op */ }
+      });
+    });
+  })();
+
+  window.closeModal = () => document.getElementById('successModal').classList.remove('show');
+
+  setCustomerType('retail');
+  loadProducts();
+})();
+</script>
+</body>
+</html>

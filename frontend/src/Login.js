@@ -1,5 +1,7 @@
 ﻿import React, { useState } from 'react';
 import API_BASE_URL from './config';
+import { requireLocation } from './utils/geo';
+import { authedFetch } from './utils/api';
 
 function Login({ onLoginSuccess }) {
   const [isRegistering, setIsRegistering] = useState(false);
@@ -42,15 +44,24 @@ function Login({ onLoginSuccess }) {
 
     // Check if admin credentials
     if (phoneNumber === '08033328385' && password === 'NATISS') {
+      let loc;
       try {
-        const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        loc = await requireLocation();
+      } catch (geoErr) {
+        setError(geoErr.message || 'Location permission is required to sign in.');
+        setLoading(false);
+        return;
+      }
+      try {
+        const response = await authedFetch(`${API_BASE_URL}/api/auth/login`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ 
             email: 'admin@astroasix.com', 
-            password: 'NATISS' 
+            password: 'NATISS',
+            ...loc,
           }),
         });
 
@@ -80,13 +91,21 @@ function Login({ onLoginSuccess }) {
     }
 
     // For regular users, try to find by phone
+    let loc;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login-phone`, {
+      loc = await requireLocation();
+    } catch (geoErr) {
+      setError(geoErr.message || 'Location permission is required to sign in.');
+      setLoading(false);
+      return;
+    }
+    try {
+      const response = await authedFetch(`${API_BASE_URL}/api/auth/login-phone`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ phone: phoneNumber, password, role }),
+        body: JSON.stringify({ phone: phoneNumber, password, role, ...loc }),
       });
 
       const data = await response.json();
@@ -112,7 +131,7 @@ function Login({ onLoginSuccess }) {
     setSuccess('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+      const response = await authedFetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -160,8 +179,16 @@ function Login({ onLoginSuccess }) {
     setError('');
     setSuccess('');
 
+    let loc;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/attendance/quick-attendance`, {
+      loc = await requireLocation();
+    } catch (geoErr) {
+      setError(geoErr.message || 'Location permission is required to clock in/out.');
+      setLoading(false);
+      return;
+    }
+    try {
+      const response = await authedFetch(`${API_BASE_URL}/api/attendance/quick-attendance`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -169,7 +196,8 @@ function Login({ onLoginSuccess }) {
         body: JSON.stringify({
           pin: attendancePin,
           action: attendanceAction,
-          notes: attendanceNotes
+          notes: attendanceNotes,
+          ...loc,
         }),
       });
 

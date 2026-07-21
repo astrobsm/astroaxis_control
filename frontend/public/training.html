@@ -1,0 +1,1168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a3d62" />
+<title>Training Academy — BONNESANTE MEDICALS</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root{
+    --brand:#0a3d62; --brand2:#1e6091; --accent:#e1b12c; --accent2:#f6c85f;
+    --bg:#0a1d2e; --card:#ffffff; --text:#1d2433; --muted:#6b7280;
+    --ok:#0d8050; --warn:#c0392b; --info:#1e6091; --border:#e5e7eb;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:#fff;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;-webkit-font-smoothing:antialiased;height:100%;overflow:hidden}
+  /* Header */
+  header{background:linear-gradient(135deg,#0a3d62 0%,#1e6091 100%);
+    padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    box-shadow:0 2px 12px rgba(0,0,0,.3);position:relative;z-index:5}
+  header img{height:38px;width:38px;border-radius:8px;background:#fff;padding:3px;object-fit:contain}
+  header h1{font-size:16px;margin:0;letter-spacing:.4px;color:#fff}
+  header p{margin:1px 0 0;font-size:11px;opacity:.85;color:#cfe2f3}
+  .h-spacer{flex:1}
+  .h-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .h-ctrl select,.h-ctrl button,.h-ctrl a{
+    background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.25);
+    padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer;
+    font-family:inherit;text-decoration:none}
+  .h-ctrl select{padding:7px 10px}
+  .h-ctrl button:hover,.h-ctrl a:hover{background:rgba(255,255,255,.25)}
+  .h-ctrl select option{color:#1d2433;background:#fff}
+  /* Stage */
+  .stage{position:relative;height:calc(100vh - 60px);display:flex;flex-direction:column;
+    background:linear-gradient(160deg,#0a1d2e 0%,#0e2a44 100%)}
+  .deck-meta{padding:6px 16px;font-size:11.5px;color:#9bb6cf;display:flex;
+    justify-content:space-between;flex-wrap:wrap;gap:8px;letter-spacing:.3px}
+  .deck-meta .deck-title{font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.6px;font-size:12px}
+  .progress{height:3px;background:rgba(255,255,255,.08)}
+  .progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    width:0%;transition:width .35s ease}
+  /* Slide */
+  .slide-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:14px 20px;overflow:hidden}
+  .slide{width:100%;max-width:1100px;aspect-ratio:16/9;background:#fff;color:var(--text);
+    border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.05);
+    padding:42px 56px;display:flex;flex-direction:column;position:relative;overflow:hidden;
+    animation:fadeIn .4s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  .slide::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;
+    background:linear-gradient(90deg,var(--brand),var(--brand2),var(--accent))}
+  .slide .stamp{position:absolute;top:14px;right:18px;font-size:10.5px;color:var(--muted);
+    letter-spacing:.5px;text-transform:uppercase;font-weight:700}
+  .slide .kicker{font-size:12px;color:var(--brand2);font-weight:700;letter-spacing:1.2px;
+    text-transform:uppercase;margin-bottom:4px}
+  .slide h2{font-size:34px;margin:0 0 14px;color:var(--brand);line-height:1.15;letter-spacing:.2px}
+  .slide ul{margin:6px 0 0;padding:0 0 0 22px;font-size:18px;line-height:1.55;color:#1d2433}
+  .slide ul li{margin-bottom:10px}
+  .slide ul li b{color:var(--brand2)}
+  .slide .note{margin-top:auto;padding:12px 16px;background:#fff8e1;border-left:4px solid var(--accent);
+    border-radius:6px;font-size:14px;color:#5a4a00;font-style:italic}
+  .slide.cover{align-items:center;justify-content:center;text-align:center;
+    background:radial-gradient(ellipse at top,#1e6091 0%,#0a3d62 60%,#072136 100%);color:#fff}
+  .slide.cover::before{display:none}
+  .slide.cover .badge{display:inline-block;padding:6px 14px;background:rgba(255,255,255,.15);
+    border-radius:99px;font-size:12px;font-weight:700;letter-spacing:1.5px;margin-bottom:18px;
+    border:1px solid rgba(255,255,255,.25);color:#fff}
+  .slide.cover h2{font-size:48px;color:#fff;margin-bottom:10px;line-height:1.1}
+  .slide.cover .sub{font-size:18px;color:#cfe2f3;max-width:700px;margin:0 auto 14px}
+  .slide.cover .meta{margin-top:18px;font-size:13px;color:#9bb6cf;letter-spacing:.5px;text-transform:uppercase}
+  .slide.section{justify-content:center;background:linear-gradient(135deg,#0a3d62,#1e6091);color:#fff}
+  .slide.section::before{display:none}
+  .slide.section .kicker{color:var(--accent2)}
+  .slide.section h2{font-size:42px;color:#fff}
+  .slide.section .sub{font-size:17px;color:#cfe2f3;max-width:760px}
+  .slide .two-col{display:grid;grid-template-columns:1fr 1fr;gap:24px;flex:1;min-height:0}
+  .slide .two-col .col h3{font-size:16px;margin:0 0 8px;color:var(--brand);
+    text-transform:uppercase;letter-spacing:.6px}
+  .slide .pillgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:8px}
+  .slide .pillgrid .pill{padding:10px 12px;background:#f4f8fc;border-left:3px solid var(--brand2);
+    border-radius:6px;font-size:14.5px}
+  .slide .pillgrid .pill b{color:var(--brand)}
+  /* Footer controls */
+  .controls{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;
+    background:rgba(0,0,0,.25);border-top:1px solid rgba(255,255,255,.08);gap:10px;flex-wrap:wrap}
+  .controls .nav{display:flex;gap:8px;align-items:center}
+  .controls .nav button{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.2);
+    padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:600}
+  .controls .nav button:hover{background:rgba(255,255,255,.22)}
+  .controls .nav button:disabled{opacity:.35;cursor:not-allowed}
+  .controls .counter{color:#cfe2f3;font-size:13px;font-weight:600;letter-spacing:.4px}
+  .controls .hint{color:#7e9bb8;font-size:11.5px;letter-spacing:.3px}
+  /* Thumbnails sidebar */
+  .thumbs{position:fixed;left:0;top:60px;bottom:0;width:0;background:#0a1d2e;
+    border-right:1px solid rgba(255,255,255,.08);overflow-y:auto;transition:width .25s ease;z-index:4}
+  .thumbs.open{width:200px}
+  .thumb{padding:8px 10px;font-size:11.5px;color:#9bb6cf;border-bottom:1px solid rgba(255,255,255,.04);
+    cursor:pointer;line-height:1.3;display:flex;gap:6px}
+  .thumb:hover{background:rgba(255,255,255,.05);color:#fff}
+  .thumb.on{background:rgba(225,177,44,.15);color:#fff;border-left:3px solid var(--accent)}
+  .thumb .n{color:var(--accent2);font-weight:700;min-width:22px}
+  /* Responsive */
+  @media(max-width:760px){
+    .slide{padding:24px 22px;border-radius:12px}
+    .slide h2{font-size:22px}
+    .slide ul{font-size:14.5px}
+    .slide.cover h2{font-size:30px}
+    .slide.cover .sub{font-size:14px}
+    .slide .two-col{grid-template-columns:1fr;gap:12px}
+    .slide .pillgrid{grid-template-columns:1fr}
+    header h1{font-size:14px}
+  }
+  @media print{
+    header,.controls,.deck-meta,.progress,.thumbs{display:none}
+    .stage{height:auto;background:#fff}
+    .slide-wrap{padding:0}
+    .slide{box-shadow:none;border-radius:0;page-break-after:always;width:100%;max-width:none;
+      aspect-ratio:auto;min-height:100vh}
+  }
+</style>
+</head>
+<body>
+<header>
+  <img src="/company-logo.png" alt="BSM" onerror="this.style.display='none'">
+  <div>
+    <h1>Training Academy</h1>
+    <p>BONNESANTE MEDICALS — master your modules, grow the company</p>
+  </div>
+  <div class="h-spacer"></div>
+  <div class="h-ctrl">
+    <select id="deckSelect" title="Choose a training presentation"></select>
+    <button id="btnThumbs" type="button" title="Show / hide slide list">☰ Slides</button>
+    <button id="btnFs" type="button" title="Toggle fullscreen">⛶ Fullscreen</button>
+    <button id="btnPrint" type="button" title="Print / save deck as PDF">🖨 Print</button>
+    <a href="/" title="Back to main app">← Main App</a>
+  </div>
+</header>
+
+<aside class="thumbs" id="thumbs"></aside>
+
+<div class="stage">
+  <div class="deck-meta">
+    <span><span class="deck-title" id="deckTitle">—</span> · <span id="deckSub">—</span></span>
+    <span id="audienceLabel"></span>
+  </div>
+  <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="slide-wrap" id="slideWrap"></div>
+  <div class="controls">
+    <div class="nav">
+      <button id="btnFirst" title="First slide (Home)">⏮</button>
+      <button id="btnPrev" title="Previous (← / PgUp)">◀ Prev</button>
+      <button id="btnNext" title="Next (→ / Space / PgDn)">Next ▶</button>
+      <button id="btnLast" title="Last slide (End)">⏭</button>
+    </div>
+    <div class="counter"><span id="counter">0 / 0</span></div>
+    <div class="hint">← → Space · F = Fullscreen · P = Print</div>
+  </div>
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────
+   TRAINING DECKS — 6 role-based presentations
+   Each slide: { kind?: 'cover'|'section', kicker?, title, bullets?, note?,
+                 sub?, twoCol?: [{h, items}], pillgrid?: [{h, body}] }
+──────────────────────────────────────────────────────────────────────── */
+const DECKS = [
+{
+  id:'sales', title:'Sales Mastery',
+  sub:'Turn every customer interaction into recurring revenue',
+  audience:'Sales Reps · Sales Managers · Cashiers',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Sales Mastery', sub:'Turn every customer interaction into recurring revenue.',
+      meta:'Audience: Sales Reps · Sales Managers · Cashiers' },
+
+    { kicker:'Why this matters', title:'Sales is the heartbeat of growth',
+      bullets:[
+        'Every order you record fuels production, payroll and expansion.',
+        'Clean data today = accurate forecasts tomorrow = bigger inventory bets.',
+        'Your discipline with the system <b>directly</b> protects company cash flow.',
+        'Customers judge us by the <b>speed and accuracy</b> of how we serve them.'
+      ],
+      note:'Goal of this module: by the last slide you can run a full sales cycle without help.' },
+
+    { kicker:'Getting started', title:'Login & navigating the Sales workspace',
+      bullets:[
+        'Open the app · sign in with your Sales role credentials.',
+        'Sidebar groups you will live in: <b>SALES</b>, <b>CUSTOMERS</b>, <b>PAYMENTS & DEBT</b>, <b>STOCK MANAGEMENT</b>.',
+        'Top bar shows ONLINE/OFFLINE — the app keeps working offline and syncs later.',
+        'Use <b>Pull All Data</b> at the start of every shift to refresh local cache.'
+      ] },
+
+    { kicker:'Step 1 — Customers', title:'Register every customer (no walk-in is anonymous)',
+      bullets:[
+        'CUSTOMERS → <b>+ Add Customer</b>. Capture name, phone, email, address, type.',
+        'Mark <b>retail</b> or <b>wholesale</b> — this drives the price tier on every order.',
+        'Add a credit limit only if the customer is approved for credit sales.',
+        'Search by phone before creating — avoid duplicates that fragment the ledger.'
+      ],
+      note:'A clean customer database is the #1 predictor of repeat-purchase revenue.' },
+
+    { kicker:'Step 2 — Quoting', title:'Create a sales order — line by line',
+      bullets:[
+        'SALES → <b>+ New Sale</b>. Pick the customer (or create on the fly).',
+        'Add product lines: choose product, unit, quantity. Price auto-fills from the tier.',
+        'Multi-unit pricing: switch between <b>carton / pack / piece</b> — the price recalculates.',
+        'Apply line discount only when authorised. Add overall discount in the totals box.',
+        'Confirm warehouse before saving so stock is deducted from the right location.'
+      ] },
+
+    { kicker:'Pricing discipline', title:'Retail vs wholesale — when to use which',
+      twoCol:[
+        { h:'RETAIL', items:[
+          'Walk-in or single-unit buyer.',
+          'Higher unit margin, lower volume.',
+          'Cash or instant transfer expected.',
+          'Use the retail tier; never override silently.' ] },
+        { h:'WHOLESALE', items:[
+          'Repeat buyer, distributor, hospital, pharmacy.',
+          'Volume thresholds unlock the wholesale tier.',
+          'Often combined with credit terms — confirm limit first.',
+          'Always log a quote / PO reference in notes.' ] }
+      ],
+      note:'If unsure, ask a Sales Manager BEFORE saving. Reversals corrupt reports.' },
+
+    { kicker:'Step 3 — Money in', title:'Record payments and track debt',
+      bullets:[
+        'PAYMENTS & DEBT module → record cash, transfer or POS against the order.',
+        'Partial payments are allowed; the balance auto-becomes a receivable.',
+        'Daily close: reconcile the day’s receipts against the bank report.',
+        'Aging buckets (0–30, 31–60, 60+) are visible per customer — chase 31+ today.'
+      ] },
+
+    { kicker:'Customer 360°', title:'Read the customer ledger like a banker',
+      bullets:[
+        'Open any customer → see lifetime orders, payments, outstanding balance.',
+        'Spot dormant customers (no order in 60 days) → call them THIS week.',
+        'Returning customers spend <b>3× more</b> than first-timers — protect them.',
+        'Add notes after every conversation; the next rep depends on your handoff.'
+      ] },
+
+    { kicker:'Stock awareness', title:'Quote what we can actually deliver',
+      bullets:[
+        'STOCK MANAGEMENT shows live quantity per warehouse.',
+        'Low stock = warn the customer up front; offer a substitute or a deposit.',
+        'Public sales auto-allocate from the <b>Sales Warehouse</b>.',
+        'Never promise a delivery date the production board does not support.'
+      ] },
+
+    { kicker:'After the sale', title:'Returned products — handle with care',
+      bullets:[
+        'RETURNED PRODUCTS module → log every return with reason + condition.',
+        'Resaleable goods go back to stock; damaged units go to <b>Damaged Transfers</b>.',
+        'A refund or credit note must reference the original sale.',
+        'Track repeat-return customers — usually a coaching opportunity for staff.'
+      ] },
+
+    { kind:'section', kicker:'Performance', title:'KPIs that matter',
+      sub:'What the manager will see on Monday.' },
+
+    { kicker:'Targets & KPIs', title:'Numbers a Sales rep is measured on',
+      pillgrid:[
+        { h:'Daily revenue', body:'Orders × average ticket size.' },
+        { h:'New customers', body:'Captured this week.' },
+        { h:'Conversion rate', body:'Quotes that became orders.' },
+        { h:'Debt aging', body:'% of receivables under 30 days.' },
+        { h:'Repeat rate', body:'Customers who bought twice this month.' },
+        { h:'Returns rate', body:'Returns ÷ orders — keep below 2%.' }
+      ] },
+
+    { kicker:'Daily routine', title:'A winning Sales day in 7 steps',
+      bullets:[
+        '1. Login · Pull All Data · check yesterday’s open balances.',
+        '2. Top 5 receivables → call before 10am.',
+        '3. Process new orders as they come — never batch at end of day.',
+        '4. Confirm stock & dispatch with Production / Logistics in <b>Communication Hub</b>.',
+        '5. Mid-day: log payments received & update the Sales Warehouse.',
+        '6. Late afternoon: outbound calls to dormant customers (60+ days quiet).',
+        '7. End of day: reconcile cash, run the daily Sales Report, hand over.'
+      ] },
+
+    { kicker:'Reports', title:'Reading the Sales Report like a pro',
+      bullets:[
+        'REPORTS → Sales: top products, top customers, channel mix, daily trend.',
+        'Compare this week vs last week — spot drops <b>before</b> the manager does.',
+        'Export to PDF / Excel for review meetings.',
+        'Use trends to plan promotions in the Marketer module.'
+      ] },
+
+    { kicker:'Self-service', title:'The public order link is your 24/7 storefront',
+      bullets:[
+        'Share <b>/order.html</b> with customers via WhatsApp, email, social.',
+        'Orders flow into the system automatically (Sales Warehouse).',
+        'Follow up within 30 minutes — speed = conversion.',
+        'Track which channels generate orders → invest more there.'
+      ] },
+
+    { kicker:'Teamwork', title:'Communication Hub — your nerve centre',
+      bullets:[
+        '#sales channel for fast updates (price changes, stockouts).',
+        'Notice Board for company-wide announcements.',
+        'Use video conference for weekly reviews — keep it short and data-driven.'
+      ] },
+
+    { kicker:'Avoid these', title:'Top 7 sales mistakes (and the fix)',
+      bullets:[
+        'Selling at the wrong tier → always verify customer type.',
+        'Skipping notes → next rep flies blind.',
+        'Forgetting to record payment → debt report lies.',
+        'Promising what production cannot deliver → broken trust.',
+        'Ignoring 31–60 day debt → it becomes 90+ debt.',
+        'Not adding the customer to the database → lost lifetime value.',
+        'Not closing the day → reconciliation nightmare tomorrow.'
+      ] },
+
+    { kicker:'Growth playbook', title:'How a great rep multiplies revenue',
+      bullets:[
+        'Upsell: suggest the next size / pack at checkout.',
+        'Cross-sell: pair complementary products (e.g. gauze + tape).',
+        'Follow-up: a 7-day post-sale call beats any ad.',
+        'Referrals: ask happy customers for one introduction.',
+        'Reactivation: monthly call list of dormant customers.'
+      ],
+      note:'Small habits, repeated daily, are how a rep doubles their book in 12 months.' },
+
+    { kind:'cover', kicker:'You’re ready', title:'Go close some deals.',
+      sub:'Questions? Ask in #sales or message your manager.',
+      meta:'Next deck: Marketing Mastery →' }
+  ]
+},
+
+{
+  id:'marketing', title:'Marketing Mastery',
+  sub:'Build the demand that Sales converts',
+  audience:'Marketers · Field Reps · Brand & Promotions',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Marketing Mastery', sub:'Build the demand that Sales converts.',
+      meta:'Audience: Marketers · Field Reps · Brand & Promotions' },
+
+    { kicker:'Mission', title:'Why marketing decides next quarter’s revenue',
+      bullets:[
+        'Sales harvests today; marketing plants the seeds for next month.',
+        'Your job: more <b>qualified</b> leads, better brand recall, stronger pricing power.',
+        'Every visit, sample and post should be logged — data wins arguments.',
+        'You are the eyes and ears of the company in the market.'
+      ] },
+
+    { kicker:'Module overview', title:'Inside the Marketer module',
+      bullets:[
+        'Visit log · lead pipeline · territory map · price intelligence · campaign tracker.',
+        'Each lead has a stage: <b>New → Contacted → Qualified → Handed-off → Won/Lost</b>.',
+        'Leads handed to Sales become Customers in one click.',
+        'Reports show conversion rate by source, by rep, by territory.'
+      ] },
+
+    { kicker:'Step 1 — Visits', title:'Log every customer visit (no exceptions)',
+      bullets:[
+        'Marketer → <b>+ New Visit</b>. Capture date, customer, location, outcome.',
+        'Add the next action and a date — the system reminds you.',
+        'GPS-stamp visits where possible; managers verify field activity from this.',
+        'Photos of shelf placement / competitor signage strengthen the record.'
+      ],
+      note:'A marketer with no visit log looks idle in reports — even if you worked hard.' },
+
+    { kicker:'Pipeline', title:'Manage leads through clear stages',
+      pillgrid:[
+        { h:'NEW', body:'Just identified, no contact yet.' },
+        { h:'CONTACTED', body:'First call/meeting completed.' },
+        { h:'QUALIFIED', body:'Real budget, real need, real timeline.' },
+        { h:'HANDED-OFF', body:'Sales is preparing the order.' },
+        { h:'WON', body:'Order created → revenue counted.' },
+        { h:'LOST', body:'Log the reason — we learn from every loss.' }
+      ] },
+
+    { kicker:'Market intelligence', title:'Track competitor pricing & promos',
+      bullets:[
+        'Use the Price Intel section to log what competitors charge in each territory.',
+        'Snap photos of promo posters and shelf displays.',
+        'Trends here feed pricing meetings with Management.',
+        'A 1% smarter price across the catalogue = thousands in monthly margin.'
+      ] },
+
+    { kicker:'Channels', title:'Where new customers actually come from',
+      twoCol:[
+        { h:'OUTBOUND', items:[
+          'Field visits (hospitals, clinics, pharmacies).',
+          'Cold calls from a target list.',
+          'Trade shows & medical events.' ] },
+        { h:'INBOUND', items:[
+          'Public order link (/order.html) shared on social.',
+          'Referrals from existing customers.',
+          'Word-of-mouth from quality reputation.' ] }
+      ] },
+
+    { kicker:'Self-serve weapon', title:'The public order link is a marketing tool',
+      bullets:[
+        'Embed <b>/order.html</b> in WhatsApp Business, Instagram bio, email signature.',
+        'Run a promo? Pin a banner pointing to the link.',
+        'Every order tags the channel — you can prove ROI.',
+        'Inbound orders should be followed up by a marketer to convert one-time → loyal.'
+      ] },
+
+    { kicker:'Promotions', title:'Designing a promo that actually works',
+      bullets:[
+        'Pick ONE objective: trial, volume, clearance, or brand recall.',
+        'Time-box it (7–14 days). Open-ended promos lose urgency.',
+        'Brief Sales beforehand so they price-quote correctly.',
+        'Measure: incremental orders vs prior 14 days, not gross orders.'
+      ] },
+
+    { kicker:'Handoff', title:'Working with the Sales team',
+      bullets:[
+        'Hand off in #sales channel with a one-paragraph brief: who, what, when, price.',
+        'Tag the assigned Sales rep so it’s clear who owns it.',
+        'Stay in the loop until the first order ships.',
+        'Celebrate wins publicly — credit the team.'
+      ],
+      note:'A clean handoff is what separates a marketing department from a marketing show.' },
+
+    { kicker:'Conversion', title:'Measure what matters',
+      pillgrid:[
+        { h:'Visit-to-Lead', body:'% of visits that produced a qualified lead.' },
+        { h:'Lead-to-Customer', body:'% of leads that became paying customers.' },
+        { h:'CAC', body:'Cost per customer acquired.' },
+        { h:'Time to Win', body:'Days from first contact → first order.' },
+        { h:'Channel mix', body:'Where wins come from (outbound vs inbound).' },
+        { h:'Promo lift', body:'Incremental orders during a campaign.' }
+      ] },
+
+    { kicker:'Customer voice', title:'Feedback loop with Customer Care',
+      bullets:[
+        'Tickets and complaints are gold — they show product gaps and unmet needs.',
+        'Weekly review with HR/Customer Care to spot themes.',
+        'Translate themes into product or messaging tweaks.',
+        'Close the loop: tell customers when their feedback shipped a change.'
+      ] },
+
+    { kicker:'Reports', title:'Reports that win the boardroom',
+      bullets:[
+        'Pipeline value by stage, by territory, by month.',
+        'Won-vs-lost ratio with loss reasons.',
+        'Promo ROI report (orders × margin − cost).',
+        'Trend lines: visits ↑, leads ↑, won ↑ — the staircase to growth.'
+      ] },
+
+    { kicker:'Cadence', title:'A high-output marketer’s week',
+      bullets:[
+        'MON: plan the week, top 10 prospects, review last week’s losses.',
+        'TUE–THU: field days · log everything before bed.',
+        'FRI morning: pipeline review with Sales.',
+        'FRI afternoon: content, social posts, competitor scan.',
+        'SAT: short follow-up calls; respect the day off.'
+      ] },
+
+    { kicker:'Tactics', title:'Five tactics that compound',
+      bullets:[
+        'Referral program — every won customer is asked for ONE intro.',
+        'Testimonials — short video clips for social and decks.',
+        'Educational content — explain WHY our quality matters.',
+        'Loyalty windows — a small gesture for top 20 customers each quarter.',
+        'Reactivation campaigns — quarterly outreach to dormant accounts.'
+      ],
+      note:'Compounding wins beat one-off heroics. Small, every week, forever.' },
+
+    { kind:'cover', kicker:'You’re ready', title:'Go build the demand.',
+      sub:'Need help? Post in #marketing or open a ticket with Customer Care.',
+      meta:'Next deck: Production Excellence →' }
+  ]
+},
+
+{
+  id:'production', title:'Production Excellence',
+  sub:'Plan it, make it, prove it — every batch, every day',
+  audience:'Production Manager · Operators · QA',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Production Excellence',
+      sub:'Plan it, make it, prove it — every batch, every day.',
+      meta:'Audience: Production Manager · Operators · QA' },
+
+    { kicker:'Why discipline wins', title:'Production turns plans into products',
+      bullets:[
+        'Every order Sales sells must be made on time, on spec and in full.',
+        'Variance in raw materials, time and quality leaks profit silently.',
+        'The system gives you the numbers; you give the company the certainty.',
+        'A trackable production floor is a scaleable production floor.'
+      ] },
+
+    { kicker:'Module overview', title:'Production at a glance',
+      bullets:[
+        '<b>PRODUCTION</b> — create production orders against a Bill of Materials.',
+        '<b>PRODUCTION TASKS</b> — assign duties to staff per task / per batch.',
+        '<b>PROD. COMPLETIONS</b> — close out finished orders & post output.',
+        '<b>RAW MATERIALS</b> · <b>STOCK</b> · <b>SOP / GMP</b> — everything you need to run a clean shift.'
+      ] },
+
+    { kicker:'Pre-flight', title:'Always check raw materials BEFORE you start',
+      bullets:[
+        'RAW MATERIALS → confirm on-hand qty for every BOM line.',
+        'Low or below reorder level? Notify Procurement in #procurement immediately.',
+        'Verify expiry dates and lot numbers — non-conforming material never enters the line.',
+        'Stage materials at the workstation before clocking in operators.'
+      ] },
+
+    { kicker:'Step 1', title:'Create a Production Order against the BOM',
+      bullets:[
+        'PRODUCTION → <b>+ New Order</b>. Select product, batch number, quantity, target date.',
+        'BOM auto-loads required raw materials and quantities.',
+        'Adjust if you’re running a partial batch — the system reserves the materials.',
+        'Add notes (e.g. recipe variation, special packaging) so the floor knows.'
+      ],
+      note:'A clean production order = clean variance analysis at month-end.' },
+
+    { kicker:'Step 2', title:'Assign duties in PRODUCTION TASKS',
+      bullets:[
+        'PRODUCTION TASKS → <b>+ New Assignment</b>. Pick product, batch, date and time.',
+        'Tick each task in the catalog (Pre-Production, Gauze, Tubes, Bottles, Foam, Post-Production…).',
+        'For each task, tick the staff to assign — <b>multiple staff per task</b> is supported.',
+        'Set planned quantity per task (qty of output expected).',
+        'Save → assignment number generated, ready for printing.'
+      ] },
+
+    { kicker:'Many-to-many', title:'One task → many staff. One staff → many tasks',
+      bullets:[
+        'Use checkboxes per task to select as many staff as needed for that task.',
+        'Each staff gets their own row to clock in and log their own output.',
+        'A single operator can be ticked across multiple tasks in the same shift.',
+        'Workload balances automatically in the staff “My Tasks” view.'
+      ] },
+
+    { kicker:'Print', title:'Print or PDF the assignment for the floor',
+      bullets:[
+        'Open the assignment → <b>⬇ Download PDF</b> or <b>🖨 Print</b>.',
+        'A4 layout: header, all tasks, assignees, qty, sign-off block.',
+        'Post a copy on the production board for visual control.',
+        'PDFs are reproducible — useful for audits and disputes.'
+      ] },
+
+    { kicker:'Step 3', title:'Operators clock in & log completion',
+      bullets:[
+        'Each operator opens PRODUCTION TASKS → My Tasks (or the standalone page).',
+        'Enter <b>4-digit clock PIN</b> to start a task — start time stamped.',
+        'On completion: enter the actual quantity processed and any notes.',
+        'Status flips to <b>Completed</b>; manager sees it on the dashboard.'
+      ] },
+
+    { kicker:'Step 4', title:'Manager confirms or rejects each completion',
+      bullets:[
+        'Open the assignment → review each completed item.',
+        'Confirm if quantity & quality are acceptable.',
+        'Reject with a reason if rework is needed — operator gets the task back.',
+        'Confirmed items lock the time/qty for payroll & yield calculations.'
+      ],
+      note:'Confirm same-day. Day-old confirmations break trust and accuracy.' },
+
+    { kicker:'Step 5', title:'Close the order in PROD. COMPLETIONS',
+      bullets:[
+        'When all tasks are confirmed, mark the production order complete.',
+        'Finished goods post to the relevant warehouse automatically.',
+        'Raw materials deduct from stock per the BOM × actual output.',
+        'Yield variance vs plan flags if it’s outside acceptable range.'
+      ] },
+
+    { kicker:'Quality', title:'SOP / GMP module — the rulebook',
+      bullets:[
+        'Open the SOP for the product BEFORE starting the run.',
+        'Tick off the procedural checklist as the shift progresses.',
+        'Non-conformities → <b>Damaged Transfers</b> with reason.',
+        'Audits look at SOP adherence — keep the checklist clean.'
+      ] },
+
+    { kicker:'Issues', title:'Damaged Transfers & quality holds',
+      bullets:[
+        'Any defective output → DAMAGED TRANSFERS with batch, qty, reason.',
+        'Tag for rework, scrap, or supplier return.',
+        'Photo evidence speeds up dispute resolution.',
+        'Trends here drive root-cause analysis in weekly meetings.'
+      ] },
+
+    { kicker:'Daily rhythm', title:'A controlled production day',
+      bullets:[
+        'Pre-shift: huddle, review yesterday’s output, confirm today’s plan.',
+        'Hour 1: stage materials, clock in operators, start the line.',
+        'Mid-shift: spot-check qty + quality at each station.',
+        'Pre-close: confirm completions, close any tasks running over.',
+        'End-of-shift: post-production cleaning, hand over to next shift.'
+      ] },
+
+    { kicker:'KPIs', title:'Numbers that prove a great shift',
+      pillgrid:[
+        { h:'Output qty', body:'Actual vs planned per batch.' },
+        { h:'Yield %', body:'Good output ÷ raw input.' },
+        { h:'Cycle time', body:'Hours per 1,000 units.' },
+        { h:'Rework rate', body:'% rejected at confirmation.' },
+        { h:'Scrap %', body:'Damaged ÷ total output.' },
+        { h:'On-time completion', body:'Orders closed by target date.' }
+      ] },
+
+    { kicker:'Continuous improvement', title:'How great teams get better every week',
+      bullets:[
+        'Weekly review: top 3 wins, top 3 issues, one experiment.',
+        'Smallest possible change → measure for one week → keep or drop.',
+        'Cross-train staff so absence does not stall a line.',
+        'Celebrate yield improvements publicly in #production and Notice Board.'
+      ],
+      note:'A 1% improvement per week compounds to >65% in a year. Discipline beats heroics.' },
+
+    { kind:'cover', kicker:'You’re ready', title:'Run a clean batch today.',
+      sub:'Stuck? Ask in #production or your shift supervisor.',
+      meta:'Next deck: Customer Care & HR Mastery →' }
+  ]
+},
+
+{
+  id:'customerCareHR', title:'Customer Care & HR Mastery',
+  sub:'People are the product — inside and outside the company',
+  audience:'HR · Customer Care · Reception · Admin Support',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Customer Care & HR Mastery',
+      sub:'People are the product — inside and outside the company.',
+      meta:'Audience: HR · Customer Care · Reception · Admin Support' },
+
+    { kicker:'Promise', title:'Every interaction defines our brand',
+      bullets:[
+        'A great product can be ruined by a poor interaction.',
+        'A modest product can be elevated by an outstanding one.',
+        'You are the front door of the company — internally and externally.',
+        'Speed + empathy + accuracy = customer for life.'
+      ] },
+
+    { kicker:'Modules at a glance', title:'Where you’ll spend your day',
+      bullets:[
+        '<b>HR / CUSTOMER CARE</b> — staff records, tickets, complaints.',
+        '<b>STAFF</b> · <b>ATTENDANCE</b> · <b>SALARY & PAYROLL</b> — workforce ops.',
+        '<b>CUSTOMERS</b> · <b>RETURNED PRODUCTS</b> — service ops.',
+        '<b>COMMUNICATION</b> · <b>LETTERS</b> — internal & official correspondence.'
+      ] },
+
+    { kicker:'Onboarding', title:'Welcoming a new staff member',
+      bullets:[
+        'STAFF → <b>+ Add Staff</b>: full name, role, position, phone, DOB, bank, hourly rate.',
+        'Employee ID auto-generates (BSM####); 4-digit clock PIN auto-issues.',
+        'Print the welcome letter from LETTERS; share the SOP module link.',
+        'Set up role permissions in USER MANAGEMENT for system access.'
+      ],
+      note:'A great first day predicts a great first year. Take 30 minutes to do it right.' },
+
+    { kicker:'Attendance', title:'Clock in, clock out, manage exceptions',
+      bullets:[
+        'ATTENDANCE → real-time dashboard of who’s in.',
+        'Clock-in / clock-out via the app or kiosk.',
+        'Exceptions (late, sick, leave) — adjust with reason; audit trail kept.',
+        'Reports: tardiness, absence rate, punctuality leaderboards.'
+      ] },
+
+    { kicker:'Payroll', title:'Running monthly payroll without drama',
+      bullets:[
+        'SALARY & PAYROLL → pick the period (e.g. 1–31 Aug).',
+        'Hours auto-pull from confirmed attendance & production tasks.',
+        'Apply allowances, deductions, tax — review per staff.',
+        'Generate payslips → ₦ formatted PDF, downloadable per staff.'
+      ] },
+
+    { kicker:'Payslips', title:'Distributing payslips professionally',
+      bullets:[
+        'Bulk-download from SALARY & PAYROLL.',
+        'Email or hand-deliver — never post in shared channels.',
+        'Address questions privately within 24 hours.',
+        'Keep a signed acknowledgment for HR file.'
+      ] },
+
+    { kicker:'Birthdays', title:'Small touches, big morale',
+      bullets:[
+        'Dashboard shows upcoming birthdays in the next 7 days.',
+        'Send a card or short message via Communication Hub.',
+        'A ₦1,000 gesture earns ₦100,000 of loyalty.',
+        'Track recognition like you track sales — consistency matters.'
+      ] },
+
+    { kicker:'Customer database', title:'Keep customer records clean',
+      bullets:[
+        'CUSTOMERS → audit weekly for duplicates, missing phone numbers.',
+        'Tag customers by source (sales, marketing, public order link).',
+        'Update notes after every complaint or compliment.',
+        'A clean database lets Sales & Marketing target with precision.'
+      ] },
+
+    { kicker:'Complaints', title:'Handle complaints with the LAST framework',
+      pillgrid:[
+        { h:'Listen', body:'Let them finish without interruption.' },
+        { h:'Apologise', body:'Sincere — even if you’re not at fault.' },
+        { h:'Solve', body:'Offer a clear next step within minutes.' },
+        { h:'Thank', body:'They told you instead of leaving silently.' }
+      ],
+      note:'Customers who complain and get resolved spend MORE than those who never complained.' },
+
+    { kicker:'Returns', title:'Tracking returns to closure',
+      bullets:[
+        'Open RETURNED PRODUCTS → log the return with reason and condition.',
+        'Trigger the refund / credit note via Sales after manager approval.',
+        'Defective items routed to Production / Damaged Transfers for analysis.',
+        'Close the loop: call the customer when resolved.'
+      ] },
+
+    { kicker:'Communication Hub', title:'Notice Board, Channels, Video',
+      bullets:[
+        'Notice Board for company-wide announcements (policies, holidays).',
+        'Channels: #general, #sales, #production, #hr, #management, #customers.',
+        'Video conference for HR meetings — reduce travel & boost cadence.',
+        'Pinned posts for evergreen procedures.'
+      ] },
+
+    { kicker:'Letters', title:'Official correspondence in minutes',
+      bullets:[
+        'LETTERS module → templated offer, warning, confirmation, dismissal letters.',
+        'Auto-merge with staff data — no copy-paste mistakes.',
+        'PDF output with company letterhead.',
+        'File and timestamp every letter sent — HR audit ready.'
+      ] },
+
+    { kicker:'Reports', title:'Reports HR & Customer Care should run weekly',
+      bullets:[
+        'Attendance summary by department.',
+        'Top complaint categories + resolution time.',
+        'Return reasons (top 5).',
+        'New staff onboarded vs leavers (turnover).',
+        'Customer satisfaction trend (from feedback logged).'
+      ] },
+
+    { kicker:'Service culture', title:'How to build a service-led company',
+      bullets:[
+        'Set service SLAs and publish them.',
+        'Recognise service heroes weekly in Notice Board.',
+        'Train ALL staff (including production) in basic customer empathy.',
+        'Measure NPS-style scores quarterly and act on the verbatims.'
+      ],
+      note:'Internal service quality predicts external service quality. Treat staff like VIPs.' },
+
+    { kind:'cover', kicker:'You’re ready', title:'Take care of people. They take care of the business.',
+      sub:'Need help? Open a ticket in HR or message #hr.',
+      meta:'Next deck: Procurement & Logistics →' }
+  ]
+},
+
+{
+  id:'procLogistics', title:'Procurement & Logistics',
+  sub:'Right item, right place, right time, right cost',
+  audience:'Procurement · Stores · Logistics · Warehouse Managers',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Procurement & Logistics',
+      sub:'Right item, right place, right time, right cost.',
+      meta:'Audience: Procurement · Stores · Logistics · Warehouse Managers' },
+
+    { kicker:'Why this matters', title:'The supply lifeline',
+      bullets:[
+        'Production stalls when materials are late — sales bleed when stock is gone.',
+        'Procurement controls the largest cash outflow after payroll.',
+        'Logistics turns inventory into delivered revenue.',
+        'Discipline here protects margins more than any sales push.'
+      ] },
+
+    { kicker:'Module overview', title:'Procurement at a glance',
+      bullets:[
+        'PROCUREMENT → vendors, purchase orders, goods receipt.',
+        'RAW MATERIALS → on-hand qty, reorder levels, lead times.',
+        'STOCK MANAGEMENT → finished-goods view across warehouses.',
+        'LOGISTICS → transfers, dispatch, deliveries.'
+      ] },
+
+    { kicker:'Reorder', title:'Reorder levels & low-stock alerts',
+      bullets:[
+        'Each material has a reorder level and minimum order qty.',
+        'Dashboard flags items at/below reorder — act the same day.',
+        'Use lead time × average daily usage to size the order.',
+        'Buffer for known lead-time variability.'
+      ] },
+
+    { kicker:'PO', title:'Creating a purchase order',
+      bullets:[
+        'PROCUREMENT → <b>+ New PO</b>. Pick vendor, items, qty, expected date.',
+        'Confirm pricing against the last PO; flag any change >5%.',
+        'Approval workflow routes to manager if above threshold.',
+        'Send PO PDF to vendor; log acknowledgment date.'
+      ] },
+
+    { kicker:'Receiving', title:'Receiving goods into a warehouse',
+      bullets:[
+        'On delivery: open the PO → <b>Receive</b>. Match qty, lot, expiry.',
+        'Short / damaged? Receive only the good portion; raise a discrepancy.',
+        'Stock posts to the receiving warehouse instantly.',
+        'File the supplier invoice & DN with the PO.'
+      ],
+      note:'Wrong receipts here become wrong stock everywhere. Slow down to be accurate.' },
+
+    { kicker:'Vendors', title:'Vendor management — build, score, prune',
+      bullets:[
+        'Maintain vendor records: contacts, terms, lead time, quality history.',
+        'Score on price, on-time delivery, quality, responsiveness.',
+        'Quarterly review: top performers get more share; laggards get a coaching call.',
+        'Always have a backup vendor for critical materials.'
+      ] },
+
+    { kicker:'Logistics', title:'Logistics module overview',
+      bullets:[
+        'TRANSFERS — move stock between warehouses.',
+        'RECEIVE TRANSFERS — confirm what arrived.',
+        'DAMAGED TRANSFERS — log losses with reason.',
+        'Dispatch view — open orders awaiting delivery.'
+      ] },
+
+    { kicker:'Transfers', title:'Inter-warehouse transfers',
+      bullets:[
+        'TRANSFERS → choose source, destination, items, qty.',
+        'System reserves at source until receipt is confirmed at destination.',
+        'Driver / handler ID stamped for accountability.',
+        'Print the dispatch note for the trip.'
+      ] },
+
+    { kicker:'Receive', title:'Receive transfers correctly',
+      bullets:[
+        'RECEIVE TRANSFERS → open the inbound list.',
+        'Match qty against the source — flag discrepancies immediately.',
+        'Damaged in transit → DAMAGED TRANSFERS with photo + reason.',
+        'Posted stock becomes available for sale.'
+      ] },
+
+    { kicker:'Cost', title:'Cost tracking — the silent margin builder',
+      bullets:[
+        'Land cost per unit = price + freight + duty + handling.',
+        'Track moving average cost per item — used in sales margin calcs.',
+        'Compare actual vs planned cost per PO.',
+        'Negotiate with data, not feelings.'
+      ] },
+
+    { kicker:'Reports', title:'Procurement reports to read weekly',
+      bullets:[
+        'Open POs ageing report.',
+        'Vendor on-time delivery scorecard.',
+        'Price variance (this PO vs last 3).',
+        'Stockout incidents by material.',
+        'Inventory days on hand.'
+      ] },
+
+    { kicker:'Cadence', title:'Weekly procurement & logistics rhythm',
+      bullets:[
+        'MON: review reorder list, raise POs, chase late deliveries.',
+        'TUE–THU: receive goods, run transfers, manage dispatch.',
+        'FRI: vendor calls, quality reviews, weekly KPIs.',
+        'Month-end: stock count vs system; investigate variances.'
+      ] },
+
+    { kicker:'KPIs', title:'KPIs that protect cash & continuity',
+      pillgrid:[
+        { h:'Lead time', body:'Days from PO to receipt.' },
+        { h:'Fill rate', body:'% of PO qty received in full.' },
+        { h:'Cost variance', body:'Actual vs planned cost.' },
+        { h:'Stockouts', body:'Count per month — target 0.' },
+        { h:'Inventory days', body:'How long stock lasts at current usage.' },
+        { h:'Damaged %', body:'Damaged ÷ moved units.' }
+      ] },
+
+    { kicker:'Strategy', title:'Strategic sourcing tips',
+      bullets:[
+        'Consolidate spend with fewer, better vendors.',
+        'Sign annual price agreements where possible.',
+        'Localise critical inputs to cut lead time and FX risk.',
+        'Audit slow-moving stock quarterly — free up cash.',
+        'Build a 30-day raw material buffer for top SKUs.'
+      ],
+      note:'A great procurement function is invisible — production never stops, finance never panics.' },
+
+    { kind:'cover', kicker:'You’re ready', title:'Keep the supply chain humming.',
+      sub:'Stuck? Ask in #procurement.',
+      meta:'Next deck: Admin & Management Overview →' }
+  ]
+},
+
+{
+  id:'admin', title:'Admin & Management Overview',
+  sub:'See the whole company in one screen — and steer it',
+  audience:'Owners · Directors · GM · Department Heads',
+  slides:[
+    { kind:'cover', kicker:'Bonnesante Medicals · Training Academy',
+      title:'Admin & Management Overview',
+      sub:'See the whole company in one screen — and steer it.',
+      meta:'Audience: Owners · Directors · GM · Department Heads' },
+
+    { kicker:'Dashboard', title:'The CEO view in 30 seconds',
+      bullets:[
+        'DASHBOARD: revenue today / week, top customers, low stock, birthdays, alerts.',
+        'Click any tile to drill into the underlying module.',
+        'Set 3 KPIs to glance at every morning — discipline beats vanity metrics.',
+        'Use the Notice Board to react publicly to wins and concerns.'
+      ] },
+
+    { kicker:'Modules at a glance', title:'How the modules connect',
+      bullets:[
+        'Sales → Customers → Payments & Debt — your revenue engine.',
+        'Production → Raw Materials → Stock — your supply engine.',
+        'HR / Customer Care → Staff → Payroll — your people engine.',
+        'Reports / Financial — the dashboards that summarise it all.'
+      ] },
+
+    { kicker:'Roles', title:'User Management & permissions',
+      bullets:[
+        'USER MANAGEMENT → create users, assign role (admin, sales, production, HR…).',
+        'Per-module access matrix controls what each user can see/do.',
+        'Disable accounts immediately on staff exit.',
+        'Audit log records sensitive changes — review monthly.'
+      ],
+      note:'Least-privilege principle: give the minimum access needed to do the job.' },
+
+    { kicker:'Warehouses', title:'Multi-warehouse setup',
+      bullets:[
+        'Maintain Sales, Production, Damaged, Returns and any branch warehouses.',
+        'Stock is tracked per warehouse — transfers move it.',
+        'Public sales auto-allocate from the Sales Warehouse.',
+        'Restrict warehouse access by role to prevent accidents.'
+      ] },
+
+    { kicker:'Financials', title:'Financial module — money in, money out',
+      bullets:[
+        'Revenue, COGS, gross margin, opex — at a glance.',
+        'Receivables & payables ageing reports.',
+        'Cash position vs forecast.',
+        'Drill from any number to the source transaction.'
+      ] },
+
+    { kicker:'Reports', title:'Reading reports like an operator',
+      bullets:[
+        'Always compare a period to the same period last year (seasonality).',
+        'Look at trend lines, not single-day spikes.',
+        'Anomaly = investigate within 24 hours.',
+        'Share the “one chart of the week” with the team to focus attention.'
+      ] },
+
+    { kicker:'SOP / GMP', title:'Governance: SOPs are non-negotiable',
+      bullets:[
+        'Every recurring process has an SOP in the SOP / GMP module.',
+        'Review SOPs quarterly; version-control changes.',
+        'Audits (internal & regulatory) start here — keep it tidy.',
+        'New staff onboarding includes SOP sign-off.'
+      ] },
+
+    { kicker:'Communication', title:'Communication Hub — set the tone',
+      bullets:[
+        'Use Notice Board for important, infrequent messages.',
+        'Use channels for fast, ongoing collaboration.',
+        'Use video for weekly leadership reviews.',
+        'Public recognition in #general → culture-builder.'
+      ] },
+
+    { kicker:'KPIs', title:'Set, track, review — every week',
+      pillgrid:[
+        { h:'Revenue', body:'Daily, weekly, monthly trend.' },
+        { h:'Gross margin %', body:'Watch for silent erosion.' },
+        { h:'Receivables ageing', body:'Cash flow lifeline.' },
+        { h:'Yield %', body:'Production efficiency.' },
+        { h:'On-time delivery', body:'Customer trust metric.' },
+        { h:'Staff turnover', body:'Culture & operational risk.' }
+      ] },
+
+    { kicker:'Data hygiene', title:'Garbage in → garbage out',
+      bullets:[
+        'Insist on data discipline — incomplete records are worse than none.',
+        'Weekly data audits by HR (customers) and Stores (stock).',
+        'Penalise duplicate / dummy records publicly.',
+        'Reward staff who flag bad data first.'
+      ] },
+
+    { kicker:'Resilience', title:'Backups, offline-first & PWA',
+      bullets:[
+        'The app is offline-first — sales continue during internet outages.',
+        'Cloud sync once back online; conflicts surfaced for review.',
+        'Automated daily backups of the database.',
+        'Quarterly restore drill — confirm backups actually work.'
+      ] },
+
+    { kicker:'Mobile', title:'Install as a PWA on every device',
+      bullets:[
+        'On any device → tap <b>📱 Install App</b> in the navbar.',
+        'Adds a home-screen icon, full-screen experience, push-style updates.',
+        'Field reps and operators get a native-app feel without app stores.',
+        'Works offline; syncs when back online.'
+      ] },
+
+    { kicker:'Security', title:'Security best practices',
+      bullets:[
+        'Strong, unique passwords; rotate quarterly.',
+        'Disable accounts the day staff leave.',
+        'Limit admin role to <b>2–3 people</b>; audit their actions.',
+        'Public order link = open by design — monitor for abuse.',
+        'Keep the deployment patched; review server logs weekly.'
+      ] },
+
+    { kicker:'Roadmap', title:'Growth roadmap — where to go next',
+      bullets:[
+        'Quarter 1: data hygiene + KPI dashboards adopted by every dept.',
+        'Quarter 2: marketing engine producing leads weekly.',
+        'Quarter 3: production yield ≥ target; SOP audits clean.',
+        'Quarter 4: open the second branch warehouse with confidence.'
+      ],
+      note:'Software is a force multiplier. The leverage comes from the discipline you bring to it.' },
+
+    { kicker:'Help', title:'Where to get help',
+      bullets:[
+        'In-app: Communication Hub → #management or #general.',
+        'Documentation: this Training Academy + SOP / GMP module.',
+        'IT support: open a ticket in HR / Customer Care, tagged “system”.',
+        'Escalation: a director can always reach the deployment owner.'
+      ] },
+
+    { kind:'cover', kicker:'You’re ready', title:'Now go run the company.',
+      sub:'Bookmark this Training Academy. Refresh quarterly with your team.',
+      meta:'End of programme · Bonnesante Medicals' }
+  ]
+}
+];
+
+/* ───────────── Renderer ───────────── */
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function renderBullets(items){
+  return '<ul>' + items.map(t => '<li>' + t + '</li>').join('') + '</ul>';
+}
+function renderSlide(s, idx, total, deck){
+  const stamp = `<div class="stamp">${escapeHtml(deck.title)} · ${idx+1} / ${total}</div>`;
+  if (s.kind === 'cover'){
+    return `<div class="slide cover">
+      ${s.kicker ? `<div class="badge">${escapeHtml(s.kicker)}</div>` : ''}
+      <h2>${escapeHtml(s.title)}</h2>
+      ${s.sub ? `<div class="sub">${s.sub}</div>` : ''}
+      ${s.meta ? `<div class="meta">${escapeHtml(s.meta)}</div>` : ''}
+      ${stamp}
+    </div>`;
+  }
+  if (s.kind === 'section'){
+    return `<div class="slide section">
+      ${s.kicker ? `<div class="kicker" style="color:#f6c85f">${escapeHtml(s.kicker)}</div>` : ''}
+      <h2>${escapeHtml(s.title)}</h2>
+      ${s.sub ? `<div class="sub">${s.sub}</div>` : ''}
+      ${stamp}
+    </div>`;
+  }
+  let body = '';
+  if (s.bullets) body += renderBullets(s.bullets);
+  if (s.twoCol){
+    body += '<div class="two-col">' + s.twoCol.map(c =>
+      `<div class="col"><h3>${escapeHtml(c.h)}</h3>${renderBullets(c.items)}</div>`).join('') + '</div>';
+  }
+  if (s.pillgrid){
+    body += '<div class="pillgrid">' + s.pillgrid.map(p =>
+      `<div class="pill"><b>${escapeHtml(p.h)}</b> — ${p.body}</div>`).join('') + '</div>';
+  }
+  return `<div class="slide">
+    ${s.kicker ? `<div class="kicker">${escapeHtml(s.kicker)}</div>` : ''}
+    <h2>${escapeHtml(s.title)}</h2>
+    ${body}
+    ${s.note ? `<div class="note">💡 ${s.note}</div>` : ''}
+    ${stamp}
+  </div>`;
+}
+
+let deckIdx = 0, slideIdx = 0;
+
+function deck(){ return DECKS[deckIdx]; }
+function totalSlides(){ return deck().slides.length; }
+
+function show(){
+  const d = deck();
+  const t = totalSlides();
+  if (slideIdx < 0) slideIdx = 0;
+  if (slideIdx >= t) slideIdx = t - 1;
+  document.getElementById('slideWrap').innerHTML = renderSlide(d.slides[slideIdx], slideIdx, t, d);
+  document.getElementById('counter').textContent = `${slideIdx+1} / ${t}`;
+  document.getElementById('progressBar').style.width = (((slideIdx+1)/t)*100).toFixed(1) + '%';
+  document.getElementById('btnPrev').disabled = slideIdx === 0;
+  document.getElementById('btnNext').disabled = slideIdx === t - 1;
+  document.getElementById('btnFirst').disabled = slideIdx === 0;
+  document.getElementById('btnLast').disabled = slideIdx === t - 1;
+  document.getElementById('deckTitle').textContent = d.title;
+  document.getElementById('deckSub').textContent = d.sub;
+  document.getElementById('audienceLabel').textContent = d.audience;
+  // sync hash so refresh keeps state
+  history.replaceState(null, '', `#${d.id}/${slideIdx+1}`);
+  // sync thumbs
+  document.querySelectorAll('#thumbs .thumb').forEach((el, i) => el.classList.toggle('on', i === slideIdx));
+}
+
+function buildThumbs(){
+  const d = deck();
+  document.getElementById('thumbs').innerHTML = d.slides.map((s, i) =>
+    `<div class="thumb" data-i="${i}"><span class="n">${i+1}</span><span>${escapeHtml(s.title)}</span></div>`).join('');
+  document.querySelectorAll('#thumbs .thumb').forEach(el => {
+    el.addEventListener('click', () => { slideIdx = parseInt(el.dataset.i, 10); show(); });
+  });
+}
+
+function buildDeckSelect(){
+  const sel = document.getElementById('deckSelect');
+  sel.innerHTML = DECKS.map((d, i) =>
+    `<option value="${i}">${escapeHtml(d.title)} (${d.slides.length} slides)</option>`).join('');
+  sel.addEventListener('change', () => {
+    deckIdx = parseInt(sel.value, 10);
+    slideIdx = 0;
+    buildThumbs();
+    show();
+  });
+}
+
+function next(){ if (slideIdx < totalSlides() - 1){ slideIdx++; show(); } }
+function prev(){ if (slideIdx > 0){ slideIdx--; show(); } }
+function first(){ slideIdx = 0; show(); }
+function last(){ slideIdx = totalSlides() - 1; show(); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown'){ e.preventDefault(); next(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp'){ e.preventDefault(); prev(); }
+  else if (e.key === 'Home'){ e.preventDefault(); first(); }
+  else if (e.key === 'End'){ e.preventDefault(); last(); }
+  else if (e.key === 'f' || e.key === 'F'){ toggleFs(); }
+  else if (e.key === 'p' || e.key === 'P'){ window.print(); }
+});
+
+function toggleFs(){
+  if (!document.fullscreenElement){ document.documentElement.requestFullscreen?.(); }
+  else { document.exitFullscreen?.(); }
+}
+
+document.getElementById('btnNext').onclick = next;
+document.getElementById('btnPrev').onclick = prev;
+document.getElementById('btnFirst').onclick = first;
+document.getElementById('btnLast').onclick = last;
+document.getElementById('btnFs').onclick = toggleFs;
+document.getElementById('btnPrint').onclick = () => window.print();
+document.getElementById('btnThumbs').onclick = () => document.getElementById('thumbs').classList.toggle('open');
+
+// touch swipe
+let touchX = null;
+document.getElementById('slideWrap').addEventListener('touchstart', e => { touchX = e.touches[0].clientX; }, {passive:true});
+document.getElementById('slideWrap').addEventListener('touchend', e => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX; touchX = null;
+  if (Math.abs(dx) > 40){ dx < 0 ? next() : prev(); }
+}, {passive:true});
+
+// init from hash if any: #deckId/slideNumber
+function initFromHash(){
+  const m = location.hash.match(/^#([\w-]+)\/(\d+)/);
+  if (m){
+    const di = DECKS.findIndex(d => d.id === m[1]);
+    if (di >= 0){ deckIdx = di; slideIdx = Math.max(0, parseInt(m[2], 10) - 1); }
+  }
+}
+
+initFromHash();
+buildDeckSelect();
+document.getElementById('deckSelect').value = String(deckIdx);
+buildThumbs();
+show();
+</script>
+</body>
+</html>

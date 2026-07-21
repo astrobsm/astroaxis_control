@@ -550,3 +550,332 @@ async def view_products_catalog(session: AsyncSession = Depends(get_session)):
                 "wholesale_price": float(r.pp_wholesale or 0),
             })
     return {"items": list(products.values()), "total": len(products)}
+
+# ======================== HEALTHCARE FACILITIES ========================
+
+_FACILITIES_TABLE_READY = False
+
+async def _ensure_facilities_table(session: AsyncSession):
+    """Create marketing_facilities table on first use (idempotent)."""
+    global _FACILITIES_TABLE_READY
+    if _FACILITIES_TABLE_READY:
+        return
+    await session.execute(text("""
+        CREATE TABLE IF NOT EXISTS marketing_facilities (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            marketer_staff_id UUID REFERENCES staff(id) ON DELETE SET NULL,
+            facility_name TEXT NOT NULL,
+            facility_type TEXT,
+            address TEXT,
+            city TEXT,
+            state TEXT,
+            contact_person TEXT,
+            contact_title TEXT,
+            contact_phone TEXT,
+            contact_email TEXT,
+            secondary_contact TEXT,
+            secondary_phone TEXT,
+            relationship_status TEXT DEFAULT 'prospect',
+            products_of_interest TEXT,
+            last_visit_date DATE,
+            next_visit_date DATE,
+            visit_frequency TEXT,
+            estimated_monthly_value NUMERIC(14,2) DEFAULT 0,
+            notes TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """))
+    await session.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_mkt_fac_marketer ON marketing_facilities(marketer_staff_id)"
+    ))
+    await session.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_mkt_fac_status ON marketing_facilities(relationship_status)"
+    ))
+    await session.commit()
+    _FACILITIES_TABLE_READY = True
+
+
+def _facility_to_dict(r):
+    return {
+        "id": str(r.id),
+        "marketer_staff_id": str(r.marketer_staff_id) if r.marketer_staff_id else None,
+        "marketer_name": (
+            f"{r.first_name} {r.last_name}".strip()
+            if hasattr(r, 'first_name') and r.first_name else ''
+        ),
+        "facility_name": r.facility_name,
+        "facility_type": r.facility_type or '',
+        "address": r.address or '',
+        "city": r.city or '',
+        "state": r.state or '',
+        "contact_person": r.contact_person or '',
+        "contact_title": r.contact_title or '',
+        "contact_phone": r.contact_phone or '',
+        "contact_email": r.contact_email or '',
+        "secondary_contact": r.secondary_contact or '',
+        "secondary_phone": r.secondary_phone or '',
+        "relationship_status": r.relationship_status or 'prospect',
+        "products_of_interest": r.products_of_interest or '',
+        "last_visit_date": str(r.last_visit_date) if r.last_visit_date else '',
+        "next_visit_date": str(r.next_visit_date) if r.next_visit_date else '',
+        "visit_frequency": r.visit_frequency or '',
+        "estimated_monthly_value": float(r.estimated_monthly_value or 0),
+        "notes": r.notes or '',
+        "created_at": str(r.created_at),
+        "updated_at": str(r.updated_at),
+    }
+
+
+@router.post('/facilities')
+async def create_facility(data: dict, session: AsyncSession = Depends(get_session)):
+    await _ensure_facilities_table(session)
+    if not data.get('facility_name'):
+        raise HTTPException(400, "facility_name is required")
+    cols = [
+        'marketer_staff_id', 'facility_name', 'facility_type', 'address', 'city', 'state',
+        'contact_person', 'contact_title', 'contact_phone', 'contact_email',
+        'secondary_contact', 'secondary_phone', 'relationship_status',
+        'products_of_interest', 'last_visit_date', 'next_visit_date',
+        'visit_frequency', 'estimated_monthly_value', 'notes'
+    ]
+    params = {}
+    for c in cols:
+        v = data.get(c)
+        if c in ('last_visit_date', 'next_visit_date'):
+            params[c] = date.fromisoformat(v) if v else None
+        elif c == 'estimated_monthly_value':
+            params[c] = float(v) if v not in ('', None) else 0
+        else:
+            params[c] = v if v not in ('',) else None
+    sql = f"""
+        INSERT INTO marketing_facilities ({', '.join(cols)})
+        VALUES ({', '.join(':' + c for c in cols)})
+        RETURNING *
+    """
+    result = await session.execute(text(sql), params)
+    row = result.fetchone()
+    await session.commit()
+    return {"success": True, "data": _facility_to_dict(row)}
+
+
+@router.get('/facilities')
+async def list_facilities(
+    page: int = Query(1, ge=1),
+    size: int = Query(100),
+    marketer_staff_id: Optional[str] = None,
+    status: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    await _ensure_facilities_table(session)
+    where = []
+    params = {}
+    if marketer_staff_id:
+        where.append("f.marketer_staff_id = :mid")
+        params['mid'] = marketer_staff_id
+    if status:
+        where.append("f.relationship_status = :st")
+        params['st'] = status
+    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+    count_r = await session.execute(
+        text(f"SELECT COUNT(*) FROM marketing_facilities f {where_sql}"), params
+    )
+    total = count_r.scalar() or 0
+    params['limit'] = size
+    params['offset'] = (page - 1) * size
+    sql = f"""
+        SELECT f.*, s.first_name, s.last_name
+        FROM marketing_facilities f
+        LEFT JOIN staff s ON s.id = f.marketer_staff_id
+        {where_sql}
+        ORDER BY f.facility_name ASC
+        LIMIT :limit OFFSET :offset
+    """
+    result = await session.execute(text(sql), params)
+    items = [_facility_to_dict(r) for r in result.fetchall()]
+    return {"items": items, "total": total, "page": page, "size": size}
+
+
+@router.put('/facilities/{facility_id}')
+async def update_facility(facility_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+    await _ensure_facilities_table(session)
+    updatable = {
+        'marketer_staff_id', 'facility_name', 'facility_type', 'address', 'city', 'state',
+        'contact_person', 'contact_title', 'contact_phone', 'contact_email',
+        'secondary_contact', 'secondary_phone', 'relationship_status',
+        'products_of_interest', 'last_visit_date', 'next_visit_date',
+        'visit_frequency', 'estimated_monthly_value', 'notes'
+    }
+    fields = []
+    params = {"id": facility_id}
+    for f in updatable:
+        if f in data:
+            v = data[f]
+            if f in ('last_visit_date', 'next_visit_date'):
+                v = date.fromisoformat(v) if v else None
+            elif f == 'estimated_monthly_value':
+                v = float(v) if v not in ('', None) else 0
+            fields.append(f"{f} = :{f}")
+            params[f] = v
+    if not fields:
+        raise HTTPException(400, "No fields")
+    fields.append("updated_at = NOW()")
+    result = await session.execute(
+        text(f"UPDATE marketing_facilities SET {', '.join(fields)} WHERE id = :id RETURNING *"),
+        params,
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(404, "Facility not found")
+    await session.commit()
+    return {"success": True, "data": _facility_to_dict(row)}
+
+
+@router.delete('/facilities/{facility_id}')
+async def delete_facility(facility_id: str, session: AsyncSession = Depends(get_session)):
+    await _ensure_facilities_table(session)
+    result = await session.execute(
+        text("DELETE FROM marketing_facilities WHERE id = :id RETURNING id"),
+        {"id": facility_id},
+    )
+    if not result.fetchone():
+        raise HTTPException(404, "Facility not found")
+    await session.commit()
+    return {"success": True, "message": "Facility deleted"}
+
+
+# ======================== PERFORMANCE / NEW CUSTOMERS & SALES ========================
+
+@router.get('/performance')
+async def marketer_performance(
+    marketer_staff_id: Optional[str] = None,
+    days: int = Query(30, ge=1, le=365),
+    session: AsyncSession = Depends(get_session),
+):
+    """Aggregate marketer performance: new customers attracted, sales volume,
+    facility coverage, visit productivity over the trailing window."""
+    where_log = ["log_date >= CURRENT_DATE - INTERVAL ':days days'"]
+    # NB: SQL interval cannot bind a parameter directly, so embed safely
+    days_int = int(days)
+    base_where = f"log_date >= CURRENT_DATE - INTERVAL '{days_int} days'"
+    params = {}
+    mfilter = ""
+    if marketer_staff_id:
+        mfilter = " AND marketer_staff_id = :mid"
+        params['mid'] = marketer_staff_id
+
+    # Per-marketer aggregates
+    sql = f"""
+        SELECT
+            ml.marketer_staff_id,
+            s.first_name, s.last_name,
+            COUNT(*) AS total_logs,
+            COUNT(DISTINCT ml.customer_contacted)
+                FILTER (WHERE ml.customer_contacted IS NOT NULL AND ml.customer_contacted <> '')
+                AS unique_customers_contacted,
+            COUNT(DISTINCT ml.location_visited)
+                FILTER (WHERE ml.location_visited IS NOT NULL AND ml.location_visited <> '')
+                AS unique_locations,
+            COALESCE(SUM(ml.orders_generated), 0) AS total_orders,
+            COALESCE(SUM(ml.order_value), 0) AS total_order_value,
+            COALESCE(SUM(ml.samples_distributed), 0) AS total_samples,
+            COUNT(*) FILTER (WHERE ml.follow_up_required = true) AS pending_followups,
+            COALESCE(AVG(NULLIF(ml.mood_rating, 0)), 0) AS avg_mood
+        FROM marketing_daily_logs ml
+        LEFT JOIN staff s ON s.id = ml.marketer_staff_id
+        WHERE {base_where} {mfilter}
+        GROUP BY ml.marketer_staff_id, s.first_name, s.last_name
+        ORDER BY total_order_value DESC
+    """
+    result = await session.execute(text(sql), params)
+    per_marketer = []
+    for r in result.fetchall():
+        per_marketer.append({
+            "marketer_staff_id": str(r.marketer_staff_id) if r.marketer_staff_id else None,
+            "marketer_name": (
+                f"{r.first_name or ''} {r.last_name or ''}".strip() or 'Unassigned'
+            ),
+            "total_logs": int(r.total_logs or 0),
+            "unique_customers_contacted": int(r.unique_customers_contacted or 0),
+            "unique_locations": int(r.unique_locations or 0),
+            "total_orders": int(r.total_orders or 0),
+            "total_order_value": float(r.total_order_value or 0),
+            "total_samples": int(r.total_samples or 0),
+            "pending_followups": int(r.pending_followups or 0),
+            "avg_mood": round(float(r.avg_mood or 0), 2),
+        })
+
+    # New customers attracted (customers whose name appears in logs and were
+    # created in the customers table within the window)
+    new_cust_sql = f"""
+        SELECT c.id, c.name, c.phone, c.email, c.created_at,
+               ml.marketer_staff_id, s.first_name, s.last_name
+        FROM customers c
+        LEFT JOIN LATERAL (
+            SELECT marketer_staff_id, log_date
+            FROM marketing_daily_logs
+            WHERE customer_contacted ILIKE c.name
+              AND {base_where}
+            ORDER BY log_date ASC
+            LIMIT 1
+        ) ml ON TRUE
+        LEFT JOIN staff s ON s.id = ml.marketer_staff_id
+        WHERE c.created_at >= NOW() - INTERVAL '{days_int} days'
+        ORDER BY c.created_at DESC
+        LIMIT 100
+    """
+    new_cust = await session.execute(text(new_cust_sql))
+    new_customers = []
+    for r in new_cust.fetchall():
+        new_customers.append({
+            "id": str(r.id),
+            "name": r.name,
+            "phone": r.phone or '',
+            "email": r.email or '',
+            "created_at": str(r.created_at),
+            "attributed_marketer": (
+                f"{r.first_name or ''} {r.last_name or ''}".strip()
+                if r.first_name else ''
+            ),
+        })
+
+    # Top facilities visited
+    await _ensure_facilities_table(session)
+    top_fac = await session.execute(text(f"""
+        SELECT f.facility_name, f.facility_type, f.city, f.relationship_status,
+               COUNT(ml.id) AS visit_count,
+               COALESCE(SUM(ml.orders_generated), 0) AS orders,
+               COALESCE(SUM(ml.order_value), 0) AS value
+        FROM marketing_facilities f
+        LEFT JOIN marketing_daily_logs ml
+            ON ml.location_visited ILIKE f.facility_name
+           AND ml.log_date >= CURRENT_DATE - INTERVAL '{days_int} days'
+        GROUP BY f.id, f.facility_name, f.facility_type, f.city, f.relationship_status
+        ORDER BY value DESC, visit_count DESC
+        LIMIT 20
+    """))
+    top_facilities = []
+    for r in top_fac.fetchall():
+        top_facilities.append({
+            "facility_name": r.facility_name,
+            "facility_type": r.facility_type or '',
+            "city": r.city or '',
+            "relationship_status": r.relationship_status or 'prospect',
+            "visit_count": int(r.visit_count or 0),
+            "orders": int(r.orders or 0),
+            "value": float(r.value or 0),
+        })
+
+    return {
+        "days": days_int,
+        "marketer_filter": marketer_staff_id,
+        "per_marketer": per_marketer,
+        "new_customers": new_customers,
+        "top_facilities": top_facilities,
+        "totals": {
+            "marketers_active": len(per_marketer),
+            "total_orders": sum(m['total_orders'] for m in per_marketer),
+            "total_order_value": sum(m['total_order_value'] for m in per_marketer),
+            "new_customers_count": len(new_customers),
+        }
+    }

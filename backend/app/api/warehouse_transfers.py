@@ -10,6 +10,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from app.db import get_session
+from app.services.inventory import transfer_stock
 from app.models import (
     WarehouseTransfer,
     Warehouse,
@@ -152,74 +153,30 @@ async def create_transfer(
 
     qty = Decimal(str(data.quantity))
 
-    # Check source warehouse stock
-    src_stock_result = await session.execute(
-        select(StockLevel).where(
-            and_(
-                StockLevel.warehouse_id == data.from_warehouse_id,
-                StockLevel.product_id == data.product_id,
-            )
-        )
-    )
-    src_stock = src_stock_result.scalars().first()
-    if not src_stock or src_stock.current_stock < qty:
-        available = float(src_stock.current_stock) if src_stock else 0
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient stock in {from_wh.name}. Available: {available}, Requested: {float(qty)}"
-        )
-
     # Generate transfer number
     transfer_number = f"TRF-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     try:
-        # 1. Deduct from source warehouse
-        src_stock.current_stock -= qty
-
-        # 2. Add to destination warehouse (upsert)
-        dest_stock_result = await session.execute(
-            select(StockLevel).where(
-                and_(
-                    StockLevel.warehouse_id == data.to_warehouse_id,
-                    StockLevel.product_id == data.product_id,
-                )
-            )
-        )
-        dest_stock = dest_stock_result.scalars().first()
-        if dest_stock:
-            dest_stock.current_stock += qty
-        else:
-            dest_stock = StockLevel(
-                warehouse_id=data.to_warehouse_id,
-                product_id=data.product_id,
-                current_stock=qty,
-            )
-            session.add(dest_stock)
-
-        # 3. Record stock movements
         user_uuid = uuid.UUID(user_id) if user_id else None
 
-        # OUT movement from source
-        session.add(StockMovement(
-            warehouse_id=data.from_warehouse_id,
+        # Both legs, both movements, one locked and validated path.
+        #
+        # The stock check used to happen on an unlocked read well before the
+        # decrement, so two concurrent transfers of 60 against 100 units both
+        # passed the guard and both wrote 40 -- inventory appeared from
+        # nowhere. transfer_stock locks each balance row before reading it and
+        # locks the two warehouses in a consistent order, so simultaneous
+        # A->B and B->A transfers cannot deadlock.
+        await transfer_stock(
+            session,
+            from_warehouse_id=data.from_warehouse_id,
+            to_warehouse_id=data.to_warehouse_id,
             product_id=data.product_id,
-            movement_type='TRANSFER_OUT',
             quantity=qty,
             reference=transfer_number,
-            notes=f"Transfer to {to_wh.name}: {data.reason}",
+            notes=f"{from_wh.name} -> {to_wh.name}: {data.reason}",
             created_by=user_uuid,
-        ))
-
-        # IN movement to destination
-        session.add(StockMovement(
-            warehouse_id=data.to_warehouse_id,
-            product_id=data.product_id,
-            movement_type='TRANSFER_IN',
-            quantity=qty,
-            reference=transfer_number,
-            notes=f"Transfer from {from_wh.name}: {data.reason}",
-            created_by=user_uuid,
-        ))
+        )
 
         # 4. Create transfer record
         transfer = WarehouseTransfer(

@@ -75,7 +75,7 @@ async def create_product(
 @router.get('/')
 async def list_products(
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
+    size: int = Query(50, ge=1, le=1000),
     search: Optional[str] = Query(None, description="Search by SKU or name"),
     session: AsyncSession = Depends(get_session)
 ):

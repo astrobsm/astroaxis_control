@@ -2,7 +2,7 @@
 // Provides: static asset caching, API response caching in IndexedDB,
 // background sync for offline mutations, push notifications
 
-const CACHE_NAME = 'astro-asix-v6.0';
+const CACHE_NAME = 'astro-asix-v6.9-pagination-fix';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -255,7 +255,53 @@ self.addEventListener('notificationclick', (event) => {
 // ==========================================
 self.addEventListener('periodicsync', (event) => {
   if (event.tag === 'refresh-data') event.waitUntil(pullCriticalData());
+  if (event.tag === 'radio-poll') event.waitUntil(radioBackgroundPoll());
 });
+
+// ==========================================
+// COMPANY RADIO — background notifier
+// Polls /api/radio/feed and shows OS notifications when no client is visible.
+// True audio playback while the browser is closed is not possible from a SW;
+// notifications still surface critical events (and play their tone if the OS
+// is configured to do so).
+// ==========================================
+async function radioBackgroundPoll() {
+  try {
+    const visible = await self.clients.matchAll({ type: 'window' });
+    const anyVisible = visible.some(c => c.visibilityState === 'visible');
+    if (anyVisible) return; // foreground tab handles it
+    let since = null;
+    try {
+      const db = await openIDB();
+      const tx = db.transaction('syncMeta', 'readonly');
+      const r = await new Promise((res) => { const rq = tx.objectStore('syncMeta').get('radio_since'); rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); });
+      since = r?.value || null;
+    } catch {}
+    if (!since) since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const r = await fetch(`/api/radio/feed?since=${encodeURIComponent(since)}&limit=20`);
+    if (!r.ok) return;
+    const data = await r.json();
+    try {
+      const db = await openIDB();
+      const tx = db.transaction('syncMeta', 'readwrite');
+      tx.objectStore('syncMeta').put({ key: 'radio_since', value: data.now });
+    } catch {}
+    const events = (data.events || []).filter(e => (e.priority || 0) >= 3); // show only meaningful events
+    for (const ev of events.slice(0, 5)) {
+      try {
+        await self.registration.showNotification(`📡 ${ev.title}`, {
+          body: ev.message || '',
+          icon: '/logo192.png',
+          badge: '/favicon.ico',
+          tag: ev.id,
+          renotify: false,
+          silent: false,
+          data: { url: '/' }
+        });
+      } catch {}
+    }
+  } catch (e) { console.warn('[SW] radio poll failed', e); }
+}
 
 // ==========================================
 // MESSAGE HANDLER

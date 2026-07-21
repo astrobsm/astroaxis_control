@@ -6,7 +6,7 @@ return condition, refund status, and stock restoration.
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, text
 from typing import Optional
 from uuid import UUID
 import uuid
@@ -15,6 +15,8 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from app.db import get_session
+from app.services.inventory import apply_stock_movement
+from app.services.posting import post_customer_return
 from app.models import (
     ReturnedStock,
     Product,
@@ -64,6 +66,16 @@ async def _auth_user(authorization: Optional[str], session: AsyncSession):
         return payload.get('id'), payload.get('role'), payload.get('full_name', '')
     except Exception:
         return None, None, None
+
+
+def _user_uuid(user_id):
+    """Coerce the token's user id to UUID, tolerating None/garbage."""
+    if not user_id:
+        return None
+    try:
+        return uuid.UUID(str(user_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 # ---------- Endpoints ----------
@@ -202,38 +214,51 @@ async def create_return(
         )
         session.add(ret)
 
-        # If return condition is 'good', restore stock to warehouse
+        # Only goods in resalable condition go back on the shelf. The service
+        # writes the balance and the RETURN movement together, so the two can
+        # never disagree the way they did when this restocked by hand.
         if data.return_condition == 'good':
-            stock_result = await session.execute(
-                select(StockLevel).where(
-                    and_(
-                        StockLevel.warehouse_id == data.warehouse_id,
-                        StockLevel.product_id == data.product_id,
-                    )
-                )
-            )
-            stock = stock_result.scalars().first()
-            if stock:
-                stock.current_stock += qty
-            else:
-                stock = StockLevel(
-                    warehouse_id=data.warehouse_id,
-                    product_id=data.product_id,
-                    current_stock=qty,
-                )
-                session.add(stock)
-
-            # Record stock movement
-            user_uuid = uuid.UUID(user_id) if user_id else None
-            session.add(StockMovement(
+            await session.flush()  # ensure ret.id exists for the reference
+            await apply_stock_movement(
+                session,
                 warehouse_id=data.warehouse_id,
                 product_id=data.product_id,
                 movement_type='RETURN',
                 quantity=qty,
-                reference=f"RET-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}",
+                reference=f"RETURN-{ret.id}",
                 notes=f"Return ({data.return_condition}): {data.return_reason}",
-                created_by=user_uuid,
-            ))
+                created_by=_user_uuid(user_id),
+            )
+        else:
+            await session.flush()  # ret.id is needed for the ledger reference
+
+        # Reverse the revenue, and reverse COGS only if the goods actually
+        # came back. Cost is taken from the original sale line where the
+        # return is linked to an order; a standalone return has no cost basis
+        # to reverse, so only the revenue side moves.
+        refund_value = Decimal(str(data.refund_amount)) if data.refund_amount \
+            else Decimal("0")
+        cost_value = Decimal("0")
+        if data.sales_order_id:
+            row = (await session.execute(
+                text("""SELECT unit_cost, cost_source
+                          FROM sales_order_lines
+                         WHERE sales_order_id = :o AND product_id = :p
+                         LIMIT 1"""),
+                {"o": str(data.sales_order_id), "p": str(data.product_id)},
+            )).first()
+            if row and row.cost_source != 'unknown' and row.unit_cost:
+                cost_value = Decimal(str(row.unit_cost)) * qty
+
+        if refund_value > 0:
+            await post_customer_return(
+                session,
+                revenue_value=refund_value,
+                cost_value=cost_value,
+                reference=f"RETURN-{ret.id}",
+                restocked=(data.return_condition == 'good'),
+                created_by=_user_uuid(user_id),
+            )
 
         await session.commit()
         condition_msg = " Stock restored." if data.return_condition == 'good' else " Stock NOT restored (damaged/defective)."
@@ -257,6 +282,8 @@ async def update_return(
     authorization: Optional[str] = Header(None),
 ):
     """Update a return record (e.g., refund status, action taken)."""
+    user_id, _role, _name = await _auth_user(authorization, session)
+
     result = await session.execute(
         select(ReturnedStock).where(ReturnedStock.id == return_id)
     )
@@ -270,12 +297,52 @@ async def update_return(
         ret.refund_amount = Decimal(str(data.refund_amount))
     if data.notes is not None:
         ret.notes = data.notes
-    if data.return_condition is not None:
-        ret.return_condition = data.return_condition
 
     try:
+        # Reclassifying the condition changes whether the goods are sellable,
+        # so it has to move stock. create_return only restocks when the
+        # condition is 'good'; letting this field be edited afterwards with no
+        # compensating movement meant a damaged->good reclassification claimed
+        # the units were back on the shelf while the balance never changed
+        # (and good->damaged left phantom sellable stock).
+        if (data.return_condition is not None
+                and data.return_condition != ret.return_condition):
+            was_good = ret.return_condition == 'good'
+            now_good = data.return_condition == 'good'
+
+            if now_good and not was_good:
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=ret.warehouse_id,
+                    product_id=ret.product_id,
+                    movement_type='RETURN',
+                    quantity=ret.quantity,
+                    reference=f"RETURN-RECLASS-{ret.id}",
+                    notes=(f"Reclassified {ret.return_condition} -> "
+                           f"{data.return_condition}; goods restocked"),
+                    created_by=_user_uuid(user_id),
+                )
+            elif was_good and not now_good:
+                await apply_stock_movement(
+                    session,
+                    warehouse_id=ret.warehouse_id,
+                    product_id=ret.product_id,
+                    movement_type='DAMAGE',
+                    quantity=ret.quantity,
+                    reference=f"RETURN-RECLASS-{ret.id}",
+                    notes=(f"Reclassified {ret.return_condition} -> "
+                           f"{data.return_condition}; goods removed from "
+                           f"sellable stock"),
+                    created_by=_user_uuid(user_id),
+                )
+
+            ret.return_condition = data.return_condition
+
         await session.commit()
         return {"success": True, "message": "Return record updated successfully"}
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=f"Update failed: {str(e)}")
@@ -288,6 +355,8 @@ async def delete_return(
     authorization: Optional[str] = Header(None),
 ):
     """Delete a return record."""
+    user_id, _role, _name = await _auth_user(authorization, session)
+
     result = await session.execute(
         select(ReturnedStock).where(ReturnedStock.id == return_id)
     )
@@ -296,9 +365,33 @@ async def delete_return(
         raise HTTPException(status_code=404, detail="Return record not found")
 
     try:
+        # A 'good' return added stock and wrote a RETURN movement. Deleting
+        # the record without reversing that left the balance permanently
+        # inflated and the ledger row pointing at a reference that no longer
+        # resolves -- unexplainable stock. Reverse it first, so the deletion
+        # is a net-zero pair in the ledger rather than a silent gap.
+        if ret.return_condition == 'good':
+            await apply_stock_movement(
+                session,
+                warehouse_id=ret.warehouse_id,
+                product_id=ret.product_id,
+                movement_type='OUT',
+                quantity=ret.quantity,
+                reference=f"RETURN-REVERSAL-{ret.id}",
+                notes="Reversal of restock for deleted return record",
+                created_by=_user_uuid(user_id),
+                # The restocked units may already have been sold on. Allow the
+                # reversal through so the record can still be corrected; the
+                # negative balance is itself the signal that needs attention.
+                allow_negative=True,
+            )
+
         await session.delete(ret)
         await session.commit()
         return {"success": True, "message": "Return record deleted"}
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")

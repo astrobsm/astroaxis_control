@@ -774,6 +774,121 @@ async def logistics_dashboard(session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get('/manifests/{manifest_id}/thermal-print')
+@router.post('/manifests/{manifest_id}/thermal-print')
+async def manifest_thermal_print(manifest_id: UUID, session: AsyncSession = Depends(get_session)):
+    """Generate thermal-printer-optimized HTML for 80mm printer (Georgia font, 12pt, company logo)."""
+    try:
+        r = (await session.execute(
+            text("SELECT * FROM delivery_manifests WHERE id = :id"),
+            {"id": str(manifest_id)}
+        )).fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Manifest not found")
+
+        custs = (await session.execute(
+            text("SELECT * FROM manifest_customers WHERE manifest_id = :mid ORDER BY created_at"),
+            {"mid": str(manifest_id)}
+        )).fetchall()
+
+        custs_items = {}
+        for c in custs:
+            items = (await session.execute(
+                text("SELECT * FROM manifest_items WHERE manifest_customer_id = :mcid ORDER BY created_at"),
+                {"mcid": str(c.id)}
+            )).fetchall()
+            custs_items[str(c.id)] = items
+
+        # Build HTML for thermal printer
+        customers_html = ""
+        for idx, c in enumerate(custs, 1):
+            items = custs_items[str(c.id)]
+            items_rows = ""
+            for i, it in enumerate(items, 1):
+                items_rows += f"<tr><td>{i}</td><td>{it.product_name}</td><td>{it.sku or '-'}</td><td>{float(it.quantity)}</td><td>{it.unit or 'each'}</td></tr>"
+            status_label = "DELIVERED" if c.status == 'delivered' else "PENDING"
+            delivered_info = ""
+            if c.status == 'delivered' and c.receiver_name:
+                delivered_info = f"""<div class="delivered-info">
+                    <strong>Receiver:</strong> {c.receiver_name} ({c.receiver_phone or 'N/A'})<br>
+                    <strong>Invoice #:</strong> {c.physical_invoice_number or 'N/A'}<br>
+                    <strong>Time:</strong> {c.delivery_time.strftime('%Y-%m-%d %H:%M') if c.delivery_time else 'N/A'}
+                </div>"""
+            else:
+                delivered_info = """<div class="signature-block">
+                    <div class="sig-row"><span>Physical Invoice #:</span><span class="sig-line">_______________</span></div>
+                    <div class="sig-row"><span>Receiver Name:</span><span class="sig-line">_______________</span></div>
+                    <div class="sig-row"><span>Receiver Sign:</span><span class="sig-line">_______________</span></div>
+                    <div class="sig-row"><span>Officer Sign:</span><span class="sig-line">_______________</span></div>
+                </div>"""
+            customers_html += f"""
+            <div class="customer-block">
+                <div class="customer-header">[{status_label}] Customer {idx}: {c.customer_name}</div>
+                <div class="customer-info">Phone: {c.customer_phone or 'N/A'} | Addr: {c.delivery_address or 'N/A'}{(', ' + c.city) if c.city else ''}{(', ' + c.state) if c.state else ''}</div>
+                <table class="items-table">
+                    <thead><tr><th>#</th><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th></tr></thead>
+                    <tbody>{items_rows}</tbody>
+                </table>
+                {delivered_info}
+            </div>"""
+
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Manifest {r.manifest_number}</title>
+<style>
+@page {{ size: 80mm auto; margin: 2mm; }}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ font-family: Georgia, 'Times New Roman', serif; font-size: 12px; width: 76mm; max-width: 76mm; margin: 0 auto; padding: 2mm; color: #000; }}
+.logo {{ text-align: center; margin-bottom: 4px; }}
+.logo img {{ max-width: 50mm; max-height: 20mm; }}
+.company-name {{ text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 2px; }}
+.company-info {{ text-align: center; font-size: 10px; margin-bottom: 6px; line-height: 1.3; }}
+.manifest-title {{ text-align: center; font-weight: bold; font-size: 13px; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 3px 0; margin-bottom: 6px; }}
+.info-grid {{ font-size: 11px; margin-bottom: 6px; line-height: 1.4; }}
+.info-grid div {{ margin-bottom: 1px; }}
+.info-grid strong {{ font-weight: bold; }}
+.separator {{ border-top: 1px dashed #000; margin: 4px 0; }}
+.customer-block {{ margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dashed #999; }}
+.customer-header {{ font-weight: bold; font-size: 12px; margin-bottom: 2px; }}
+.customer-info {{ font-size: 10px; margin-bottom: 3px; line-height: 1.3; }}
+.items-table {{ width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }}
+.items-table th {{ background: #333; color: #fff; padding: 2px 3px; text-align: left; font-size: 10px; }}
+.items-table td {{ padding: 2px 3px; border-bottom: 1px solid #ddd; }}
+.delivered-info {{ font-size: 10px; background: #f0f0f0; padding: 3px; margin-top: 3px; line-height: 1.3; }}
+.signature-block {{ font-size: 10px; margin-top: 4px; }}
+.sig-row {{ display: flex; justify-content: space-between; margin-bottom: 8px; }}
+.sig-line {{ border-bottom: 1px solid #000; flex: 1; margin-left: 4px; }}
+.footer {{ text-align: center; font-size: 9px; margin-top: 6px; font-style: italic; border-top: 1px solid #000; padding-top: 3px; }}
+.copy-label {{ text-align: center; font-weight: bold; font-size: 11px; background: #333; color: #fff; padding: 2px; margin-bottom: 4px; }}
+@media print {{ body {{ width: 80mm; }} @page {{ size: 80mm auto; margin: 2mm; }} }}
+</style></head><body>
+<div class="copy-label">DELIVERY MANIFEST</div>
+<div class="logo"><img src="/company-logo.png" onerror="this.style.display='none'" alt="Logo"></div>
+<div class="company-name">BONNESANTE MEDICALS</div>
+<div class="company-info">NO 6B PEACE AVE/17A ISUOFIA ST, FED HOUSING TRANS EKULU, ENUGU<br>Tel: +234 707 679 3866, +234 901 283 5413</div>
+<div class="manifest-title">{r.manifest_number}</div>
+<div class="info-grid">
+    <div><strong>Date:</strong> {r.delivery_date}</div>
+    <div><strong>Officer:</strong> {r.logistics_officer or 'N/A'}</div>
+    <div><strong>Driver:</strong> {r.driver_name or 'N/A'} ({r.driver_phone or 'N/A'})</div>
+    <div><strong>Vehicle:</strong> {r.vehicle_details or 'N/A'}</div>
+    <div><strong>Mode:</strong> {(r.transport_mode or 'vehicle').title()}</div>
+    <div><strong>Cost:</strong> NGN {float(r.transport_cost or 0):,.2f}</div>
+    <div><strong>Status:</strong> {r.status.upper()}</div>
+</div>
+<div class="separator"></div>
+{customers_html}
+<div class="footer">AstroBSM - Bonnesante Medicals<br>Computer-generated manifest</div>
+<script>window.onload=function(){{window.print();}}</script>
+</body></html>"""
+
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating thermal print: {str(e)}")
+
+
 @router.get('/analytics')
 async def logistics_analytics(
     date_from: str = None,

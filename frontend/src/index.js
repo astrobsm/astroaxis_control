@@ -31,6 +31,19 @@ if ('serviceWorker' in navigator) {
       .then((registration) => {
         console.log('Service Worker registered successfully:', registration.scope);
         
+        // Best-effort: register periodic background sync for Company Radio
+        // (Chromium only, requires installed PWA + permission). Falls through silently.
+        try {
+          if ('periodicSync' in registration) {
+            navigator.permissions?.query({ name: 'periodic-background-sync' }).then((p) => {
+              if (p.state === 'granted') {
+                registration.periodicSync.register('radio-poll', { minInterval: 5 * 60 * 1000 })
+                  .catch(() => {});
+              }
+            }).catch(() => {});
+          }
+        } catch (e) { /* silent */ }
+        
         // Check for updates periodically (silently)
         setInterval(() => {
           registration.update().catch(() => {/* silent */});

@@ -12,7 +12,15 @@ from datetime import datetime, timezone, date as date_type
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from decimal import Decimal
 from app.db import get_session
+from app.models import User
+from app.api.auth import require_authenticated_user, require_admin
+from app.services.inventory import apply_stock_movement
+from app.services.posting import post_purchase, post_supplier_payment
+from app.services.payables import (
+    pay_supplier, get_or_create_supplier, supplier_balance,
+    outstanding_payables, supplier_aging, supplier_statement, money)
 
 router = APIRouter(prefix="/api/procurement", tags=["Procurement"])
 
@@ -539,19 +547,126 @@ async def get_purchase_order(po_id: UUID, session: AsyncSession = Depends(get_se
 
 
 @router.put('/orders/{po_id}/receive')
-async def receive_purchase_order(po_id: UUID, data: dict, session: AsyncSession = Depends(get_session)):
-    """Mark purchase order as received and update request status."""
+async def receive_purchase_order(
+    po_id: UUID,
+    data: dict,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
+    """Receive a purchase order: book the goods into stock and the liability.
+
+    This endpoint used to do nothing but flip a status. Goods physically
+    arrived at the warehouse and inventory never changed -- the same class of
+    break as production completions recording cost with no stock. Materials
+    then had to be introduced by a manual stock adjustment, which is exactly
+    the hole the movement ledger exists to close.
+
+    Receiving now:
+      * moves each line's quantity into the receiving warehouse, at the
+        purchase cost (which becomes part of the weighted-average cost used
+        for COGS on future sales),
+      * records the liability: Dr Inventory / Cr Accounts Payable.
+
+    Paying the supplier is a SEPARATE event -- see /orders/{id}/pay.
+    """
     try:
-        sql = text("""
-            UPDATE purchase_orders
-            SET status = 'received', delivery_date = CURRENT_DATE, updated_at = NOW()
-            WHERE id = :id AND status IN ('ordered', 'draft')
-            RETURNING id, po_number, request_id
-        """)
-        result = await session.execute(sql, {"id": str(po_id)})
+        # Claim the PO atomically. The status transition is the idempotency
+        # key: only the caller that flips 'ordered' -> 'received' books stock,
+        # so a double-clicked Receive cannot deliver the goods twice.
+        result = await session.execute(
+            text("""
+                UPDATE purchase_orders
+                   SET status = 'received', delivery_date = CURRENT_DATE,
+                       stock_received_at = NOW(),
+                       receiving_warehouse_id = COALESCE(
+                           CAST(:wid AS uuid), receiving_warehouse_id),
+                       updated_at = NOW()
+                 WHERE id = :id AND status IN ('ordered', 'draft')
+             RETURNING id, po_number, request_id, supplier_id, vendor_name,
+                       total_amount, receiving_warehouse_id
+            """),
+            {"id": str(po_id), "wid": data.get("warehouse_id")},
+        )
         row = result.fetchone()
         if not row:
-            raise HTTPException(status_code=400, detail="PO not found or already received")
+            existing = (await session.execute(
+                text("SELECT status FROM purchase_orders WHERE id = :id"),
+                {"id": str(po_id)},
+            )).fetchone()
+            await session.rollback()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="PO not found")
+            raise HTTPException(
+                status_code=400,
+                detail=f"PO cannot be received (status: {existing.status})")
+
+        warehouse_id = row.receiving_warehouse_id
+        if not warehouse_id:
+            wh = (await session.execute(
+                text("SELECT id FROM warehouses WHERE is_active = TRUE "
+                     "ORDER BY code LIMIT 1")
+            )).fetchone()
+            if not wh:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No warehouse available to receive goods into. "
+                           "Pass warehouse_id.")
+            warehouse_id = wh.id
+            await session.execute(
+                text("UPDATE purchase_orders SET receiving_warehouse_id = :w "
+                     "WHERE id = :id"),
+                {"w": str(warehouse_id), "id": str(po_id)},
+            )
+
+        # Book each line into stock. Lines that reference a real product or
+        # raw material move inventory; free-text lines (services, sundries)
+        # cannot, and are reported back so nothing is silently skipped.
+        items = (await session.execute(
+            text("""SELECT id, item_type, item_name, item_id, quantity,
+                           unit_cost, received_qty
+                      FROM purchase_order_items WHERE po_id = :p"""),
+            {"p": str(po_id)},
+        )).fetchall()
+
+        stocked_value = Decimal("0")
+        unstocked = []
+        for it in items:
+            qty = Decimal(str(it.quantity or 0))
+            if qty <= 0:
+                continue
+            if not it.item_id or it.item_type not in ('product', 'raw_material'):
+                unstocked.append(it.item_name)
+                continue
+
+            is_raw = it.item_type == 'raw_material'
+            await apply_stock_movement(
+                session,
+                warehouse_id=warehouse_id,
+                product_id=None if is_raw else it.item_id,
+                raw_material_id=it.item_id if is_raw else None,
+                movement_type='IN',
+                quantity=qty,
+                unit_cost=it.unit_cost,
+                reference=f"GRN-{row.po_number}",
+                notes=f"Goods received against PO {row.po_number}",
+                created_by=current_user.id,
+            )
+            stocked_value += qty * Decimal(str(it.unit_cost or 0))
+            await session.execute(
+                text("UPDATE purchase_order_items SET received_qty = quantity "
+                     "WHERE id = :i"),
+                {"i": str(it.id)},
+            )
+
+        # Recognise the liability for everything on the order, not just the
+        # stockable lines -- the supplier is owed for all of it.
+        await post_purchase(
+            session,
+            value=Decimal(str(row.total_amount or 0)),
+            reference=f"GRN-{row.po_number}",
+            is_raw_material=True,
+            created_by=current_user.id,
+        )
 
         if row.request_id:
             await session.execute(text(
@@ -559,8 +674,17 @@ async def receive_purchase_order(po_id: UUID, data: dict, session: AsyncSession 
             ), {"rid": str(row.request_id)})
 
         await session.commit()
-        return {"message": f"PO {row.po_number} marked as received"}
+        return {
+            "message": f"PO {row.po_number} received",
+            "warehouse_id": str(warehouse_id),
+            "stocked_value": float(stocked_value),
+            "lines_not_stocked": unstocked,
+            "note": ("Some lines could not be booked into inventory because "
+                     "they are not linked to a product or raw material."
+                     if unstocked else None),
+        }
     except HTTPException:
+        await session.rollback()
         raise
     except Exception as e:
         await session.rollback()
@@ -568,41 +692,53 @@ async def receive_purchase_order(po_id: UUID, data: dict, session: AsyncSession 
 
 
 @router.put('/orders/{po_id}/pay')
-async def pay_purchase_order(po_id: UUID, data: dict, session: AsyncSession = Depends(get_session)):
-    """Record payment for a purchase order."""
+async def pay_purchase_order(
+    po_id: UUID,
+    data: dict,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
+):
+    """Record a payment to a supplier against a purchase order.
+
+    The previous implementation read purchase_orders.paid_amount, added to it
+    in FLOAT, and wrote it back with no row lock. That gave two concurrent
+    payments the same starting total (one silently overwrote the other), let
+    float drift reject a legitimate final instalment as an overpayment, and
+    left no record of the individual payments -- so no supplier statement
+    could be produced or disputed.
+
+    Payments are now rows; paid_amount is recomputed from them.
+    """
     try:
-        amount = float(data.get('amount', 0))
-        if amount <= 0:
-            raise HTTPException(status_code=400, detail="Amount must be > 0")
-
-        po_result = await session.execute(
-            text("SELECT * FROM purchase_orders WHERE id = :id"), {"id": str(po_id)}
+        result = await pay_supplier(
+            session,
+            po_id=po_id,
+            amount=data.get('amount', 0),
+            payment_method=data.get('payment_method') or 'unspecified',
+            payment_reference=data.get('payment_reference'),
+            notes=data.get('notes'),
+            created_by=current_user.id,
         )
-        po = po_result.fetchone()
-        if not po:
-            raise HTTPException(status_code=404, detail="PO not found")
 
-        new_paid = float(po.paid_amount or 0) + amount
-        total = float(po.total_amount or 0)
-        if new_paid > total:
-            raise HTTPException(status_code=400, detail=f"Payment exceeds balance. Remaining: {total - float(po.paid_amount or 0):,.2f}")
-
-        pay_status = 'paid' if new_paid >= total else 'partial'
-
+        # Keep the human-facing fields on the PO in step for the UI.
         await session.execute(text("""
             UPDATE purchase_orders
-            SET paid_amount = :paid, payment_status = :ps,
-                payment_method = COALESCE(:pm, payment_method),
-                payment_reference = COALESCE(:pr, payment_reference),
-                payment_date = NOW(), updated_at = NOW()
-            WHERE id = :id
+               SET payment_method = COALESCE(:pm, payment_method),
+                   payment_reference = COALESCE(:pr, payment_reference),
+                   payment_date = NOW(), updated_at = NOW()
+             WHERE id = :id
         """), {
-            "paid": new_paid, "ps": pay_status,
-            "pm": data.get('payment_method'), "pr": data.get('payment_reference'),
-            "id": str(po_id)
+            "pm": data.get('payment_method'),
+            "pr": data.get('payment_reference'),
+            "id": str(po_id),
         })
 
-        # Auto-create expense record
+        po = (await session.execute(
+            text("SELECT po_number, vendor_name FROM purchase_orders WHERE id = :id"),
+            {"id": str(po_id)},
+        )).fetchone()
+
+        # Expense record retained for the existing expenses report.
         exp_num = f"EXP-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         await session.execute(text("""
             INSERT INTO expense_records
@@ -612,22 +748,37 @@ async def pay_purchase_order(po_id: UUID, data: dict, session: AsyncSession = De
         """), {
             "en": exp_num, "subcat": "purchase_order",
             "desc": f"Payment for PO {po.po_number} - {po.vendor_name}",
-            "amt": amount,
-            "pm": data.get('payment_method', ''), "pr": data.get('payment_reference', ''),
-            "recv": po.vendor_name, "pid": str(po_id)
+            "amt": str(result["amount"]),
+            "pm": data.get('payment_method', ''),
+            "pr": data.get('payment_reference', ''),
+            "recv": po.vendor_name, "pid": str(po_id),
         })
+
+        # Settle the liability: Dr Accounts Payable / Cr Bank.
+        await post_supplier_payment(
+            session,
+            payment_id=result["payment_id"],
+            amount=result["amount"],
+            reference=result["payment_number"],
+            payment_method=data.get('payment_method') or 'unspecified',
+            created_by=current_user.id,
+        )
 
         await session.commit()
         return {
-            "message": f"Payment of NGN {amount:,.2f} recorded",
-            "paid_amount": new_paid, "balance": total - new_paid,
-            "payment_status": pay_status
+            "message": f"Payment of NGN {result['amount']:,.2f} recorded",
+            "payment_number": result["payment_number"],
+            "paid_amount": float(result["total_paid"]),
+            "balance": float(result["balance"]),
+            "payment_status": result["payment_status"],
         }
     except HTTPException:
+        await session.rollback()
         raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ─── PURCHASE INVOICES ──────────────────────────────────────────────────────
@@ -860,3 +1011,132 @@ async def procurement_dashboard(session: AsyncSession = Depends(get_session)):
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── SUPPLIERS & ACCOUNTS PAYABLE ───────────────────────────────────────────
+
+@router.get('/suppliers')
+async def list_suppliers(
+    active_only: bool = True,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Supplier master with each supplier's outstanding balance."""
+    where = "WHERE s.is_active = TRUE" if active_only else ""
+    rows = (await session.execute(text(f"""
+        SELECT s.id, s.supplier_code, s.name, s.classification,
+               s.contact_person, s.phone, s.email, s.address,
+               s.credit_limit, s.payment_terms_days, s.is_active,
+               COALESCE((SELECT SUM(po.total_amount) FROM purchase_orders po
+                          WHERE po.supplier_id = s.id
+                            AND po.status NOT IN ('cancelled','draft')), 0)
+             - COALESCE((SELECT SUM(sp.amount) FROM supplier_payments sp
+                          WHERE sp.supplier_id = s.id), 0) AS balance
+          FROM suppliers s {where}
+         ORDER BY s.name
+    """))).fetchall()
+    return [
+        {
+            "id": str(r.id), "supplier_code": r.supplier_code, "name": r.name,
+            "classification": r.classification,
+            "contact_person": r.contact_person, "phone": r.phone,
+            "email": r.email, "address": r.address,
+            "credit_limit": float(r.credit_limit or 0),
+            "payment_terms_days": r.payment_terms_days,
+            "is_active": r.is_active,
+            "outstanding_balance": float(r.balance or 0),
+            # Surfaced rather than merely stored: a supplier over their limit
+            # is a decision the buyer needs at the point of ordering.
+            "over_credit_limit": bool(
+                r.credit_limit and float(r.balance or 0) > float(r.credit_limit)),
+        }
+        for r in rows
+    ]
+
+
+@router.post('/suppliers')
+async def create_supplier(
+    data: dict,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Create a supplier, or return the existing one with that name."""
+    try:
+        supplier_id = await get_or_create_supplier(
+            session,
+            name=data.get('name', ''),
+            contact_person=data.get('contact_person'),
+            phone=data.get('phone'),
+            email=data.get('email'),
+            address=data.get('address'),
+            payment_terms_days=data.get('payment_terms_days'),
+            credit_limit=data.get('credit_limit'),
+        )
+        await session.commit()
+        return {"success": True, "supplier_id": str(supplier_id)}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get('/payables/aging')
+async def get_payables_aging(
+    as_at: date_type = None,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Outstanding payables bucketed by how overdue they are.
+
+    Ageing runs from the DUE date (order date + the supplier's payment terms),
+    not the order date -- an invoice on 60-day terms is not overdue at 45 days.
+    """
+    return await supplier_aging(session, as_at=as_at)
+
+
+@router.get('/payables/outstanding')
+async def get_outstanding_payables(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    return {"total_outstanding": float(await outstanding_payables(session))}
+
+
+@router.get('/suppliers/{supplier_id}/statement')
+async def get_supplier_statement(
+    supplier_id: UUID,
+    start: date_type = None,
+    end: date_type = None,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Every charge and payment for one supplier, with a running balance."""
+    return await supplier_statement(
+        session, supplier_id=supplier_id, start=start, end=end)
+
+
+@router.get('/suppliers/{supplier_id}/payments')
+async def list_supplier_payments(
+    supplier_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    rows = (await session.execute(text("""
+        SELECT sp.payment_number, sp.amount, sp.payment_method,
+               sp.payment_reference, sp.payment_date, sp.notes,
+               po.po_number
+          FROM supplier_payments sp
+          LEFT JOIN purchase_orders po ON po.id = sp.po_id
+         WHERE sp.supplier_id = :s
+         ORDER BY sp.payment_date DESC, sp.created_at DESC
+    """), {"s": str(supplier_id)})).fetchall()
+    return [
+        {"payment_number": r.payment_number, "amount": float(r.amount),
+         "payment_method": r.payment_method,
+         "payment_reference": r.payment_reference,
+         "payment_date": str(r.payment_date), "po_number": r.po_number,
+         "notes": r.notes}
+        for r in rows
+    ]

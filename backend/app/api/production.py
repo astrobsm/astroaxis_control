@@ -8,9 +8,11 @@ import uuid
 from datetime import datetime, timezone
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.services.inventory import apply_stock_movement
 from app.models import (
-    ProductionOrder, ProductionOrderMaterial, Product, RawMaterial, 
-    BOM, BOMLine, SalesOrder, StockLevel, StockMovement, Warehouse
+    ProductionOrder, ProductionOrderMaterial, Product, RawMaterial,
+    BOM, BOMLine, SalesOrder, StockLevel, StockMovement, Warehouse, User
 )
 from app.schemas import (
     ProductionOrderSchema, ProductionOrderCreate, ProductionOrderUpdate,
@@ -95,7 +97,7 @@ async def create_production_order(
 @router.get('/orders', response_model=PaginatedResponse[ProductionOrderSchema])
 async def list_production_orders(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     status: Optional[str] = Query(None),
     product_id: Optional[UUID] = Query(None),
     session: AsyncSession = Depends(get_session)
@@ -235,36 +237,18 @@ async def complete_production_order(
         order.quantity_produced = quantity_produced
         order.actual_end_date = datetime.now(timezone.utc)
         
-        # Create stock movement for produced goods
-        stock_movement = StockMovement(
+        # Book the produced goods through the ledger service.
+        await apply_stock_movement(
+            session,
             warehouse_id=warehouse_id,
             product_id=order.product_id,
-            movement_type='IN',
+            movement_type='PRODUCTION_IN',
             quantity=quantity_produced,
             reference=f"Production Order {order.order_number}",
-            notes=f"Production completed"
+            notes="Production completed",
+            created_by=current_user.id,
         )
-        session.add(stock_movement)
-        
-        # Update stock levels
-        stock_level_result = await session.execute(
-            select(StockLevel).where(
-                StockLevel.warehouse_id == warehouse_id,
-                StockLevel.product_id == order.product_id
-            )
-        )
-        stock_level = stock_level_result.scalars().first()
-        
-        if stock_level:
-            stock_level.current_stock += quantity_produced
-        else:
-            stock_level = StockLevel(
-                warehouse_id=warehouse_id,
-                product_id=order.product_id,
-                current_stock=quantity_produced
-            )
-            session.add(stock_level)
-        
+
         await session.commit()
         await session.refresh(order)
         return order
@@ -447,7 +431,8 @@ async def execute_production(
     product_id: UUID,
     quantity: int,
     notes: Optional[str] = None,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
     """Execute production order and deduct raw materials from stock"""
     try:
@@ -490,76 +475,56 @@ async def execute_production(
         session.add(production_order)
         await session.flush()  # Get the production order ID
         
-        # Deduct raw materials from stock
-        stock_movements = []
+        # Consume raw materials.
+        #
+        # The previous implementation had three separate defects here:
+        #   - it looked up StockLevel by raw_material_id with NO warehouse
+        #     filter and took .first(), so it decremented an arbitrary
+        #     warehouse's row while stamping the movement with a different
+        #     warehouse id -- per-warehouse ledger replay could never balance;
+        #   - it stored the OUT quantity as a NEGATIVE number while every
+        #     other writer stored a positive magnitude, corrupting any
+        #     SUM() over movement_type;
+        #   - if no StockLevel row existed it silently skipped the deduction
+        #     entirely, so materials were consumed by production but never
+        #     left inventory.
+        # Routing through the service fixes all three and takes a row lock.
         for requirement in requirements_data['requirements']:
             raw_material_id = UUID(requirement['raw_material_id'])
             required_qty = requirement['required_quantity']
-            
-            # Update stock level
-            stock_result = await session.execute(
-                select(StockLevel).where(StockLevel.raw_material_id == raw_material_id)
-            )
-            stock_level = stock_result.scalars().first()
-            
-            if stock_level:
-                stock_level.current_stock -= required_qty
-                stock_level.reserved_stock = max(0, float(stock_level.reserved_stock or 0) - required_qty)
-                
-                # Create stock movement record
-                movement = StockMovement(
-                    raw_material_id=raw_material_id,
-                    movement_type='OUT',
-                    quantity=-required_qty,
-                    warehouse_id=warehouse.id,
-                    reference=f"Production Order {order_number}",
-                    notes=f"Raw material consumed for production order {order_number}"
-                )
-                session.add(movement)
-                stock_movements.append(movement)
-                
-                # Create production order material record
-                order_material = ProductionOrderMaterial(
-                    production_order_id=production_order.id,
-                    raw_material_id=raw_material_id,
-                    quantity_required=required_qty,
-                    quantity_consumed=required_qty,
-                    warehouse_id=warehouse.id
-                )
-                session.add(order_material)
-        
-        # Add finished product to stock
-        product_stock_result = await session.execute(
-            select(StockLevel).where(
-                StockLevel.product_id == product_id,
-                StockLevel.warehouse_id == warehouse.id
-            )
-        )
-        product_stock = product_stock_result.scalars().first()
-        
-        if product_stock:
-            product_stock.current_stock += quantity
-        else:
-            product_stock = StockLevel(
-                product_id=product_id,
+
+            await apply_stock_movement(
+                session,
                 warehouse_id=warehouse.id,
-                current_stock=quantity,
-                reserved_stock=0,
-                min_stock=0
+                raw_material_id=raw_material_id,
+                movement_type='PRODUCTION_OUT',
+                quantity=required_qty,
+                reference=f"Production Order {order_number}",
+                notes=f"Raw material consumed for production order {order_number}",
+                created_by=current_user.id,
             )
-            session.add(product_stock)
-        
-        # Create stock movement for finished product
-        product_movement = StockMovement(
-            product_id=product_id,
-            movement_type='IN',
-            quantity=quantity,
+
+            order_material = ProductionOrderMaterial(
+                production_order_id=production_order.id,
+                raw_material_id=raw_material_id,
+                quantity_required=required_qty,
+                quantity_consumed=required_qty,
+                warehouse_id=warehouse.id
+            )
+            session.add(order_material)
+
+        # Book the finished goods.
+        await apply_stock_movement(
+            session,
             warehouse_id=warehouse.id,
+            product_id=product_id,
+            movement_type='PRODUCTION_IN',
+            quantity=quantity,
             reference=f"Production Order {order_number}",
-            notes=f"Production output for order {order_number}"
+            notes=f"Production output for order {order_number}",
+            created_by=current_user.id,
         )
-        session.add(product_movement)
-        
+
         await session.commit()
         
         return {
@@ -586,42 +551,125 @@ async def register_production_output(
     defective_quantity: float = 0,
     completion_date: Optional[str] = None,
     notes: Optional[str] = None,
-    session: AsyncSession = Depends(get_session)
+    warehouse_id: Optional[UUID] = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_authenticated_user),
 ):
-    """Register production output for a production order"""
+    """Register production output for a production order, booking the goods.
+
+    This endpoint used to set status='completed' and quantity_produced without
+    writing ANY stock. Worse, because /orders/{id}/complete refuses to run on
+    an order that is not 'in_progress', flipping the status here made the
+    correct booking path permanently unusable -- the produced units could only
+    ever be introduced by a manual stock adjustment, which is exactly the
+    audit hole the ledger exists to close.
+
+    It now books the output through the ledger, in the same transaction as
+    the status change, and refuses to run twice.
+    """
     try:
-        # Verify production order exists
+        # Lock the order row so two concurrent registrations cannot both pass
+        # the status guard below.
         order_result = await session.execute(
-            select(ProductionOrder).where(ProductionOrder.id == production_order_id)
+            select(ProductionOrder)
+            .where(ProductionOrder.id == production_order_id)
+            .with_for_update()
         )
         production_order = order_result.scalars().first()
         if not production_order:
             raise HTTPException(status_code=404, detail="Production order not found")
-        
-        # Update production order with actual output
+
+        if production_order.status == 'completed':
+            raise HTTPException(
+                status_code=400,
+                detail="Output has already been registered for this order.",
+            )
+        if production_order.status == 'cancelled':
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot register output for a cancelled order.",
+            )
+
+        if actual_quantity <= 0:
+            raise HTTPException(
+                status_code=400, detail="actual_quantity must be greater than zero.")
+        if defective_quantity < 0:
+            raise HTTPException(
+                status_code=400, detail="defective_quantity cannot be negative.")
+        if defective_quantity > actual_quantity:
+            raise HTTPException(
+                status_code=400,
+                detail="defective_quantity cannot exceed actual_quantity.",
+            )
+
+        # Resolve the destination warehouse.
+        if warehouse_id:
+            wh = (await session.execute(
+                select(Warehouse).where(Warehouse.id == warehouse_id)
+            )).scalars().first()
+        else:
+            wh = (await session.execute(
+                select(Warehouse).where(Warehouse.is_active == True)
+                .order_by(Warehouse.code).limit(1)
+            )).scalars().first()
+        if not wh:
+            raise HTTPException(
+                status_code=404,
+                detail="No warehouse available to receive production output.",
+            )
+
         production_order.quantity_produced = actual_quantity
         production_order.status = 'completed'
-        
+
         if completion_date:
             production_order.actual_end_date = datetime.fromisoformat(completion_date)
         else:
             production_order.actual_end_date = datetime.now(timezone.utc)
-        
+
         if notes:
             current_notes = production_order.notes or ''
             production_order.notes = current_notes + f"\nOutput Notes: {notes} | Quality: {quality_grade} | Defective: {defective_quantity}"
-        
+
+        # Book the full output, then write off the defective portion, so both
+        # the yield and the loss are visible in the ledger.
+        await apply_stock_movement(
+            session,
+            warehouse_id=wh.id,
+            product_id=production_order.product_id,
+            movement_type='PRODUCTION_IN',
+            quantity=actual_quantity,
+            reference=f"Production Order {production_order.order_number}",
+            notes=f"Registered output, quality grade {quality_grade}",
+            created_by=current_user.id,
+        )
+        if defective_quantity > 0:
+            await apply_stock_movement(
+                session,
+                warehouse_id=wh.id,
+                product_id=production_order.product_id,
+                movement_type='DAMAGE',
+                quantity=defective_quantity,
+                reference=f"Production Order {production_order.order_number}",
+                notes="Defective units from registered production output",
+                created_by=current_user.id,
+            )
+
         await session.commit()
-        
+
         return {
             'success': True,
             'message': f'Production output registered successfully for order {production_order.order_number}',
             'production_order_id': str(production_order.id),
             'actual_quantity': actual_quantity,
             'quality_grade': quality_grade,
-            'defective_quantity': defective_quantity
+            'defective_quantity': defective_quantity,
+            'warehouse_id': str(wh.id),
+            'net_stock_added': actual_quantity - defective_quantity,
         }
-        
+
+    except HTTPException:
+        await session.rollback()
+        raise
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=f"Error registering production output: {str(e)}")

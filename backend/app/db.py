@@ -8,9 +8,12 @@ load_dotenv()
 # Use specified PostgreSQL credentials as default
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
-    # PostgreSQL: user=postgres, password=blackvelvet, database=axis_db
-    DATABASE_URL = (
-        'postgresql+asyncpg://postgres:blackvelvet@localhost:5432/axis_db'
+    # No hardcoded fallback: a committed credential is readable by anyone with
+    # repo access, and silently connecting to a local database hides a
+    # misconfigured deployment instead of surfacing it.
+    raise RuntimeError(
+        "DATABASE_URL is not set. Set it in the environment (or backend/.env) "
+        "before starting the application."
     )
 
 engine = create_async_engine(DATABASE_URL, future=True)
