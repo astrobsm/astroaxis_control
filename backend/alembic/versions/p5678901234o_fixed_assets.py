@@ -134,6 +134,16 @@ def upgrade():
     # cost. current_value is deliberately NOT used as a starting point -- it
     # was written by a GET handler using drifting fractional-year maths and
     # cannot be reconciled to anything.
+    #
+    # machines_equipment is a runtime-created table (the app builds it via
+    # CREATE TABLE IF NOT EXISTS on first use), so it is absent on a freshly
+    # built database. Guard the backfill on its existence -- with no machine
+    # rows there is simply nothing to carry across.
+    if op.get_bind().execute(sa.text(
+            "SELECT to_regclass('public.machines_equipment')"
+    )).scalar() is None:
+        return
+
     op.execute("""
         INSERT INTO fixed_assets
             (asset_number, name, category, acquisition_date, cost,
