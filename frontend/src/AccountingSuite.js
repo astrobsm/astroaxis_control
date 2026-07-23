@@ -453,6 +453,125 @@ function PayrollTab() {
   );
 }
 
+function CostsTab() {
+  const [kind, setKind] = useState('products'); // 'products' | 'materials'
+  const [rows, setRows] = useState([]); const [edits, setEdits] = useState({});
+  const [err, setErr] = useState(''); const [msg, setMsg] = useState('');
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | missing
+
+  const load = useCallback(() => {
+    setLoading(true); setErr(''); setEdits({});
+    getJSON(`/api/costs/${kind}`).then(setRows).catch((e) => setErr(e.message)).finally(() => setLoading(false));
+  }, [kind]);
+  useEffect(() => { load(); }, [load]);
+
+  const costKey = kind === 'products' ? 'cost_price' : 'unit_cost';
+  const setEdit = (id, v) => setEdits((p) => ({ ...p, [id]: v }));
+
+  const save = async () => {
+    const updates = Object.entries(edits)
+      .filter(([, v]) => v !== '' && v != null && !Number.isNaN(Number(v)))
+      .map(([id, v]) => ({ id, cost: Number(v) }));
+    if (updates.length === 0) { setMsg('No changes to save.'); return; }
+    setSaving(true); setErr(''); setMsg('');
+    try {
+      const r = await postPut(`/api/costs/${kind}`, { updates });
+      setMsg(`Saved ${r.updated} cost${r.updated === 1 ? '' : 's'}.`); load();
+    } catch (e) { setErr(e.message); } finally { setSaving(false); }
+  };
+
+  const shown = rows.filter((r) => filter === 'all' || r.missing_cost);
+  const missingCount = rows.filter((r) => r.missing_cost).length;
+  const pendingCount = Object.keys(edits).filter((k) => edits[k] !== '' && edits[k] != null).length;
+
+  return (
+    <div>
+      <ErrorBox msg={err} />
+      {msg && <div style={{ background: '#ecfdf5', color: '#065f46', padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 13, color: '#1e3a5f' }}>
+        Enter the unit <strong>cost</strong> (what it costs you) for each item. These feed stock valuation and
+        profit. {kind === 'products' && 'A cost above the selling price shows a negative margin — a sign of a typo.'}
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <button onClick={() => setKind('products')} style={kind === 'products' ? btnPrimary : btnGhost}>Products</button>
+        <button onClick={() => setKind('materials')} style={kind === 'materials' ? btnPrimary : btnGhost}>Raw Materials</button>
+        <span style={{ marginLeft: 12, fontSize: 13, color: missingCount ? '#b45309' : '#16a34a' }}>
+          {missingCount} of {rows.length} missing a cost
+        </span>
+        <label style={{ fontSize: 13, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <input type="checkbox" checked={filter === 'missing'} onChange={(e) => setFilter(e.target.checked ? 'missing' : 'all')} />
+          Show only missing
+        </label>
+      </div>
+      {loading ? <Loading /> : (
+        <Card accent="#16a34a">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr>
+                <th style={thL}>Item</th><th style={thL}>Unit</th>
+                <th style={thR}>On hand</th>
+                {kind === 'products' && <th style={thR}>Selling price</th>}
+                {kind === 'materials' && <th style={thR}>Current stock value</th>}
+                <th style={thR}>Unit cost</th>
+                {kind === 'products' && <th style={thR}>Margin</th>}
+              </tr></thead>
+              <tbody>
+                {shown.map((r) => {
+                  const editing = edits[r.id];
+                  const effectiveCost = editing !== undefined && editing !== '' ? Number(editing) : r[costKey];
+                  const margin = kind === 'products' && r.selling_price && effectiveCost != null
+                    ? Math.round((r.selling_price - effectiveCost) / r.selling_price * 1000) / 10 : null;
+                  return (
+                    <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9', background: r.missing_cost ? '#fffbeb' : 'transparent' }}>
+                      <td style={{ padding: '6px 10px' }}>{r.name}</td>
+                      <td style={{ padding: '6px 10px', color: '#64748b' }}>{r.unit || '—'}</td>
+                      <td style={tdR}>{r.on_hand?.toLocaleString()}</td>
+                      {kind === 'products' && <td style={tdR}>{r.selling_price != null ? NGN(r.selling_price) : '—'}</td>}
+                      {kind === 'materials' && <td style={{ ...tdR, color: r.stock_value > 5000000 ? '#dc2626' : '#334155' }}>{NGN(r.stock_value)}</td>}
+                      <td style={tdR}>
+                        <input type="number" min="0" step="any"
+                          defaultValue={r[costKey] ?? ''}
+                          onChange={(e) => setEdit(r.id, e.target.value)}
+                          style={{ width: 110, padding: 6, textAlign: 'right', border: `1px solid ${r.missing_cost ? '#f59e0b' : '#cbd5e1'}`, borderRadius: 5 }} />
+                      </td>
+                      {kind === 'products' && (
+                        <td style={{ ...tdR, color: margin == null ? '#94a3b8' : margin < 0 ? '#dc2626' : margin < 10 ? '#b45309' : '#16a34a', fontWeight: 600 }}>
+                          {margin == null ? '—' : `${margin}%`}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }} onClick={save} disabled={saving}>
+              {saving ? 'Saving…' : `Save costs${pendingCount ? ` (${pendingCount})` : ''}`}
+            </button>
+            <span style={{ fontSize: 12, color: '#64748b' }}>Changes are applied when you click Save.</span>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+const thL = { textAlign: 'left', padding: '8px 10px', borderBottom: '2px solid #e2e8f0', color: '#475569' };
+const thR = { textAlign: 'right', padding: '8px 10px', borderBottom: '2px solid #e2e8f0', color: '#475569' };
+const tdR = { padding: '6px 10px', textAlign: 'right' };
+
+async function postPut(url, body) {
+  const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) });
+  if (!res.ok) {
+    let d = `Request failed (${res.status})`;
+    try { const j = await res.json(); d = j.detail || j.message || d; } catch {}
+    throw new Error(d);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // shell
 // ---------------------------------------------------------------------------
@@ -461,6 +580,7 @@ const TABS = [
   ['dashboard', 'Dashboard', DashboardTab],
   ['reports', 'Financial Reports', ReportsTab],
   ['ledger', 'General Ledger', LedgerTab],
+  ['costs', 'Product Costs', CostsTab],
   ['assets', 'Fixed Assets', AssetsTab],
   ['budgeting', 'Budgeting', BudgetingTab],
   ['vat', 'VAT Returns', VatTab],

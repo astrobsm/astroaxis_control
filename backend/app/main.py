@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -129,7 +129,7 @@ try:
         warehouse_transfers, returns, damaged_transfers, receive_transfers,
         legacy_debts, communication, sop, production_tasks, announcements,
         radio, geo, regulatory, accounting, payroll, assets,
-        budgeting, tax, maintenance, dashboard,
+        budgeting, tax, maintenance, dashboard, costs,
     ):
         app.include_router(_router.router, dependencies=authed)
     app.include_router(assets.cash_router, dependencies=authed)
