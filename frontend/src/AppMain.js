@@ -3105,41 +3105,97 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <small className="build-badge">{BUILD_TAG}</small>
  </div>
  <nav className="sidebar-nav">
- {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionTasks','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','customerOrders','customers','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','accounting','profits','sop','communication','announcements','training','userManagement','letters','geomap','regulatoryCompliance','networkWifi','settings'].filter(m => {
- // Letters is admin-only
- if (m === 'letters') return !currentUser || currentUser.role === 'admin';
- // Profits is admin-only
- if (m === 'profits') return !currentUser || currentUser.role === 'admin';
- // Accounting is admin-only
- if (m === 'accounting') return !currentUser || currentUser.role === 'admin';
- // Announcements is admin-only
- if (m === 'announcements') return !currentUser || currentUser.role === 'admin';
- // Geomap is admin-only
- if (m === 'geomap') return !currentUser || currentUser.role === 'admin';
- // Regulatory Compliance is admin-only
- if (m === 'regulatoryCompliance') return !currentUser || currentUser.role === 'admin';
- // Network & WiFi Management is Super Admin only
- if (m === 'networkWifi') return !currentUser || currentUser.role === 'admin';
- // Admin always sees everything
- if (!currentUser || currentUser.role === 'admin') return true;
- // Dashboard always visible
- if (m === 'dashboard') return true;
- // customerOrders piggybacks on sales access
- if (m === 'customerOrders' && myModuleAccess && myModuleAccess['sales']) return true;
- // Use module access if available
- if (myModuleAccess && myModuleAccess[m] !== undefined) return myModuleAccess[m];
- // Default: hide for non-admin if no access data loaded yet
- return false;
- }).map(m => (
- <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => { setActiveModule(m); setSidebarVisible(false); }} style={{position:'relative'}}>
- {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionTasks' ? 'PRODUCTION TASKS' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'training' ? 'TRAINING ACADEMY' : m === 'profits' ? 'PROFITS' : m === 'accounting' ? 'ACCOUNTING' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m === 'customers' ? 'CUSTOMERS' : m === 'customerOrders' ? 'CUSTOMER ORDERS' : m === 'communication' ? 'COMMUNICATION' : m === 'letters' ? 'LETTERS' : m === 'sop' ? 'SOP / GMP' : m === 'geomap' ? 'GEOMAP' : m === 'regulatoryCompliance' ? 'REGULATORY COMPLIANCE' : m === 'networkWifi' ? 'NETWORK & WIFI' : m.toUpperCase()}
- {m === 'communication' && (commUnread.notices + commUnread.messages_total) > 0 && (
- <span style={{position:'absolute',top:'6px',right:'8px',background:'#ef4444',color:'#fff',fontSize:'10px',fontWeight:700,minWidth:'18px',height:'18px',borderRadius:'9px',display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',animation:'badgePulse 2s infinite',boxShadow:'0 2px 6px rgba(239,68,68,0.5)'}}>
- {commUnread.notices + commUnread.messages_total > 99 ? '99+' : commUnread.notices + commUnread.messages_total}
- </span>
- )}
- </button>
- ))}
+ {(() => {
+   const GROUPS = [
+     ['Main', [['dashboard','Dashboard','grid']]],
+     ['Operations', [
+       ['production','Production','factory'],['productionTasks','Production Tasks','clip'],
+       ['productionCompletions','Completions','layers'],['products','Inventory','box'],
+       ['rawMaterials','Raw Materials','tag'],['stockManagement','Stock Management','pkg'],
+       ['consumables','Consumables','pkg'],['procurement','Procurement','cart'],
+       ['machinesEquipment','Equipment','gear'],
+       ['transfers','Transfers','transfer'],['receiveTransfers','Receive Transfers','inbox'],
+       ['damagedTransfers','Damaged Transfers','alert'],['returns','Returned Products','undo'],
+     ]],
+     ['Quality & Regulatory', [['sop','SOP / GMP','flask'],['regulatoryCompliance','Regulatory','shield']]],
+     ['Sales & Distribution', [
+       ['sales','Sales','cart'],['customerOrders','Customer Orders','receipt'],
+       ['customers','Customers','users'],['paymentTracking','Payments & Debt','card'],
+       ['logistics','Logistics','truck'],['marketing','Marketing','trendup'],
+     ]],
+     ['Finance', [
+       ['accounting','Accounting','bank'],['financial','Financial','wallet'],
+       ['profits','Profits','trendup'],['reports','Reports','file'],
+     ]],
+     ['People', [
+       ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
+       ['attendance','Attendance','cal'],['salaryPayroll','Salary & Payroll','card'],
+       ['training','Training Academy','cap'],
+     ]],
+     ['Communication', [
+       ['communication','Communication','comms'],['announcements','Announcements','bell'],
+       ['letters','Letters','file'],
+     ]],
+     ['Administration', [
+       ['userManagement','User Management','key'],['settings','Settings','gear'],
+       ['networkWifi','Network & WiFi','plug'],['geomap','Geomap','map'],
+     ]],
+   ];
+   const ICONS = {
+     grid:'M3 3h8v8H3zM13 3h8v5h-8zM13 12h8v9h-8zM3 15h8v6H3z',
+     factory:'M3 21h18M4 21V9l6 4V9l6 4V5h4v16', clip:'M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1zM8 6h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z',
+     layers:'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5', box:'M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8',
+     tag:'M12 2H2v10l9 9 10-10zM7 7h.01', pkg:'M16 3 4 9v6l8 4 8-4V9zM4 9l8 4 8-4M12 13v6',
+     gear:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 13a7 7 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14 2h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.4L3.6 11a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1L10 22h4l.3-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.4z',
+     transfer:'M4 7h16M16 3l4 4-4 4M20 17H4M8 13l-4 4 4 4', inbox:'M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z',
+     alert:'M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01',
+     undo:'M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 8', flask:'M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3',
+     shield:'M12 2 4 6v6c0 5 8 8 8 8s8-3 8-8V6z', cart:'M6 6h15l-1.5 9h-12zM6 6 5 3H2M9 20h.01M18 20h.01',
+     receipt:'M4 2h16v20l-3-2-3 2-3-2-3 2zM8 7h8M8 11h8M8 15h5', users:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.9',
+     card:'M2 5h20v14H2zM2 10h20M6 15h4', truck:'M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a2 2 0 1 0 0-.01M18.5 19a2 2 0 1 0 0-.01',
+     trendup:'M23 6l-9.5 9.5-5-5L1 18M17 6h6v6', bank:'M3 21h18M3 10h18M5 6l7-3 7 3M5 10v11M19 10v11M9 14v3M15 14v3',
+     wallet:'M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0 0 4h16a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5M18 12h.01',
+     file:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6',
+     cal:'M3 4h18v18H3zM16 2v4M8 2v4M3 10h18', cap:'M22 10 12 5 2 10l10 5 10-5zM6 12v5l6 3 6-3v-5',
+     comms:'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', bell:'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
+     key:'M15 7a4 4 0 1 0-4 4l-6 6v3h3l6-6a4 4 0 0 0 1-7z', plug:'M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5',
+     map:'M9 3 3 6v15l6-3 6 3 6-3V3l-6 3zM9 3v15M15 6v15',
+   };
+   const visible = (m) => {
+     if (['letters','profits','accounting','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
+       return !currentUser || currentUser.role === 'admin';
+     if (!currentUser || currentUser.role === 'admin') return true;
+     if (m === 'dashboard') return true;
+     if (m === 'customerOrders' && myModuleAccess && myModuleAccess['sales']) return true;
+     if (myModuleAccess && myModuleAccess[m] !== undefined) return myModuleAccess[m];
+     return false;
+   };
+   const Svg = (d) => (
+     <svg className="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+       {d.split(' M').map((s, i) => <path key={i} d={(i ? 'M' : '') + s} />)}
+     </svg>
+   );
+   return GROUPS.map(([group, items]) => {
+     const vis = items.filter(([m]) => visible(m));
+     if (!vis.length) return null;
+     return (
+       <div className="nav-group" key={group}>
+         <span className="nav-group-label">{group}</span>
+         {vis.map(([m, label, icon]) => (
+           <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => { setActiveModule(m); setSidebarVisible(false); }}>
+             {Svg(ICONS[icon] || ICONS.grid)}
+             <span className="nav-label">{label}</span>
+             {m === 'communication' && (commUnread.notices + commUnread.messages_total) > 0 && (
+               <span style={{background:'#ef4444',color:'#fff',fontSize:'10px',fontWeight:700,minWidth:'18px',height:'18px',borderRadius:'9px',display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxShadow:'0 2px 6px rgba(239,68,68,0.5)'}}>
+                 {commUnread.notices + commUnread.messages_total > 99 ? '99+' : commUnread.notices + commUnread.messages_total}
+               </span>
+             )}
+           </button>
+         ))}
+       </div>
+     );
+   });
+ })()}
  </nav>
  <div className="sidebar-footer">
  <button className="btn btn-refresh" onClick={fetchAllData}>Refresh Data</button>
@@ -3160,6 +3216,33 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
 
  {/* Main Content Area */}
  <div className={`main-wrapper ${sidebarVisible ? '' : 'expanded'}`}>
+
+ {/* Top navigation bar */}
+ <header className="app-topbar">
+ <button className="tb-icon" title="Toggle menu" onClick={() => setSidebarVisible(!sidebarVisible)}>
+ <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+ </button>
+ <div>
+ <div className="tb-crumb">{activeModule === 'accounting' ? 'Finance' : activeModule === 'dashboard' ? 'Overview' : 'Bonnesante Medicals'}</div>
+ <div className="tb-title">{(activeModule || 'dashboard').replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase())}</div>
+ </div>
+ <div className="tb-spacer" />
+ <div className="tb-search">
+ <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+ <input placeholder="Search…" aria-label="Search" />
+ </div>
+ <button className="tb-icon" title="Refresh data" onClick={fetchAllData}>
+ <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6M1 20v-6h6M20.5 9A9 9 0 0 0 5.6 5.6L1 10M3.5 15a9 9 0 0 0 14.9 3.4L23 14"/></svg>
+ </button>
+ <button className="tb-icon" title="Notifications">
+ <span className="tb-dot" />
+ <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+ </button>
+ <span className="tb-date">{new Date().toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
+ <div className="tb-avatar" title={currentUser?.email || 'User'}>
+ {((currentUser?.full_name || currentUser?.name || currentUser?.email || 'U').trim()[0] || 'U').toUpperCase()}
+ </div>
+ </header>
 
  {/* Notifications */}
  {notifications.length > 0 && (
