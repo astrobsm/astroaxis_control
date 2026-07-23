@@ -152,6 +152,7 @@ async def post_sale(
     order_id: UUID,
     on: Optional[date] = None,
     created_by: Optional[UUID] = None,
+    include_cogs: bool = True,
 ) -> Optional[UUID]:
     """Recognise a sale: revenue, receivable, and the cost of what was sold.
 
@@ -162,6 +163,13 @@ async def post_sale(
 
     COGS uses the cost SNAPSHOTTED on the order line at the time of sale, not
     a current price-list lookup -- see app.services.costing.
+
+    `include_cogs=False` posts ONLY the revenue leg. It exists for the
+    historical backfill: pre-engine sales carry ESTIMATED costs, and crediting
+    Finished Goods for them without an opening inventory balance drives
+    inventory negative. Recording the revenue (which is real) while leaving the
+    cost side for proper opening balances is the honest half-measure. New,
+    live sales always post both legs (the default).
 
     Returns None (posting nothing) when the order carries no cost information,
     rather than booking a 100%-margin sale on goods of unknown cost.
@@ -198,7 +206,7 @@ async def post_sale(
         Line(ACC_SALES, credit=revenue,
              description=f"Sale {order.order_number}"),
     ]
-    if cogs > 0:
+    if include_cogs and cogs > 0:
         lines += [
             Line(ACC_COGS, debit=cogs,
                  description=f"Cost of goods sold, {order.order_number}"),
