@@ -45,24 +45,32 @@ async def list_product_costs(
     session: AsyncSession = Depends(get_session),
     _admin: User = Depends(require_admin),
 ):
-    """Every product with its current cost, selling price, margin and stock."""
+    """Every product PRICE LINE with its cost, selling price, margin and stock.
+
+    Costs live on `product_pricing` — one row per (product, unit), the same
+    table the product-registration form writes. This overview reads that source
+    of truth (not the vestigial products.cost_price), so it reflects what the
+    costing engine actually uses to value stock and compute COGS. Each row is a
+    unit variant (e.g. a product sold by TUBE and by CARTON has two).
+    """
     rows = (await session.execute(text("""
-        SELECT p.id, p.sku, p.name, p.unit,
-               p.cost_price, p.selling_price,
+        SELECT pp.id, p.sku, p.name, pp.unit,
+               pp.cost_price, pp.retail_price, pp.wholesale_price,
                COALESCE(s.on_hand, 0) AS on_hand
-          FROM products p
+          FROM product_pricing pp
+          JOIN products p ON p.id = pp.product_id
           LEFT JOIN (
               SELECT product_id, SUM(current_stock) AS on_hand
                 FROM stock_levels
                WHERE product_id IS NOT NULL
                GROUP BY product_id
-          ) s ON s.product_id = p.id
-         ORDER BY p.name
+          ) s ON s.product_id = pp.product_id
+         ORDER BY p.name, pp.unit
     """))).fetchall()
     out = []
     for r in rows:
         cost = float(r.cost_price) if r.cost_price is not None else None
-        sell = float(r.selling_price) if r.selling_price is not None else None
+        sell = float(r.retail_price) if r.retail_price is not None else None
         margin = None
         if cost is not None and sell:
             margin = round((sell - cost) / sell * 100, 1)
@@ -82,12 +90,12 @@ async def update_product_costs(
     session: AsyncSession = Depends(get_session),
     _admin: User = Depends(require_admin),
 ):
-    """Set cost_price on one or more products. Returns how many changed."""
+    """Set cost_price on one or more product_pricing rows (by price-line id)."""
     updated = 0
     try:
         for u in body.updates:
             res = await session.execute(
-                text("UPDATE products SET cost_price = :c WHERE id = :i"),
+                text("UPDATE product_pricing SET cost_price = :c WHERE id = :i"),
                 {"c": u.cost, "i": str(u.id)})
             updated += res.rowcount or 0
         await session.commit()

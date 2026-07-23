@@ -63,12 +63,15 @@ async def run(commit: bool) -> None:
             await engine.dispose()
             return
 
-        # Finished goods: current stock x per-product average snapshot cost.
+        # Finished goods: current stock x registered cost from product_pricing
+        # (the same source the costing engine and the product-registration form
+        # use). MIN per product is a conservative unit cost where a product has
+        # several unit variants.
         fg = money((await s.execute(text("""
             WITH pc AS (
-                SELECT product_id, AVG(unit_cost) uc
-                  FROM sales_order_lines
-                 WHERE unit_cost > 0 GROUP BY product_id)
+                SELECT product_id, MIN(cost_price) uc
+                  FROM product_pricing
+                 WHERE cost_price > 0 GROUP BY product_id)
             SELECT COALESCE(SUM(sl.current_stock * pc.uc), 0)
               FROM stock_levels sl
               JOIN pc ON pc.product_id = sl.product_id
