@@ -3130,11 +3130,13 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {(() => {
    const GROUPS = [
      ['Main', [['dashboard','Dashboard','grid']]],
+     ['Products & Materials', [
+       ['products','Products','box'],['rawMaterials','Raw Materials','tag'],
+       ['stockManagement','Stock Management','pkg'],['consumables','Consumables','pkg'],
+     ]],
      ['Operations', [
        ['production','Production','factory'],['productionTasks','Production Tasks','clip'],
-       ['productionCompletions','Completions','layers'],['products','Inventory','box'],
-       ['rawMaterials','Raw Materials','tag'],['stockManagement','Stock Management','pkg'],
-       ['consumables','Consumables','pkg'],['procurement','Procurement','cart'],
+       ['productionCompletions','Completions','layers'],['procurement','Procurement','cart'],
        ['machinesEquipment','Equipment','gear'],
        ['transfers','Transfers','transfer'],['receiveTransfers','Receive Transfers','inbox'],
        ['damagedTransfers','Damaged Transfers','alert'],['returns','Returned Products','undo'],
