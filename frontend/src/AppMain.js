@@ -2038,6 +2038,28 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  }
  }
 
+ // Cancel Sales Order — restores stock and reverses the sale in the ledger
+ async function cancelSalesOrder(orderId) {
+ const order = (data.sales||[]).find(o => o.id === orderId);
+ const customer = order ? (data.customers||[]).find(c => c.id === order.customer_id) : null;
+ const orderLabel = order ? `${order.order_number} (${customer ? customer.name : 'Unknown'})` : orderId;
+ if (order && order.status === 'cancelled') { notify('Order is already cancelled', 'info'); return; }
+ if (!window.confirm(`Cancel order ${orderLabel}?\n\nThis returns the stock to the warehouse and reverses the sale (revenue, receivable and any payment) in the accounts. The order is kept but marked CANCELLED.`)) return;
+ try {
+ setLoading(true);
+ const res = await authedFetch(`/api/sales/orders/${orderId}/cancel`, { method: 'POST' });
+ if (!res.ok) { const err = await res.json(); throw new Error(err.detail || 'Failed to cancel order'); }
+ const j = await res.json();
+ notify(j.message || `Order ${orderLabel} cancelled`, 'success');
+ fetchData('sales');
+ fetchData('stock');
+ } catch (e) {
+ notify(`Cancel error: ${e.message}`, 'error');
+ } finally {
+ setLoading(false);
+ }
+ }
+
  // Delete Sales Order (Admin Only)
  async function deleteSalesOrder(orderId) {
  const order = (data.sales||[]).find(o => o.id === orderId);
@@ -4333,6 +4355,9 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </>
  )}}
  <button onClick={() => processOrder(order.id)} className="btn-paid">Process</button>
+ {order.status !== 'cancelled' && (
+ <button onClick={() => cancelSalesOrder(order.id)} title="Cancel a returned order: restores stock and reverses the sale in the accounts" style={{background:'#f59e0b',color:'#fff',border:'none',borderRadius:6,padding:'6px 10px',marginLeft:4,cursor:'pointer',fontWeight:600}}>Cancel</button>
+ )}
  {(!currentUser || currentUser.role === 'admin') && (
  <button onClick={() => deleteSalesOrder(order.id)} className="btn btn-danger" title="Delete Order (Admin Only)" style={{background:'#e74c3c',color:'#fff',border:'none',marginLeft:4}}>Delete</button>
  )}

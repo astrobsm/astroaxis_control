@@ -21,7 +21,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.ledger import Line, money, post_entry
+from app.services.ledger import Line, money, post_entry, reverse_entry
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +236,64 @@ async def post_sale(
         lines=lines,
         created_by=created_by,
     )
+
+
+async def reverse_sale(
+    session: AsyncSession,
+    *,
+    order_id: UUID,
+    order_number: str,
+    reason: str,
+    created_by: Optional[UUID] = None,
+) -> list:
+    """Unwind the ledger effect of a sale when its order is cancelled.
+
+    Cancelling a sale is not a delete: the ledger is immutable, so the original
+    entries stay and a MIRROR is posted against each, leaving a net-zero pair
+    that records both what was believed and the correction. This reverses:
+
+      * the sale entry itself (revenue, receivable, COGS, finished goods);
+      * every customer-payment entry raised against this order's invoices, so
+        cash received on a now-cancelled order is unwound too.
+
+    Idempotent and safe when posting is off: reverse_entry refuses to double-
+    reverse, and nothing runs unless ACCOUNTING_POSTING_ENABLED. Returns the
+    ids of the reversal entries created.
+    """
+    if not posting_enabled():
+        return []
+
+    reversals = []
+
+    sale = (await session.execute(
+        text("""SELECT id FROM gl_journal_entries
+                 WHERE source_module = 'sales' AND source_reference = :r
+                   AND status = 'POSTED'"""),
+        {"r": order_number},
+    )).first()
+    if sale:
+        reversals.append(await reverse_entry(
+            session, entry_id=sale.id, reason=reason, created_by=created_by))
+
+    # Payment entries are keyed PAY-<payment_id>; find the payments raised
+    # against any invoice for this order.
+    pay_entries = (await session.execute(
+        text("""
+            SELECT e.id FROM gl_journal_entries e
+             WHERE e.source_module = 'payments' AND e.status = 'POSTED'
+               AND e.source_reference IN (
+                   SELECT 'PAY-' || p.id
+                     FROM payments p
+                     JOIN invoices i ON i.id = p.invoice_id
+                    WHERE i.sales_order_id = :oid)
+        """),
+        {"oid": str(order_id)},
+    )).fetchall()
+    for row in pay_entries:
+        reversals.append(await reverse_entry(
+            session, entry_id=row.id, reason=reason, created_by=created_by))
+
+    return reversals
 
 
 async def post_customer_payment(

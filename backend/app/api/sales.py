@@ -22,7 +22,7 @@ from app.services.receivables import (
     ensure_invoice_for_order, record_payment, recompute_invoice_paid, money)
 from app.services.inventory import apply_stock_movement
 from app.services.costing import snapshot_line_cost
-from app.services.posting import post_sale
+from app.services.posting import post_sale, reverse_sale
 from app.models import (
     Customer,
     SalesOrder,
@@ -96,6 +96,47 @@ async def restore_stock_for_order(session: AsyncSession, order: SalesOrder):
             notes=f"Stock restored from cancelled order {order.order_number}",
             created_by=order.created_by,
         )
+
+
+async def cancel_order_effects(session: AsyncSession, order: SalesOrder,
+                               reason: str = "Order cancelled"):
+    """Fully unwind a sales order so it no longer counts anywhere.
+
+    One atomic operation, in the caller's transaction:
+      1. return the committed stock to the warehouse (through the inventory
+         service, which relocks and writes a movement + balance together);
+      2. reverse the sale's journal entries and any payments against it, so
+         revenue, receivable, COGS and cash all back out of the ledger;
+      3. cancel the order's invoices so they drop out of receivables;
+      4. mark the order CANCELLED.
+
+    Idempotent: a second call on an already-cancelled order does nothing, so a
+    double-clicked Cancel button cannot restock or reverse twice.
+    """
+    if order.status == 'cancelled':
+        return False
+
+    # 1. Restore stock only if it was ever committed. A draft/pending order
+    #    never deducted, so restoring would invent units that never left.
+    if order.status in ('confirmed', 'completed'):
+        await restore_stock_for_order(session, order)
+
+    # 2. Reverse the ledger (no-op unless posting is enabled).
+    await reverse_sale(session, order_id=order.id,
+                       order_number=order.order_number, reason=reason,
+                       created_by=order.created_by)
+
+    # 3. Drop this order's invoices out of receivables.
+    await session.execute(
+        text("UPDATE invoices SET status = 'cancelled' "
+             "WHERE sales_order_id = :oid AND status <> 'cancelled'"),
+        {"oid": str(order.id)},
+    )
+
+    # 4. The order no longer persists as a live sale.
+    order.status = 'cancelled'
+    order.payment_status = 'cancelled'
+    return True
 
 
 # Customer endpoints
@@ -558,13 +599,17 @@ async def update_sales_order(
         
         # Handle stock changes based on status transitions
         if old_status != new_status:
+            # Cancelling fully unwinds stock AND the ledger, in real time.
+            if new_status == 'cancelled':
+                await cancel_order_effects(
+                    session, order, reason=f"Order {order.order_number} cancelled")
             # Deduct stock when confirming an order
-            if old_status in ['pending', 'draft'] and new_status == 'confirmed':
+            elif old_status in ['pending', 'draft'] and new_status == 'confirmed':
                 await deduct_stock_for_order(session, order)
             # Restore stock when reverting from confirmed to pending
             elif old_status == 'confirmed' and new_status in ['pending', 'draft']:
                 await restore_stock_for_order(session, order)
-        
+
         await session.commit()
         
         # Reload with relationships
@@ -582,6 +627,38 @@ async def update_sales_order(
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Error updating sales order: {str(e)}")
 
+@router.post('/orders/{order_id}/cancel', response_model=ApiResponse)
+async def cancel_sales_order(
+    order_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    reason: Optional[str] = None,
+):
+    """Cancel an order returned by the customer.
+
+    Restores the stock, reverses the sale (and any payments) in the ledger, and
+    marks the order CANCELLED — all in one transaction — so the returned order
+    stops counting towards stock, revenue or receivables the moment it is
+    cancelled. The record is kept (not deleted) so the reversal is auditable.
+    """
+    result = await session.execute(select(SalesOrder).where(SalesOrder.id == order_id))
+    order = result.scalars().first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Sales order not found")
+    try:
+        changed = await cancel_order_effects(
+            session, order, reason=reason or f"Order {order.order_number} cancelled")
+        await session.commit()
+        if not changed:
+            return ApiResponse(message=f"Order {order.order_number} was already cancelled")
+        return ApiResponse(message=f"Order {order.order_number} cancelled; stock restored and sales reversed")
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=f"Error cancelling order: {str(e)}")
+
+
 @router.delete('/orders/{order_id}', response_model=ApiResponse)
 async def delete_sales_order(
     order_id: UUID,
@@ -598,7 +675,16 @@ async def delete_sales_order(
         # Restore stock if the order had stock deducted (confirmed/completed)
         if order.status in ['confirmed', 'completed']:
             await restore_stock_for_order(session, order)
-        
+
+        # Reverse the sale in the ledger BEFORE deleting the order, or the
+        # posted revenue/receivable/COGS would be orphaned from the record that
+        # produced them. The reversal entries stay in the immutable ledger; the
+        # operational order records below are what get removed.
+        if order.status != 'cancelled':
+            await reverse_sale(
+                session, order_id=order.id, order_number=order.order_number,
+                reason=f"Order {order.order_number} deleted", created_by=order.created_by)
+
         # Delete in dependency order: payments → invoice_lines → invoices → order_lines → returned_stock → order
         # 1. Find related invoices
         inv_result = await session.execute(
