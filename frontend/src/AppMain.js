@@ -5,6 +5,7 @@ import ModuleInfo from './ModuleInfo';
 import Geomap from './Geomap';
 import RegulatoryCompliance from './RegulatoryCompliance';
 import NetworkManagementDashboard from './NetworkManagementDashboard';
+import AccountingSuite from './AccountingSuite';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3104,11 +3105,13 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <small className="build-badge">{BUILD_TAG}</small>
  </div>
  <nav className="sidebar-nav">
- {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionTasks','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','customerOrders','customers','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','profits','sop','communication','announcements','training','userManagement','letters','geomap','regulatoryCompliance','networkWifi','settings'].filter(m => {
+ {['dashboard','staff','attendance','salaryPayroll','products','rawMaterials','stockManagement','production','productionTasks','productionCompletions','consumables','machinesEquipment','transfers','returns','damagedTransfers','receiveTransfers','sales','customerOrders','customers','paymentTracking','procurement','logistics','marketing','hrCustomerCare','reports','financial','accounting','profits','sop','communication','announcements','training','userManagement','letters','geomap','regulatoryCompliance','networkWifi','settings'].filter(m => {
  // Letters is admin-only
  if (m === 'letters') return !currentUser || currentUser.role === 'admin';
  // Profits is admin-only
  if (m === 'profits') return !currentUser || currentUser.role === 'admin';
+ // Accounting is admin-only
+ if (m === 'accounting') return !currentUser || currentUser.role === 'admin';
  // Announcements is admin-only
  if (m === 'announcements') return !currentUser || currentUser.role === 'admin';
  // Geomap is admin-only
@@ -3129,7 +3132,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  return false;
  }).map(m => (
  <button key={m} className={`sidebar-btn ${activeModule===m?'active':''}`} onClick={() => { setActiveModule(m); setSidebarVisible(false); }} style={{position:'relative'}}>
- {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionTasks' ? 'PRODUCTION TASKS' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'training' ? 'TRAINING ACADEMY' : m === 'profits' ? 'PROFITS' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m === 'customers' ? 'CUSTOMERS' : m === 'customerOrders' ? 'CUSTOMER ORDERS' : m === 'communication' ? 'COMMUNICATION' : m === 'letters' ? 'LETTERS' : m === 'sop' ? 'SOP / GMP' : m === 'geomap' ? 'GEOMAP' : m === 'regulatoryCompliance' ? 'REGULATORY COMPLIANCE' : m === 'networkWifi' ? 'NETWORK & WIFI' : m.toUpperCase()}
+ {m === 'rawMaterials' ? 'RAW MATERIALS' : m === 'stockManagement' ? 'STOCK MANAGEMENT' : m === 'productionTasks' ? 'PRODUCTION TASKS' : m === 'productionCompletions' ? 'PROD. COMPLETIONS' : m === 'consumables' ? 'CONSUMABLES' : m === 'machinesEquipment' ? 'MACHINES & EQUIPMENT' : m === 'transfers' ? 'TRANSFERS' : m === 'returns' ? 'RETURNED PRODUCTS' : m === 'damagedTransfers' ? 'DAMAGED TRANSFERS' : m === 'receiveTransfers' ? 'RECEIVE TRANSFERS' : m === 'paymentTracking' ? 'PAYMENTS & DEBT' : m === 'procurement' ? 'PROCUREMENT' : m === 'logistics' ? 'LOGISTICS' : m === 'marketing' ? 'MARKETER' : m === 'training' ? 'TRAINING ACADEMY' : m === 'profits' ? 'PROFITS' : m === 'accounting' ? 'ACCOUNTING' : m === 'hrCustomerCare' ? 'HR / CUSTOMER CARE' : m === 'userManagement' ? 'USER MANAGEMENT' : m === 'salaryPayroll' ? 'SALARY & PAYROLL' : m === 'customers' ? 'CUSTOMERS' : m === 'customerOrders' ? 'CUSTOMER ORDERS' : m === 'communication' ? 'COMMUNICATION' : m === 'letters' ? 'LETTERS' : m === 'sop' ? 'SOP / GMP' : m === 'geomap' ? 'GEOMAP' : m === 'regulatoryCompliance' ? 'REGULATORY COMPLIANCE' : m === 'networkWifi' ? 'NETWORK & WIFI' : m.toUpperCase()}
  {m === 'communication' && (commUnread.notices + commUnread.messages_total) > 0 && (
  <span style={{position:'absolute',top:'6px',right:'8px',background:'#ef4444',color:'#fff',fontSize:'10px',fontWeight:700,minWidth:'18px',height:'18px',borderRadius:'9px',display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',animation:'badgePulse 2s infinite',boxShadow:'0 2px 6px rgba(239,68,68,0.5)'}}>
  {commUnread.notices + commUnread.messages_total > 99 ? '99+' : commUnread.notices + commUnread.messages_total}
@@ -8974,6 +8977,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Network & WiFi Management */}
  {activeModule === 'networkWifi' && (
  <NetworkManagementDashboard />
+ )}
+
+ {/* Accounting Suite */}
+ {activeModule === 'accounting' && (
+ <AccountingSuite />
  )}
 
  {/* Settings */}
