@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 import uuid
@@ -841,3 +841,270 @@ class AccountingPeriod(Base):
     closed_at = sa.Column(sa.TIMESTAMP(timezone=True))
     closed_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+# ============ MAPD: MULTI-ACCOUNT PAYMENT DISTRIBUTION ============
+# One customer payment covering several products, split automatically to each
+# product's designated account. The configuration lives here; the engine that
+# applies it is app.services.settlement.
+#
+# These classes exist so the rest of the app can query MAPD tables through the
+# ORM. The engine itself uses explicit SQL, because a settlement is a set of
+# ordered writes that an accountant needs to be able to read and check.
+
+
+class BusinessUnit(Base):
+    """A division whose products settle into its own account(s)."""
+    __tablename__ = 'business_units'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = sa.Column(sa.String(32), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(255), nullable=False)
+    description = sa.Column(sa.Text)
+    is_active = sa.Column(sa.Boolean, nullable=False, default=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class RevenueCenter(Base):
+    """A reporting dimension below the business unit."""
+    __tablename__ = 'revenue_centers'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = sa.Column(sa.String(32), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(255), nullable=False)
+    business_unit_id = sa.Column(UUID(as_uuid=True),
+                                 sa.ForeignKey('business_units.id'))
+    is_active = sa.Column(sa.Boolean, nullable=False, default=True)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class FinancialAccount(Base):
+    """A destination money can be sent to.
+
+    Not a GL account: this is the operational purse (a bank account, a wallet,
+    a division's float). `gl_account_code` maps it onto the chart of accounts
+    so the ledger stays the single accounting truth rather than becoming a
+    second, disagreeing set of books.
+    """
+    __tablename__ = 'financial_accounts'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = sa.Column(sa.String(32), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(255), nullable=False)
+    # BANK | CASH | WALLET | VIRTUAL | OBLIGATION
+    account_kind = sa.Column(sa.String(20), nullable=False, default='BANK')
+    gl_account_code = sa.Column(sa.String(20),
+                                sa.ForeignKey('gl_accounts.code'),
+                                nullable=False)
+    # OBLIGATION accounts only: the liability credited when the expense above
+    # is debited.
+    contra_gl_account_code = sa.Column(sa.String(20),
+                                       sa.ForeignKey('gl_accounts.code'))
+    bank_name = sa.Column(sa.String(255))
+    # Encrypted at rest (app.services.encryption); never returned unmasked.
+    account_number_enc = sa.Column(sa.Text)
+    account_name = sa.Column(sa.String(255))
+    currency = sa.Column(sa.String(3), nullable=False, default='NGN')
+    business_unit_id = sa.Column(UUID(as_uuid=True),
+                                 sa.ForeignKey('business_units.id'))
+    # ACTIVE | SUSPENDED | CLOSED. A non-ACTIVE destination pauses the whole
+    # settlement rather than allowing a partial allocation.
+    status = sa.Column(sa.String(16), nullable=False, default='ACTIVE', index=True)
+    description = sa.Column(sa.Text)
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ProductAccount(Base):
+    """One product's financial configuration."""
+    __tablename__ = 'product_accounts'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = sa.Column(UUID(as_uuid=True),
+                           sa.ForeignKey('products.id', ondelete='CASCADE'),
+                           unique=True, nullable=False)
+    sales_account_code = sa.Column(sa.String(20), sa.ForeignKey('gl_accounts.code'))
+    cost_account_code = sa.Column(sa.String(20), sa.ForeignKey('gl_accounts.code'))
+    inventory_account_code = sa.Column(sa.String(20),
+                                       sa.ForeignKey('gl_accounts.code'))
+    tax_group = sa.Column(sa.String(32))
+    business_unit_id = sa.Column(UUID(as_uuid=True),
+                                 sa.ForeignKey('business_units.id'))
+    revenue_center_id = sa.Column(UUID(as_uuid=True),
+                                  sa.ForeignKey('revenue_centers.id'))
+    settlement_priority = sa.Column(sa.Integer, nullable=False, default=100)
+    # Used when no settlement rule matches: the product's whole share goes
+    # here, so a newly registered product settles without a rule having to be
+    # authored for it first.
+    default_financial_account_id = sa.Column(
+        UUID(as_uuid=True), sa.ForeignKey('financial_accounts.id'))
+    notes = sa.Column(sa.Text)
+    updated_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class SettlementRule(Base):
+    """How one product's (or unit's) revenue is divided."""
+    __tablename__ = 'settlement_rules'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code = sa.Column(sa.String(64), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(255), nullable=False)
+    # PRODUCT | BUSINESS_UNIT | GLOBAL -- resolved most-specific first.
+    scope = sa.Column(sa.String(20), nullable=False, default='PRODUCT')
+    product_id = sa.Column(UUID(as_uuid=True),
+                           sa.ForeignKey('products.id', ondelete='CASCADE'))
+    business_unit_id = sa.Column(UUID(as_uuid=True),
+                                 sa.ForeignKey('business_units.id'))
+    # PERCENTAGE | FIXED | PER_UNIT
+    basis = sa.Column(sa.String(20), nullable=False, default='PERCENTAGE')
+    priority = sa.Column(sa.Integer, nullable=False, default=100)
+    effective_from = sa.Column(sa.Date, nullable=False)
+    effective_to = sa.Column(sa.Date)
+    is_active = sa.Column(sa.Boolean, nullable=False, default=True)
+    description = sa.Column(sa.Text)
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    splits = relationship("SettlementRuleSplit", back_populates="rule",
+                          cascade="all, delete-orphan")
+
+
+class SettlementRuleSplit(Base):
+    """One destination within a rule.
+
+    CASH splits must account for the whole line -- money that arrived has to
+    land somewhere. OBLIGATION splits are additional: owing a distributor 10%
+    commission creates a liability, it does not reduce the cash banked.
+    """
+    __tablename__ = 'settlement_rule_splits'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = sa.Column(UUID(as_uuid=True),
+                        sa.ForeignKey('settlement_rules.id', ondelete='CASCADE'),
+                        nullable=False, index=True)
+    financial_account_id = sa.Column(UUID(as_uuid=True),
+                                     sa.ForeignKey('financial_accounts.id'),
+                                     nullable=False)
+    allocation_type = sa.Column(sa.String(16), nullable=False, default='CASH')
+    percentage = sa.Column(sa.Numeric(9, 6))
+    fixed_amount = sa.Column(sa.Numeric(18, 2))
+    rate_per_unit = sa.Column(sa.Numeric(18, 6))
+    # Absorbs whatever the fixed / per-unit splits did not consume, so a rule
+    # always allocates the line exactly.
+    is_residual = sa.Column(sa.Boolean, nullable=False, default=False)
+    sort_order = sa.Column(sa.Integer, nullable=False, default=0)
+    description = sa.Column(sa.Text)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    rule = relationship("SettlementRule", back_populates="splits")
+
+
+class Settlement(Base):
+    """One payment's distribution. Immutable in its defining figures."""
+    __tablename__ = 'settlements'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    settlement_reference = sa.Column(sa.String(64), unique=True, nullable=False,
+                                     index=True)
+    payment_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('payments.id'),
+                           nullable=False, index=True)
+    invoice_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('invoices.id'),
+                           nullable=False, index=True)
+    sales_order_id = sa.Column(UUID(as_uuid=True),
+                               sa.ForeignKey('sales_orders.id'))
+    gross_amount = sa.Column(sa.Numeric(18, 2), nullable=False)
+    allocated_amount = sa.Column(sa.Numeric(18, 2), nullable=False, default=0)
+    obligation_amount = sa.Column(sa.Numeric(18, 2), nullable=False, default=0)
+    # PENDING | COMPLETED | FAILED | SKIPPED | REVERSED. A unique partial index
+    # allows only one live (PENDING/COMPLETED/SKIPPED) row per payment, which
+    # is what makes distribution idempotent under retries.
+    status = sa.Column(sa.String(16), nullable=False, default='PENDING',
+                       index=True)
+    failure_reason = sa.Column(sa.Text)
+    attempt_number = sa.Column(sa.Integer, nullable=False, default=1)
+    payment_method = sa.Column(sa.String(50))
+    source_gl_account_code = sa.Column(sa.String(20))
+    journal_entry_id = sa.Column(UUID(as_uuid=True))
+    distributed_at = sa.Column(sa.TIMESTAMP(timezone=True))
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    details = relationship("SettlementDetail", back_populates="settlement")
+
+
+class SettlementDetail(Base):
+    """Where one slice of one payment went.
+
+    Append-only, enforced by a database trigger. This is the row an auditor
+    reads to confirm a customer's money reached the account it was meant to;
+    a table that can be edited afterwards proves nothing.
+    """
+    __tablename__ = 'settlement_details'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    settlement_id = sa.Column(UUID(as_uuid=True),
+                              sa.ForeignKey('settlements.id'),
+                              nullable=False, index=True)
+    invoice_line_id = sa.Column(UUID(as_uuid=True),
+                                sa.ForeignKey('invoice_lines.id'))
+    product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'))
+    financial_account_id = sa.Column(UUID(as_uuid=True),
+                                     sa.ForeignKey('financial_accounts.id'),
+                                     nullable=False, index=True)
+    rule_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('settlement_rules.id'))
+    split_id = sa.Column(UUID(as_uuid=True),
+                         sa.ForeignKey('settlement_rule_splits.id'))
+    allocation_type = sa.Column(sa.String(16), nullable=False, default='CASH')
+    basis = sa.Column(sa.String(20), nullable=False, default='PERCENTAGE')
+    amount = sa.Column(sa.Numeric(18, 2), nullable=False)
+    description = sa.Column(sa.Text)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+    settlement = relationship("Settlement", back_populates="details")
+
+
+class MapdRefund(Base):
+    """A reversal of a distribution. Requires two administrators."""
+    __tablename__ = 'mapd_refunds'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    refund_reference = sa.Column(sa.String(64), unique=True, nullable=False,
+                                 index=True)
+    settlement_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('settlements.id'),
+                              nullable=False, index=True)
+    payment_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('payments.id'))
+    invoice_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('invoices.id'))
+    amount = sa.Column(sa.Numeric(18, 2), nullable=False)
+    is_full_reversal = sa.Column(sa.Boolean, nullable=False, default=True)
+    reason = sa.Column(sa.Text, nullable=False)
+    status = sa.Column(sa.String(16), nullable=False, default='COMPLETED')
+    journal_entry_id = sa.Column(UUID(as_uuid=True))
+    approved_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class PaymentMethodRef(Base):
+    """The payment sources the distribution engine accepts."""
+    __tablename__ = 'payment_methods'
+    code = sa.Column(sa.String(32), primary_key=True)
+    name = sa.Column(sa.String(100), nullable=False)
+    category = sa.Column(sa.String(20), nullable=False, default='OTHER')
+    requires_reference = sa.Column(sa.Boolean, nullable=False, default=False)
+    is_active = sa.Column(sa.Boolean, nullable=False, default=True)
+    sort_order = sa.Column(sa.Integer, nullable=False, default=100)
+
+
+class MapdAuditLog(Base):
+    """Append-only trail of every distribution event.
+
+    Separate from `audit_logs` on purpose: this one cannot be updated or
+    deleted (a trigger rejects both), and it is scoped to money movement.
+    """
+    __tablename__ = 'mapd_audit_logs'
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type = sa.Column(sa.String(50), nullable=False, index=True)
+    entity_type = sa.Column(sa.String(50))
+    entity_id = sa.Column(UUID(as_uuid=True))
+    payment_id = sa.Column(UUID(as_uuid=True), index=True)
+    settlement_id = sa.Column(UUID(as_uuid=True), index=True)
+    actor_user_id = sa.Column(UUID(as_uuid=True))
+    actor_label = sa.Column(sa.String(255))
+    detail = sa.Column(JSONB)
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now(),
+                           index=True)

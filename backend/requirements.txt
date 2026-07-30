@@ -10,6 +10,11 @@ cryptography
 psycopg2-binary
 pydantic[email]
 python-dotenv
+# zoneinfo needs an IANA database. The Debian base image ships one, but a
+# Windows dev machine does not -- and without it every accounting date lookup
+# (app.services.posting.business_date) raises rather than silently dating
+# entries in UTC. Pinning the data here makes the behaviour the same everywhere.
+tzdata
 httpx
 pytest
 pytest-asyncio

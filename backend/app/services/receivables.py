@@ -192,12 +192,29 @@ async def record_payment(
     from app.services.posting import post_customer_payment
     await post_customer_payment(session, payment_id=payment_id)
 
+    # Distribute the receipt to each product's designated account (MAPD).
+    #
+    # This is the ONLY automatic entry point, and it is here rather than in the
+    # API handlers because every route that takes customer money -- mark-paid,
+    # payment tracking, the public order portal -- funnels through this
+    # function. Hooking the handlers instead would guarantee that one of them
+    # eventually got missed.
+    #
+    # It reports rather than raises: the payment is a fact about money that has
+    # already changed hands, and a suspended destination account is not a
+    # reason to refuse to record it. Failed distributions are queued and
+    # retried; see app.services.settlement.
+    from app.services.settlement import distribute_payment_safely
+    settlement = await distribute_payment_safely(
+        session, payment_id=payment_id)
+
     return {
         "payment_id": payment_id,
         "amount": amt,
         "total_paid": paid,
         "balance": balance,
         "status": status,
+        "settlement": settlement,
     }
 
 
@@ -212,6 +229,29 @@ async def delete_payment(session: AsyncSession, *, payment_id: UUID) -> dict:
 
     invoice_id = row.invoice_id
     await _lock_invoice(session, invoice_id)
+
+    # A distributed payment cannot simply vanish: its money has already been
+    # allocated to product accounts and posted to the ledger. Deleting the row
+    # would leave settlement_details pointing at a payment that never happened
+    # -- which the foreign key would reject anyway, with a message nobody can
+    # act on. Say what to do instead.
+    settled = (await session.execute(
+        text("""SELECT settlement_reference FROM settlements
+                 WHERE payment_id = :pid
+                   AND status IN ('PENDING','COMPLETED')
+                 LIMIT 1"""),
+        {"pid": str(payment_id)},
+    )).first() if (await session.execute(
+        text("SELECT to_regclass('public.settlements') IS NOT NULL")
+    )).scalar() else None
+    if settled is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"This payment has been distributed (settlement "
+                    f"{settled.settlement_reference}). Reverse the settlement "
+                    f"first so the allocation is unwound on the record, then "
+                    f"remove the payment."))
+
     await session.execute(
         text("DELETE FROM payments WHERE id = :pid"), {"pid": str(payment_id)})
 
