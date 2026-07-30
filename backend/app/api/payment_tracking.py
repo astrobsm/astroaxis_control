@@ -8,7 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func, and_
 from app.db import get_session
 from app.services.receivables import (
-    record_payment, delete_payment as delete_payment_svc,
+    # Both of these are aliased because the ROUTE HANDLERS below are named
+    # record_payment and delete_payment. A module-level def shadows an import
+    # of the same name, so the un-aliased version resolved to the handler
+    # itself: `record_payment(session, invoice_id=invoice_id, ...)` bound
+    # `session` positionally to the handler's own `invoice_id` parameter and
+    # then got it again by keyword -- "got multiple values for argument
+    # 'invoice_id'" -- so no payment could be recorded from this screen at all.
+    record_payment as record_payment_svc,
+    delete_payment as delete_payment_svc,
     recompute_invoice_paid, reconciliation_report,
     revenue_between, outstanding_receivables, ensure_invoice_for_order)
 from app.models import Invoice, InvoiceLine, Payment, SalesOrder, SalesOrderLine, Customer, Product, StockLevel, StockMovement
@@ -350,7 +358,7 @@ async def record_payment(
         # leaving twice the invoice total in `payments` while paid_amount
         # showed the correct figure. profits.py reads payments, so revenue
         # doubled on that sale with nothing to indicate why.
-        result = await record_payment(
+        result = await record_payment_svc(
             session,
             invoice_id=invoice_id,
             amount=amount,
