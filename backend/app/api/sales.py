@@ -18,6 +18,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 import os
 
 from app.db import get_session
+from app.services.customer_debt import (
+    invoice_statement, outstanding_for_customer, to_floats)
 from app.services.receivables import (
     ensure_invoice_for_order, record_payment, recompute_invoice_paid, money)
 from app.services.inventory import apply_stock_movement
@@ -493,61 +495,58 @@ async def list_sales_orders(
 @router.get('/customer/{customer_id}/unpaid')
 async def get_customer_unpaid_orders(
     customer_id: UUID,
+    exclude_order_id: Optional[UUID] = Query(None),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get all unpaid/partial orders for a customer with line-item details"""
+    """What a customer owes, per document, with line detail.
+
+    Now backed by app.services.customer_debt so this agrees with the printed
+    invoice. It previously summed each unpaid order's FULL total, which meant a
+    customer who had paid ₦99,000 of a ₦100,000 order was shown as owing the
+    whole ₦100,000 -- and it read `payment_status` (a denormalised flag) rather
+    than the payments themselves, so a part-paid order that had not had its
+    flag resynced was counted at full value or missed entirely. It also ignored
+    legacy (pre-ERP) debts completely.
+
+    `total_outstanding` is now the sum of real balances. The response keeps its
+    original keys so existing callers keep working, with `balance` and
+    `paid_amount` added per row -- `total_amount` remains the document's face
+    value, which is not what is owed on a part-paid one.
+    """
     try:
-        # Verify customer exists
-        cust_result = await session.execute(
-            select(Customer).where(Customer.id == customer_id)
-        )
-        customer = cust_result.scalars().first()
-        if not customer:
-            raise HTTPException(status_code=404, detail="Customer not found")
+        debt = await outstanding_for_customer(
+            session, customer_id=customer_id, exclude_order_id=exclude_order_id)
 
-        # Fetch unpaid and partial orders
-        result = await session.execute(
-            select(SalesOrder)
-            .options(selectinload(SalesOrder.lines).selectinload(SalesOrderLine.product))
-            .where(
-                SalesOrder.customer_id == customer_id,
-                SalesOrder.payment_status.in_(['unpaid', 'partial']),
-                SalesOrder.status != 'cancelled'
-            )
-            .order_by(SalesOrder.order_date.desc())
-        )
-        orders = result.scalars().all()
-
-        unpaid_orders = []
-        total_outstanding = 0.0
-        for order in orders:
-            order_total = float(order.total_amount or 0)
-            total_outstanding += order_total
-            lines_desc = []
-            for line in order.lines:
-                product_name = line.product.name if line.product else 'Unknown Product'
-                lines_desc.append({
-                    "product_name": product_name,
-                    "quantity": float(line.quantity),
-                    "unit_price": float(line.unit_price),
-                    "line_total": float(line.quantity * line.unit_price)
-                })
-            unpaid_orders.append({
-                "order_id": str(order.id),
-                "order_number": order.order_number,
-                "order_date": str(order.order_date) if order.order_date else None,
-                "payment_status": order.payment_status,
-                "total_amount": order_total,
-                "notes": order.notes,
-                "lines": lines_desc
-            })
+        unpaid_orders = [
+            {
+                "order_id": it["id"],
+                "order_number": it["reference"],
+                "order_date": it["date"],
+                "payment_status": it["status"],
+                "total_amount": it["original_amount"],
+                "paid_amount": it["paid_amount"],
+                "balance": it["balance"],
+                "age_days": it["age_days"],
+                "kind": it["kind"],
+                "invoice_number": it["invoice_number"],
+                "notes": it["description"],
+                "lines": it["lines"],
+            }
+            for it in debt["items"]
+        ]
 
         return {
-            "customer_id": str(customer_id),
-            "customer_name": customer.name,
+            "customer_id": debt["customer_id"],
+            "customer_name": debt["customer_name"],
             "unpaid_orders": unpaid_orders,
-            "total_outstanding": total_outstanding,
-            "count": len(unpaid_orders)
+            "total_outstanding": float(debt["total_outstanding"]),
+            "orders_outstanding": float(debt["orders_outstanding"]),
+            "legacy_outstanding": float(debt["legacy_outstanding"]),
+            "aging": {k: float(v) for k, v in debt["aging"].items()},
+            "oldest_days": debt["oldest_days"],
+            "credit_limit": float(debt["credit_limit"]),
+            "credit_limit_exceeded": debt["credit_limit_exceeded"],
+            "count": debt["count"],
         }
     except HTTPException:
         raise
@@ -867,8 +866,12 @@ async def generate_invoice_pdf(
             ('LINEBELOW', (0, -3), (-1, -3), 2, colors.black),
         ]))
         story.append(items_table)
+
+        statement = await invoice_statement(session, order_id=order_id)
+        story.extend(_statement_pdf_elements(statement, styles))
+
         story.append(Spacer(1, 0.5*inch))
-        
+
         # Payment Information Section
         payment_info = """
         <b>PAYMENT INFORMATION</b><br/>
@@ -1350,8 +1353,16 @@ async def generate_invoice(
             ('GRID', (0, 0), (-1, -1), 1, colors.black)
         ]))
         elements.append(table)
+
+        # Everything this customer already owed, and the single figure to pay.
+        # Fetched here rather than passed in so every route that produces this
+        # PDF gets it -- there is no code path that prints the invoice without
+        # the balance the customer is actually being asked for.
+        statement = await invoice_statement(session, order_id=order_id)
+        elements.extend(_statement_pdf_elements(statement, styles))
+
         elements.append(Spacer(1, 30))
-        
+
         # Payment terms
         payment_terms = """
         <b>Payment Terms:</b><br/>
@@ -1392,6 +1403,175 @@ async def generate_invoice(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Outstanding-debt statement, rendered once for every invoice format
+# ---------------------------------------------------------------------------
+#
+# Built here rather than inside each endpoint because there are three invoice
+# formats (two A4 PDFs and a thermal print) and a customer who is quoted three
+# different amounts payable will not pay any of them.
+#
+# The statement NEVER changes the invoice total. It is a separate section, the
+# way a statement of account is -- see app.services.customer_debt for why
+# folding prior debt into the invoice total would corrupt revenue, the ledger
+# and MAPD's allocation.
+
+def _naira(value) -> str:
+    return f'₦{float(value or 0):,.2f}'
+
+
+def _statement_pdf_elements(stmt: dict, styles) -> list:
+    """ReportLab flowables for the previous-balance section. Empty if nothing owed."""
+    if stmt["previous_outstanding"] <= 0:
+        return []
+
+    elements = [Spacer(1, 16)]
+    heading = Paragraph(
+        f'<b>PREVIOUS OUTSTANDING BALANCE</b> '
+        f'<font size="8" color="#666666">'
+        f'(as at {stmt["as_of"]}, excludes this invoice)</font>',
+        styles['Heading3'])
+    elements.append(heading)
+    elements.append(Spacer(1, 6))
+
+    rows = [['Ref', 'Date', 'Description', 'Invoiced', 'Paid', 'Balance']]
+    for it in stmt["previous_items"]:
+        # A legacy debt has no product lines, so its description carries the
+        # detail. An order's detail is its products.
+        if it["kind"] == "LEGACY":
+            desc = (it["description"] or 'Brought-forward debt')[:38]
+        else:
+            names = ', '.join(
+                f'{ln["product_name"]} x{ln["quantity"]:g}'
+                for ln in it["lines"][:3])
+            if len(it["lines"]) > 3:
+                names += f' +{len(it["lines"]) - 3} more'
+            desc = (names or 'No line detail')[:38]
+        age = f' ({it["age_days"]}d)' if it["age_days"] is not None else ''
+        rows.append([
+            Paragraph(f'<font size="7">{it["reference"]}</font>', styles['Normal']),
+            f'{(it["date"] or "")[:10]}{age}',
+            Paragraph(f'<font size="7">{desc}</font>', styles['Normal']),
+            _naira(it["original_amount"]),
+            _naira(it["paid_amount"]),
+            _naira(it["balance"]),
+        ])
+    rows.append(['', '', '', '', 'PREVIOUS BALANCE:',
+                 _naira(stmt["previous_outstanding"])])
+
+    table = Table(rows, colWidths=[0.95*inch, 1.05*inch, 1.9*inch,
+                                   0.95*inch, 0.85*inch, 0.95*inch])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#92400e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BACKGROUND', (0, 1), (-1, -2), colors.HexColor('#fffbeb')),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fde68a')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#a16207')),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    elements.append(table)
+
+    # Aging: the first thing queried about an old balance is how old it is.
+    aging = {k: v for k, v in stmt["aging"].items() if v > 0}
+    if aging:
+        labels = {'current': 'Current', 'days_1_30': '1-30 days',
+                  'days_31_60': '31-60 days', 'days_61_90': '61-90 days',
+                  'days_over_90': 'Over 90 days'}
+        elements.append(Spacer(1, 5))
+        elements.append(Paragraph(
+            '<font size="8"><b>Age of balance:</b> '
+            + ' &nbsp;|&nbsp; '.join(
+                f'{labels.get(k, k)}: {_naira(v)}' for k, v in aging.items())
+            + '</font>', styles['Normal']))
+
+    # The single figure to settle.
+    elements.append(Spacer(1, 10))
+    payable = Table(
+        [['THIS INVOICE', _naira(stmt["invoice_due"])],
+         ['PREVIOUS BALANCE', _naira(stmt["previous_outstanding"])],
+         ['TOTAL AMOUNT PAYABLE', _naira(stmt["total_payable"])]],
+        colWidths=[4.2*inch, 1.6*inch])
+    payable.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 11.5),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fee2e2')),
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#991b1b')),
+        ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#991b1b')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(payable)
+
+    if stmt.get("credit_limit_exceeded"):
+        elements.append(Spacer(1, 6))
+        elements.append(Paragraph(
+            f'<font size="8" color="#991b1b"><b>Note:</b> total payable '
+            f'exceeds the agreed credit limit of '
+            f'{_naira(stmt["credit_limit"])}.</font>', styles['Normal']))
+
+    return elements
+
+
+def _statement_thermal_html(stmt: dict) -> str:
+    """The same statement for the 80mm thermal print. Empty if nothing owed."""
+    if stmt["previous_outstanding"] <= 0:
+        return ""
+
+    rows = ""
+    for it in stmt["previous_items"]:
+        age = f' ({it["age_days"]}d)' if it["age_days"] is not None else ''
+        rows += (f'<tr><td>{it["reference"]}<br>'
+                 f'<span style="font-size:8px">{(it["date"] or "")[:10]}{age}</span></td>'
+                 f'<td class="right">{_naira(it["balance"])}</td></tr>')
+
+    return f"""<div class="separator"></div>
+<div style="font-weight:bold;font-size:11px;margin-bottom:2px">PREVIOUS OUTSTANDING</div>
+<table class="items-table"><tbody>{rows}</tbody></table>
+<div style="font-size:11px;text-align:right;font-weight:bold">
+  Previous balance: {_naira(stmt["previous_outstanding"])}</div>
+<div class="separator"></div>
+<div style="font-size:11px;text-align:right">This invoice: {_naira(stmt["invoice_due"])}</div>
+<div style="font-size:11px;text-align:right">Previous: {_naira(stmt["previous_outstanding"])}</div>
+<div class="total-row">TOTAL PAYABLE: {_naira(stmt["total_payable"])}</div>"""
+
+
+@router.get('/customers/{customer_id}/outstanding')
+async def get_customer_outstanding(
+    customer_id: UUID,
+    exclude_order_id: Optional[UUID] = Query(
+        None, description="Leave this order out (use when invoicing it)"),
+    session: AsyncSession = Depends(get_session),
+):
+    """What this customer owes: every unsettled document, with real balances.
+
+    Balances are computed from the payments received, not from
+    `payment_status`, and legacy (pre-ERP) debts are included. This is the
+    figure the invoice prints, so the screen and the paper agree.
+    """
+    result = await outstanding_for_customer(
+        session, customer_id=customer_id, exclude_order_id=exclude_order_id)
+    return to_floats(result)
+
+
+@router.get('/orders/{order_id}/statement')
+async def get_order_statement(
+    order_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """This invoice plus everything previously owed, and the total payable."""
+    return to_floats(await invoice_statement(session, order_id=order_id))
 
 
 def _thermal_styles():
@@ -1521,6 +1701,9 @@ async def thermal_invoice(order_id: UUID, session: AsyncSession = Depends(get_se
                 <td class="right">&#8358;{float(line.line_total):,.2f}</td>
             </tr>"""
 
+        statement = await invoice_statement(session, order_id=order_id)
+        statement_html = _statement_thermal_html(statement)
+
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Invoice {order.order_number}</title>
 <style>{_thermal_styles()}</style></head><body>
@@ -1539,6 +1722,7 @@ async def thermal_invoice(order_id: UUID, session: AsyncSession = Depends(get_se
     <tbody>{items_rows}</tbody>
 </table>
 <div class="total-row">TOTAL DUE: &#8358;{float(order.total_amount):,.2f}</div>
+{statement_html}
 <div class="separator"></div>
 <div class="payment-info">
     <strong>Payment Terms:</strong><br>

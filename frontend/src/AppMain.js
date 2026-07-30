@@ -6,6 +6,7 @@ import Geomap from './Geomap';
 import RegulatoryCompliance from './RegulatoryCompliance';
 import NetworkManagementDashboard from './NetworkManagementDashboard';
 import AccountingSuite from './AccountingSuite';
+import PaymentDistribution from './PaymentDistribution';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -2244,13 +2245,32 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  if (!res.ok) throw new Error((await res.json()).detail || 'Failed to create order');
  
  const result = await res.json();
- // Auto-download invoice or receipt based on payment status
- if (forms.salesOrder.payment_status === 'paid' && result.id) {
- await downloadReceipt(result.id);
+ // The endpoint returns ApiResponse {success, message, data} and the order is
+ // in `data`. This read `result.id`, which is always undefined, so it fell
+ // through to the plain notice every time and neither the receipt nor the
+ // invoice was ever downloaded automatically.
+ const newOrder = result.data || result;
+ const newOrderId = newOrder && newOrder.id;
+ if (forms.salesOrder.payment_status === 'paid' && newOrderId) {
+ await downloadReceipt(newOrderId);
  notify('Sales order created and receipt downloaded', 'success');
- } else if (result.id) {
- await downloadInvoice(result.id);
- notify('Sales order created and invoice downloaded', 'success');
+ } else if (newOrderId) {
+ await downloadInvoice(newOrderId);
+ // Report the same total payable the invoice PDF prints, so the operator
+ // can tell the customer the figure without opening the file.
+ let msg = 'Sales order created and invoice downloaded';
+ let tone = 'success';
+ try {
+ const sres = await authedFetch(`/api/sales/orders/${newOrderId}/statement`);
+ if (sres.ok) {
+ const st = await sres.json();
+ if ((st.previous_outstanding || 0) > 0) {
+ msg = `Invoice downloaded. This invoice ${formatCurrency(st.invoice_due)} + previous balance ${formatCurrency(st.previous_outstanding)} = TOTAL PAYABLE ${formatCurrency(st.total_payable)}`;
+ tone = 'warning';
+ }
+ }
+ } catch (_e) { /* the invoice already carries the figure; keep the plain notice */ }
+ notify(msg, tone);
  } else {
  notify('Sales order created', 'success');
  }
@@ -3148,7 +3168,8 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        ['logistics','Logistics','truck'],['marketing','Marketing','trendup'],
      ]],
      ['Finance', [
-       ['accounting','Accounting','bank'],['financial','Financial','wallet'],
+       ['accounting','Accounting','bank'],['distribution','Payment Distribution','split'],
+       ['financial','Financial','wallet'],
        ['profits','Profits','trendup'],['reports','Reports','file'],
      ]],
      ['People', [
@@ -3184,9 +3205,10 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      comms:'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z', bell:'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
      key:'M15 7a4 4 0 1 0-4 4l-6 6v3h3l6-6a4 4 0 0 0 1-7z', plug:'M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5',
      map:'M9 3 3 6v15l6-3 6 3 6-3V3l-6 3zM9 3v15M15 6v15',
+     split:'M3 12h4l3-7 4 14 3-7h4M3 5h.01M3 19h.01',
    };
    const visible = (m) => {
-     if (['letters','profits','accounting','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
+     if (['letters','profits','accounting','distribution','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
        return !currentUser || currentUser.role === 'admin';
      if (!currentUser || currentUser.role === 'admin') return true;
      if (m === 'dashboard') return true;
@@ -9094,6 +9116,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <AccountingSuite />
  )}
 
+ {/* Multi-Account Payment Distribution (MAPD) */}
+ {activeModule === 'distribution' && (
+ <PaymentDistribution />
+ )}
+
  {/* Settings */}
  {activeModule === 'settings' && (
  <div className="module-content">
@@ -11538,35 +11565,59 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <div className="form-group"><button type="button" className="btn btn-secondary" onClick={()=>openForm('customer')} style={{marginTop:'1.5rem'}}>New Customer</button></div>
  </div>
 
- {/* Customer Unpaid Orders Alert */}
- {customerUnpaidOrders && (
+ {/* Customer outstanding debt — the same figures the invoice PDF prints.
+     Balances come from payments received, not from payment_status, and
+     include legacy (pre-ERP) debts. */}
+ {customerUnpaidOrders && (() => {
+ const draftTotal = (forms.salesOrder.lines||[]).reduce((s,l)=>s + (Number(l.quantity)||0)*(Number(l.unit_price)||0), 0);
+ const previous = Number(customerUnpaidOrders.total_outstanding)||0;
+ const agingLabels = {current:'Current', days_1_30:'1-30d', days_31_60:'31-60d', days_61_90:'61-90d', days_over_90:'Over 90d'};
+ const aging = Object.entries(customerUnpaidOrders.aging||{}).filter(([,v])=>Number(v)>0);
+ return (
  <div style={{background:'#fff3cd',border:'1px solid #ffc107',borderRadius:8,padding:'12px 16px',marginBottom:12}}>
  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
  <strong style={{color:'#856404',fontSize:15}}>Outstanding Balance for {customerUnpaidOrders.customer_name}</strong>
  <span style={{background:'#dc3545',color:'#fff',padding:'4px 12px',borderRadius:20,fontWeight:'bold',fontSize:14}}>
- {formatCurrency(customerUnpaidOrders.total_outstanding)}
+ {formatCurrency(previous)}
  </span>
  </div>
  <p style={{color:'#856404',margin:'0 0 8px',fontSize:13}}>
- This customer has {customerUnpaidOrders.count} unpaid transaction{customerUnpaidOrders.count > 1 ? 's' : ''}. Details below:
+ {customerUnpaidOrders.count} unsettled document{customerUnpaidOrders.count > 1 ? 's' : ''}
+ {customerUnpaidOrders.legacy_outstanding > 0 && <> — including {formatCurrency(customerUnpaidOrders.legacy_outstanding)} brought forward</>}
+ {customerUnpaidOrders.oldest_days != null && <> — oldest {customerUnpaidOrders.oldest_days} days</>}
+ . This appears on the invoice.
  </p>
- <div style={{maxHeight:200,overflowY:'auto'}}>
- {customerUnpaidOrders.unpaid_orders.map((order, oidx) => (
+ {customerUnpaidOrders.credit_limit_exceeded && (
+ <div style={{background:'#f8d7da',border:'1px solid #dc3545',borderRadius:6,padding:'6px 10px',marginBottom:8,fontSize:12,color:'#721c24'}}>
+ <strong>Credit limit exceeded.</strong> Outstanding {formatCurrency(previous)} is above the agreed limit of {formatCurrency(customerUnpaidOrders.credit_limit)}.
+ </div>
+ )}
+ <div style={{maxHeight:220,overflowY:'auto'}}>
+ {customerUnpaidOrders.unpaid_orders.map((order) => (
  <div key={order.order_id} style={{background:'#fff',border:'1px solid #ffe0b2',borderRadius:6,padding:'8px 12px',marginBottom:6}}>
- <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+ <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}}>
  <span style={{fontWeight:'bold',color:'#333',fontSize:13}}>
  {order.order_number}
+ {order.kind === 'LEGACY' && <span style={{marginLeft:6,background:'#6c757d',color:'#fff',padding:'1px 6px',borderRadius:8,fontSize:10}}>BROUGHT FORWARD</span>}
  </span>
  <span style={{fontSize:12,color:'#666'}}>
  {order.order_date ? new Date(order.order_date).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}) : ''}
+ {order.age_days != null && <> · {order.age_days}d</>}
+ </span>
+ <span style={{fontSize:12,color:'#666'}}>
+ Invoiced {formatCurrency(order.total_amount)}
+ {order.paid_amount > 0 && <> · paid {formatCurrency(order.paid_amount)}</>}
  </span>
  <span style={{fontWeight:'bold',color:'#c0392b',fontSize:13}}>
- {formatCurrency(order.total_amount)}
+ {formatCurrency(order.balance)}
  </span>
  <span style={{background:order.payment_status==='partial'?'#e67e22':'#e74c3c',color:'#fff',padding:'2px 8px',borderRadius:10,fontSize:11,textTransform:'uppercase'}}>
  {order.payment_status}
  </span>
  </div>
+ {order.kind === 'LEGACY' ? (
+ order.notes && <div style={{fontSize:12,color:'#555'}}>{order.notes}</div>
+ ) : (
  <div style={{fontSize:12,color:'#555'}}>
  {order.lines.map((line, lidx) => (
  <div key={lidx} style={{display:'flex',justifyContent:'space-between',padding:'1px 0',borderBottom:lidx < order.lines.length-1 ? '1px dotted #eee' : 'none'}}>
@@ -11575,15 +11626,30 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  ))}
  </div>
+ )}
  </div>
  ))}
  </div>
- <div style={{borderTop:'2px solid #ffc107',paddingTop:8,marginTop:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
- <strong style={{color:'#856404'}}>Total Outstanding Debt:</strong>
- <strong style={{color:'#dc3545',fontSize:16}}>{formatCurrency(customerUnpaidOrders.total_outstanding)}</strong>
- </div>
+ {aging.length > 0 && (
+ <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:11,color:'#856404',marginTop:8}}>
+ {aging.map(([k,v]) => <span key={k}><strong>{agingLabels[k]||k}:</strong> {formatCurrency(v)}</span>)}
  </div>
  )}
+ <div style={{borderTop:'2px solid #ffc107',paddingTop:8,marginTop:8,fontSize:13}}>
+ <div style={{display:'flex',justifyContent:'space-between',color:'#856404'}}>
+ <span>Previous outstanding balance</span><span>{formatCurrency(previous)}</span>
+ </div>
+ <div style={{display:'flex',justifyContent:'space-between',color:'#856404'}}>
+ <span>This order</span><span>{formatCurrency(draftTotal)}</span>
+ </div>
+ <div style={{display:'flex',justifyContent:'space-between',borderTop:'1px solid #ffc107',marginTop:6,paddingTop:6}}>
+ <strong style={{color:'#856404'}}>TOTAL PAYABLE</strong>
+ <strong style={{color:'#dc3545',fontSize:16}}>{formatCurrency(previous + draftTotal)}</strong>
+ </div>
+ </div>
+ </div>
+ );
+ })()}
 
  <div className="form-row">
  <div className="form-group">
