@@ -128,6 +128,32 @@ async def cancel_order_effects(session: AsyncSession, order: SalesOrder,
                        order_number=order.order_number, reason=reason,
                        created_by=order.created_by)
 
+    # 2b. Unwind any MAPD distribution of this order's payments.
+    #
+    # reverse_sale reverses the 'sales' and 'payments' entries but knows
+    # nothing about 'settlement' ones. Without this, cancelling an order whose
+    # payment had already been distributed left each product account still
+    # holding its share of money for a sale that no longer exists, while the
+    # bank account was credited back by the payment reversal -- the ledger
+    # would still balance, but the destination accounts would be permanently
+    # overstated and nothing would say why.
+    #
+    # Imported lazily: settlement imports posting/ledger, and keeping it out of
+    # this module's import graph avoids a cycle if that ever changes.
+    from app.services.settlement import mapd_schema_ready, refund_settlement
+    if await mapd_schema_ready(session):
+        settlements = (await session.execute(
+            text("""SELECT s.id FROM settlements s
+                     JOIN payments p ON p.id = s.payment_id
+                     JOIN invoices i ON i.id = p.invoice_id
+                    WHERE i.sales_order_id = :oid AND s.status = 'COMPLETED'"""),
+            {"oid": str(order.id)},
+        )).fetchall()
+        for row in settlements:
+            await refund_settlement(
+                session, settlement_id=row.id, reason=reason,
+                created_by=order.created_by, actor_label="order cancelled")
+
     # 3. Drop this order's invoices out of receivables.
     await session.execute(
         text("UPDATE invoices SET status = 'cancelled' "

@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, and_, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from decimal import Decimal
@@ -21,6 +22,91 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix='/api/products', tags=['Products'])
+
+# ---------------------------------------------------------------------------
+# Price-list maintenance
+# ---------------------------------------------------------------------------
+#
+# `product_pricing` carries a UNIQUE index on (product_id, lower(unit)) -- one
+# price row per unit per product, compared case-insensitively so PACKET and
+# packet are the same unit.
+#
+# That index is why editing a price used to fail with a 500. The old code
+# deleted every existing row and added the replacements in the SAME flush, and
+# SQLAlchemy's unit of work emits INSERTs before DELETEs -- so the new PACKET
+# row hit the index while the old PACKET row was still there:
+#
+#     UniqueViolationError: duplicate key value violates unique constraint
+#     "uq_product_pricing_product_unit"
+#
+# Updating the rows in place instead removes the collision entirely rather than
+# racing the flush order, and it keeps each row's id stable so price history is
+# not churned on every edit.
+
+def _normalise_pricing(pricing_data) -> list[dict]:
+    """Validate an incoming price list and return it as plain dicts.
+
+    Rejects duplicate units up front. Sending PACKET twice would otherwise
+    reach the database and come back as an opaque 500; the operator needs to be
+    told which unit they repeated.
+    """
+    rows = []
+    seen: dict[str, str] = {}
+    for item in pricing_data or []:
+        row = item.model_dump() if hasattr(item, 'model_dump') else dict(item)
+        unit = (row.get('unit') or '').strip()
+        if not unit:
+            raise HTTPException(
+                status_code=400,
+                detail="Every price row needs a unit (e.g. PACKET, CARTON).")
+        key = unit.lower()
+        if key in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unit '{unit}' appears more than once in the price "
+                       f"list (already listed as '{seen[key]}'). Each unit can "
+                       f"have only one price.")
+        seen[key] = unit
+        row['unit'] = unit
+        rows.append(row)
+    return rows
+
+
+async def _apply_pricing(session: AsyncSession, product_id, pricing_data) -> None:
+    """Make the stored price list match the submitted one, in place.
+
+    Rows for a unit that already exists are UPDATED, genuinely new units are
+    inserted, and units no longer listed are removed. Nothing is deleted and
+    re-inserted under the same key, so the unique index is never in play.
+    """
+    rows = _normalise_pricing(pricing_data)
+
+    existing = (await session.execute(
+        select(ProductPricing).where(ProductPricing.product_id == product_id)
+    )).scalars().all()
+    by_unit = {(p.unit or '').strip().lower(): p for p in existing}
+    submitted = {r['unit'].lower() for r in rows}
+
+    for row in rows:
+        current = by_unit.get(row['unit'].lower())
+        if current is not None:
+            current.unit = row['unit']          # keep the operator's casing
+            current.cost_price = row['cost_price']
+            current.retail_price = row['retail_price']
+            current.wholesale_price = row['wholesale_price']
+        else:
+            session.add(ProductPricing(
+                product_id=product_id,
+                unit=row['unit'],
+                cost_price=row['cost_price'],
+                retail_price=row['retail_price'],
+                wholesale_price=row['wholesale_price'],
+            ))
+
+    for unit_key, current in by_unit.items():
+        if unit_key not in submitted:
+            await session.delete(current)
+
 
 @router.post('/', response_model=ApiResponse)
 async def create_product(
@@ -43,20 +129,10 @@ async def create_product(
     session.add(new_product)
     await session.flush()  # Get the product ID before adding pricing
     
-    # Add pricing entries
-    if pricing_data:
-        for pricing_item in pricing_data:
-            # Convert Pydantic model to dict if needed
-            pricing_dict = pricing_item.model_dump() if hasattr(pricing_item, 'model_dump') else pricing_item
-            new_pricing = ProductPricing(
-                product_id=new_product.id,
-                unit=pricing_dict['unit'],
-                cost_price=pricing_dict['cost_price'],
-                retail_price=pricing_dict['retail_price'],
-                wholesale_price=pricing_dict['wholesale_price']
-            )
-            session.add(new_pricing)
-    
+    # Add pricing entries. Shared with the update path so a duplicate unit is
+    # refused the same way whether the product is new or being edited.
+    await _apply_pricing(session, new_product.id, pricing_data)
+
     await session.commit()
     
     # Reload product with pricing relationship
@@ -285,42 +361,39 @@ async def update_product(
         if existing.scalar():
             raise HTTPException(status_code=400, detail=f"Product with SKU '{product_data.sku}' already exists")
     
-    # Handle pricing updates if provided
-    pricing_data = None
-    if hasattr(product_data, 'pricing') and product_data.pricing is not None:
-        pricing_data = product_data.pricing
-        # Delete existing pricing
-        await session.execute(
-            select(ProductPricing).where(ProductPricing.product_id == product_id)
-        )
-        existing_pricing = await session.execute(
-            select(ProductPricing).where(ProductPricing.product_id == product_id)
-        )
-        for pricing in existing_pricing.scalars():
-            await session.delete(pricing)
-        
-        # Add new pricing
-        if pricing_data:
-            for pricing_item in pricing_data:
-                # Convert Pydantic model to dict if needed
-                pricing_dict = pricing_item.model_dump() if hasattr(pricing_item, 'model_dump') else pricing_item
-                new_pricing = ProductPricing(
-                    product_id=product_id,
-                    unit=pricing_dict['unit'],
-                    cost_price=pricing_dict['cost_price'],
-                    retail_price=pricing_dict['retail_price'],
-                    wholesale_price=pricing_dict['wholesale_price']
-                )
-                session.add(new_pricing)
-    
+    # Update the price list in place. Only touched when `pricing` is actually
+    # present in the request: a caller editing just the name must not have the
+    # product's whole price list wiped because the key was absent.
+    if product_data.pricing is not None:
+        await _apply_pricing(session, product_id, product_data.pricing)
+
     # Update fields
     update_data = product_data.model_dump(exclude_unset=True, exclude={'pricing'})
     for field, value in update_data.items():
         setattr(product, field, value)
-    
-    await session.commit()
-    await session.refresh(product)
-    
+
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        # Surface the cause instead of a bare 500. The operator can act on
+        # "that unit is already priced"; they cannot act on a stack trace.
+        if 'uq_product_pricing_product_unit' in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="Each unit can only be priced once for a product. "
+                       "Remove the duplicate unit and save again.")
+        raise HTTPException(
+            status_code=400, detail=f"Could not update product: {e.orig}")
+
+    # Re-read with pricing eagerly loaded rather than refresh(): the response
+    # serialises product.pricing, and a lazy load on an async session raises
+    # MissingGreenlet.
+    product = (await session.execute(
+        select(Product).options(selectinload(Product.pricing))
+        .where(Product.id == product_id)
+    )).scalar()
+
     return ApiResponse(
         message=f"Product '{product.name}' updated successfully",
         data=ProductSchema.model_validate(product)

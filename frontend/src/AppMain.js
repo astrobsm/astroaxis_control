@@ -480,8 +480,12 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  fetchUpcomingBirthdays();
  }, []);
 
- // Fetch data when switching to new modules
- useEffect(() => {
+ // Refresh whatever the user is currently looking at.
+ //
+ // Extracted from the activeModule effect so the same work can be re-run
+ // without switching modules. Everything here already existed; only the
+ // ability to call it again is new.
+ const refreshActiveModule = useCallback(() => {
  if (activeModule === 'consumables') { fetchConsumables(); fetchLowStockConsumables(); }
  if (activeModule === 'production') { fetchAllBoms(); }
  if (activeModule === 'productionCompletions') { fetchProdCompletions(); fetchConsumables(); }
@@ -503,6 +507,41 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  authedFetch('/api/announcements/policy').then(r=>r.ok?r.json():null).then(setAnnouncementPolicy).catch(()=>{});
  }
  }, [activeModule]);
+
+ // Load the module's data when it is opened.
+ useEffect(() => { refreshActiveModule(); }, [refreshActiveModule]);
+
+ // Keep the open screen current without polling.
+ //
+ // There was no refresh mechanism at all: utils/useDataSync.js implements
+ // polling, cross-tab BroadcastChannel and an SSE client, but nothing ever
+ // imported it, and the /api/events/stream endpoint it connects to was never
+ // built on the backend. So a screen showed whatever was true when it was
+ // opened -- prices, stock and outstanding balances all went stale while a
+ // second user changed them, and only a module switch or a page reload
+ // corrected it.
+ //
+ // Refreshing when the tab regains focus covers the case that actually
+ // matters (come back to the tab, see current data) at a fraction of the cost
+ // of an interval poller, which on a 1 GB droplet serving 1000-row payloads
+ // per module would be a real load for data that mostly is not changing. The
+ // 15s floor stops alt-tabbing from hammering the API.
+ useEffect(() => {
+ let lastRefresh = Date.now();
+ const MIN_GAP_MS = 15000;
+ const maybeRefresh = () => {
+ if (document.visibilityState !== 'visible') return;
+ if (Date.now() - lastRefresh < MIN_GAP_MS) return;
+ lastRefresh = Date.now();
+ refreshActiveModule();
+ };
+ window.addEventListener('focus', maybeRefresh);
+ document.addEventListener('visibilitychange', maybeRefresh);
+ return () => {
+ window.removeEventListener('focus', maybeRefresh);
+ document.removeEventListener('visibilitychange', maybeRefresh);
+ };
+ }, [refreshActiveModule]);
 
  // NOTE: Scheduled announcements are NOT played by a separate poller anymore.
  // The Company Radio service (below) is the single source of truth and the single
@@ -1424,15 +1463,35 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  }
 
  async function processSinglePayroll(staffId) {
+ // Runs the real payroll engine for ONE staff member.
+ //
+ // This used to POST /api/staff/payroll/calculate-v2, which the backend now
+ // returns 410 for -- deliberately. That calculator paid every staff member a
+ // hardcoded NGN 425/hour regardless of their configured rate and deducted
+ // nothing at all: no PAYE, no pension, no NHF, no NHIA. Under-deducted PAYE
+ // is recoverable from the COMPANY, so it was retired. The button was left
+ // pointing at it, so every click failed with a 410.
+ //
+ // /api/payroll/runs accepts staff_ids, reads each person's own pay
+ // structure, and applies the configured statutory deductions. It creates a
+ // DRAFT: nobody is paid and nothing is posted to the ledger until the run is
+ // approved, which is why this reports the run rather than downloading a
+ // payslip as though the money had moved.
  try {
  setPayrollProcessing(true);
- const payload = { staff_id: staffId, pay_period_start: payrollPeriod.start, pay_period_end: payrollPeriod.end };
- const res = await authedFetch('/api/staff/payroll/calculate-v2', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+ const payload = {
+ period_start: payrollPeriod.start,
+ period_end: payrollPeriod.end,
+ staff_ids: [staffId],
+ };
+ const res = await authedFetch('/api/payroll/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
  if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
- const payroll = await res.json();
- notify('Payroll calculated', 'success');
- // auto-download payslip
- await downloadPayslipPdf(payroll.id, '');
+ const run = await res.json();
+ if (!run.staff_paid) {
+ notify(`No payroll calculated — staff skipped: ${run.staff_skipped?.join(', ') || 'no pay structure configured'}`, 'error');
+ } else {
+ notify(`Draft run ${run.run_number}: gross ${formatCurrency(run.gross_total)}, deductions ${formatCurrency(run.deductions_total)}, net ${formatCurrency(run.net_total)}. Review the payslips, then approve to post it.`, 'success');
+ }
  fetchPayrollDashboard();
  fetchPayrollEntries();
  } catch (e) {
