@@ -3,7 +3,7 @@ import pytest_asyncio
 import sys
 import os
 import uuid
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from decimal import Decimal
 
@@ -60,7 +60,8 @@ async def test_products_crud():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
-    async with AsyncClient(app=app, base_url='http://test') as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
+                           headers=await create_test_user_headers()) as client:
         # Test CREATE product
         product_data = {
             "sku": "TEST-PROD-001",
@@ -106,7 +107,8 @@ async def test_products_crud():
 @pytest.mark.asyncio
 async def test_raw_materials_crud():
     """Test CRUD operations for raw materials"""
-    async with AsyncClient(app=app, base_url='http://test') as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
+                           headers=await create_test_user_headers()) as client:
         # Test CREATE raw material
         material_data = {
             "sku": "TEST-RM-001",
@@ -135,7 +137,8 @@ async def test_raw_materials_crud():
 @pytest.mark.asyncio
 async def test_warehouses_crud():
     """Test CRUD operations for warehouses"""
-    async with AsyncClient(app=app, base_url='http://test') as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
+                           headers=await create_test_user_headers()) as client:
         headers = await create_test_user_headers()
 
         # Test CREATE warehouse
@@ -190,7 +193,8 @@ async def test_warehouses_crud():
 @pytest.mark.asyncio
 async def test_stock_movements():
     """Test stock movement operations"""
-    async with AsyncClient(app=app, base_url='http://test') as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
+                           headers=await create_test_user_headers()) as client:
         headers = await create_test_user_headers()
 
         # First ensure we have a warehouse and raw material
@@ -264,7 +268,8 @@ async def test_stock_movements():
 @pytest.mark.asyncio
 async def test_api_error_handling():
     """Test API error handling"""
-    async with AsyncClient(app=app, base_url='http://test') as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
+                           headers=await create_test_user_headers()) as client:
         # Test 404 for non-existent product
         fake_id = "550e8400-e29b-41d4-a716-446655440000"
         response = await client.get(f'/api/products/{fake_id}')

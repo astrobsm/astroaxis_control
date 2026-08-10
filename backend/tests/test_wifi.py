@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 # Ensure we import the local app package
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -85,7 +85,7 @@ def test_encryption_round_trip():
 @pytest.mark.asyncio
 async def test_authenticate_success():
     uid, email = await create_user(password="GoodPass1!")
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.post(
             "/api/wifi/authenticate",
             json={"username": email, "password": "GoodPass1!",
@@ -101,7 +101,7 @@ async def test_authenticate_success():
 @pytest.mark.asyncio
 async def test_authenticate_wrong_password():
     uid, email = await create_user(password="GoodPass1!")
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.post(
             "/api/wifi/authenticate",
             json={"username": email, "password": "WrongPass"},
@@ -112,7 +112,7 @@ async def test_authenticate_wrong_password():
 @pytest.mark.asyncio
 async def test_authenticate_inactive_account_denied():
     uid, email = await create_user(password="GoodPass1!", is_active=False)
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.post(
             "/api/wifi/authenticate",
             json={"username": email, "password": "GoodPass1!"},
@@ -129,7 +129,7 @@ async def test_settings_requires_super_admin():
     token = auth_mod.create_access_token(
         data={"sub": str(uid), "email": email, "role": "sales_staff"}
     )
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.get(
             "/api/wifi/settings", headers={"Authorization": f"Bearer {token}"}
         )
@@ -140,7 +140,7 @@ async def test_settings_requires_super_admin():
 async def test_update_and_reveal_settings():
     uid, email = await create_user(role="admin")
     headers = admin_headers(uid, email)
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         res = await client.put(
             "/api/wifi/settings",
             headers=headers,
@@ -177,7 +177,7 @@ async def test_device_registration_limit_and_removal():
     # Admin sets max_devices = 1
     auid, aemail = await create_user(role="admin")
     aheaders = admin_headers(auid, aemail)
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         await client.put("/api/wifi/settings", headers=aheaders,
                          json={"max_devices": 1})
 
@@ -187,7 +187,7 @@ async def test_device_registration_limit_and_removal():
         data={"sub": str(uid), "email": email, "role": "sales_staff"}
     )
     eheaders = {"Authorization": f"Bearer {token}"}
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         r1 = await client.post(
             "/api/wifi/register-device", headers=eheaders,
             json={"device_name": "Phone", "device_mac": "AA:BB:CC:00:00:01"},
@@ -223,7 +223,7 @@ async def test_session_lifecycle_and_dashboard():
     aheaders = admin_headers(auid, aemail)
     uid, email = await create_user(password="GoodPass1!")
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         auth_res = await client.post(
             "/api/wifi/authenticate",
             json={"username": email, "password": "GoodPass1!",

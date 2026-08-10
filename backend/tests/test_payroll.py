@@ -344,8 +344,8 @@ async def test_loan_recovery_never_exceeds_outstanding(session):
     await session.execute(text("""
         INSERT INTO staff_deductions
             (staff_id, code, label, total_amount, amount_per_period,
-             amount_recovered)
-        VALUES (:s, 'LOAN', 'Staff loan', 100000, 30000, 90000)
+             amount_recovered, start_date)
+        VALUES (:s, 'LOAN', 'Staff loan', 100000, 30000, 90000, DATE '2026-01-01')
     """), {"s": str(sid)})
     await session.commit()
 
@@ -367,8 +367,8 @@ async def test_deductions_exceeding_gross_are_refused(session):
     sid = await make_staff(session, basic="50000")
     await session.execute(text("""
         INSERT INTO staff_deductions
-            (staff_id, code, label, total_amount, amount_per_period)
-        VALUES (:s, 'LOAN', 'Large loan', 500000, 200000)
+            (staff_id, code, label, total_amount, amount_per_period, start_date)
+        VALUES (:s, 'LOAN', 'Large loan', 500000, 200000, DATE '2026-01-01')
     """), {"s": str(sid)})
     await session.commit()
     st = (await session.execute(text(
@@ -496,8 +496,8 @@ async def test_approval_advances_loan_balance(session):
     sid = await make_staff(session, basic="500000")
     await session.execute(text("""
         INSERT INTO staff_deductions
-            (staff_id, code, label, total_amount, amount_per_period)
-        VALUES (:s, 'LOAN', 'Staff loan', 90000, 30000)
+            (staff_id, code, label, total_amount, amount_per_period, start_date)
+        VALUES (:s, 'LOAN', 'Staff loan', 90000, 30000, DATE '2026-01-01')
     """), {"s": str(sid)})
     await session.commit()
 

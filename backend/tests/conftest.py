@@ -41,6 +41,7 @@ import os
 from urllib.parse import urlparse
 
 import pytest
+import pytest_asyncio
 
 _SAFE_HOSTS = {"localhost", "127.0.0.1", "::1", "db", "postgres", ""}
 
@@ -113,3 +114,31 @@ def pytest_sessionstart(session):
         "  If you really intend to use the current DATABASE_URL, re-run with\n"
         "  ALLOW_TESTS_AGAINST_DATABASE_URL=1.\n"
     )
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_app_engine():
+    """Drop the application engine's pooled connections after every test.
+
+    `app.db.engine` is created once at import. pytest-asyncio runs each test on
+    a FRESH event loop, so any asyncpg connection left in the pool by one test
+    belongs to a loop that is closed by the time the next test borrows it. The
+    result is a cascade of
+
+        sqlalchemy.exc.InterfaceError: connection is closed
+
+    across every test after the first -- which reads like a dozen unrelated
+    failures rather than one lifecycle bug. Disposing between tests means each
+    one opens connections on its own loop.
+
+    Only affects the integration tests that use the app engine (test_wifi,
+    test_crud_apis, test_bom_cost). The rest build their own engine from
+    TEST_DATABASE_URL and are unaffected; disposing an already-idle pool is a
+    no-op.
+    """
+    yield
+    try:
+        from app import db as db_mod
+    except Exception:
+        return
+    await db_mod.engine.dispose()

@@ -163,6 +163,13 @@ async def create_raw_material(
     await session.commit()
     
     return {
+        # `success` matches the ApiResponse envelope every other create
+        # endpoint returns (see app/schemas.py). This one hand-builds its
+        # response because it inserts with raw SQL, and the key was simply
+        # left out -- so callers written against the common contract saw
+        # `undefined` and could not tell success from failure. Additive: no
+        # existing field changes.
+        "success": True,
         "message": f"Raw material '{row.name}' created successfully (SKU: {row.sku})",
         "data": _row_to_dict(row)
     }

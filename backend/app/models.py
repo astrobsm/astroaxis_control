@@ -84,6 +84,15 @@ class Product(Base):
 
 class ProductPricing(Base):
     __tablename__ = 'product_pricing'
+    # One price row per unit per product, compared case-insensitively so
+    # PACKET and packet cannot both be priced. Live in the database but
+    # previously undeclared here -- and it is the constraint the price-list
+    # update violated, so a test database built from this metadata could not
+    # have reproduced that bug.
+    __table_args__ = (
+        sa.Index('uq_product_pricing_product_unit',
+                 'product_id', sa.text('lower(unit)'), unique=True),
+    )
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'), nullable=False, index=True)
     unit = sa.Column(sa.String(50), nullable=False)
@@ -105,6 +114,21 @@ class RawMaterial(Base):
     reorder_level = sa.Column(sa.Numeric(18,6), default=0)
     unit_cost = sa.Column(sa.Numeric(18,2), nullable=False, default=0)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
+    # These six exist in the live table and app/api/raw_materials.py writes
+    # five of them, but they were never declared here -- they were added by
+    # ad-hoc scripts rather than a migration. The drift is not cosmetic: any
+    # database built from this metadata (Base.metadata.create_all, which the
+    # integration tests use) got a raw_materials table WITHOUT them, so the
+    # first insert failed with
+    #     UndefinedColumnError: column "category" of relation
+    #     "raw_materials" does not exist
+    # Declared here so the model describes the table that actually exists.
+    category = sa.Column(sa.String(100))
+    source = sa.Column(sa.String(100))
+    uom = sa.Column(sa.String(50))
+    reorder_point = sa.Column(sa.Integer)
+    rm_id = sa.Column(sa.String(64))
+    opening_stock = sa.Column(sa.Numeric(18,6))
 
 class BOM(Base):
     __tablename__ = 'boms'
@@ -161,6 +185,24 @@ class StockMovement(Base):
 
 class StockLevel(Base):
     __tablename__ = 'stock_levels'
+    # One balance row per (warehouse, item). Declared here because
+    # app.services.inventory upserts with INSERT ... ON CONFLICT against these
+    # index names -- a database built from this metadata without them fails
+    # with "there is no unique or exclusion constraint matching the ON CONFLICT
+    # specification". They exist in the live schema (migration
+    # k0123456789j_stock_ledger_integrity); the model simply never said so.
+    #
+    # Partial, because a row is either a product balance or a raw-material one:
+    # a plain two-column unique index would let (warehouse, NULL) repeat, since
+    # NULLs never compare equal.
+    __table_args__ = (
+        sa.Index('uq_stock_levels_wh_product', 'warehouse_id', 'product_id',
+                 unique=True,
+                 postgresql_where=sa.text('product_id IS NOT NULL')),
+        sa.Index('uq_stock_levels_wh_raw_material',
+                 'warehouse_id', 'raw_material_id', unique=True,
+                 postgresql_where=sa.text('raw_material_id IS NOT NULL')),
+    )
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     warehouse_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('warehouses.id'), nullable=False, index=True)
     product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'), index=True)
