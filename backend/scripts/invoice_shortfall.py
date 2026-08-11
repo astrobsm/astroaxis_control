@@ -155,7 +155,9 @@ async def analyse(s: AsyncSession, customer_like: str, shortfall: Decimal):
 
 async def apply(s: AsyncSession, order_number: str, sku: str,
                 qty: Decimal, unit_price: Decimal | None,
-                commit: bool, allow_no_stock: bool):
+                commit: bool, allow_no_stock: bool,
+                unit_override: str | None = None,
+                unit_cost: Decimal | None = None):
     order = (await s.execute(text("""
         SELECT so.id, so.order_number, so.customer_id, so.warehouse_id,
                so.order_date, so.total_amount, so.status, so.created_by,
@@ -186,7 +188,26 @@ async def apply(s: AsyncSession, order_number: str, sku: str,
         unit_price = money(row.retail_price)
         price_unit = row.unit
     else:
-        price_unit = product.unit
+        # Derive the unit FROM the price rather than defaulting to
+        # products.unit. A product priced per PCS at 700 and per BAGS at
+        # 14,000 would otherwise be written as "16 BAGS at 700" -- absurd on
+        # the customer's invoice, and worse, the stock movement would take 16
+        # bags off the shelf instead of 16 pieces.
+        match = (await s.execute(text("""
+            SELECT unit, retail_price, wholesale_price
+              FROM product_pricing
+             WHERE product_id = :p
+               AND (retail_price = :up OR wholesale_price = :up)
+             LIMIT 1
+        """), {"p": str(product.id), "up": str(unit_price)})).first()
+        if match is not None:
+            price_unit = match.unit
+        else:
+            price_unit = unit_override or product.unit
+            warn(f"{float(unit_price):,.2f} matches no price-list row for "
+                 f"{sku}; using unit {price_unit!r}")
+    if unit_override:
+        price_unit = unit_override
 
     line_total = money(qty * unit_price)
 
@@ -218,6 +239,22 @@ async def apply(s: AsyncSession, order_number: str, sku: str,
         s, line_id=line.id, table='sales_order_lines',
         product_id=product.id, quantity=qty,
         unit=price_unit or product.unit, warehouse_id=order.warehouse_id)
+
+    if unit_cost is not None:
+        # Explicit cost basis. Needed where weighted-average cost is unusable:
+        # this product is priced per BAGS and per PCS, sales lines do not
+        # record which, so both decrement one stock counter and the WAC lands
+        # between the two costs -- correct for neither. Costing a PCS sale at
+        # that blended figure books a loss that never happened.
+        await s.execute(text('''
+            UPDATE sales_order_lines
+               SET unit_cost = :uc, cost_total = :ct,
+                   cost_source = 'manual_unit_cost'
+             WHERE id = :l
+        '''), {"uc": str(unit_cost), "ct": str(money(unit_cost * qty)),
+               "l": str(line.id)})
+        info(f"cost basis overridden: {float(unit_cost):,.2f}/unit "
+             f"= {float(money(unit_cost * qty)):,.2f}")
 
     await s.execute(text(
         "UPDATE sales_orders SET total_amount = total_amount + :d WHERE id = :o"),
@@ -275,14 +312,62 @@ async def apply(s: AsyncSession, order_number: str, sku: str,
         ok("stock deducted (the goods had already left the warehouse)")
 
     # ---- 4. the ledger ---------------------------------------------------
-    from app.services.posting import posting_enabled
-    if posting_enabled():
-        from app.services.posting import post_sale
-        warn("posting is ENABLED -- the original sale entry is immutable, so "
-             "this adds a separate entry for the correction only")
-        info("review the ledger afterwards to confirm it reconciles")
-    else:
+    #
+    # With posting enabled the original sale already sits in the journal at
+    # its old total. Adding revenue to the order without a matching entry
+    # would leave the ledger quietly disagreeing with the order it is supposed
+    # to record. The original entry is immutable, so the correction is a
+    # SEPARATE balanced entry for the delta only, keyed on its own reference so
+    # re-running cannot post it twice.
+    from app.services.posting import (
+        ACC_COGS, ACC_FINISHED_GOODS, ACC_RECEIVABLE, ACC_SALES,
+        already_posted, business_date, posting_enabled)
+    if not posting_enabled():
         info("ledger posting is disabled; no journal entry written")
+    else:
+        reference = f"SHORTFALL-{order.order_number}"
+        if await already_posted(s, source_module="sales.shortfall",
+                                source_reference=reference):
+            warn(f"{reference} is already posted; not posting again")
+        else:
+            from app.services.ledger import Line, post_entry
+            cost = (await s.execute(text(
+                "SELECT cost_total, cost_source FROM sales_order_lines "
+                "WHERE id = :l"), {"l": str(line.id)})).first()
+            cost_total = money(cost.cost_total or 0)
+
+            lines = [
+                Line(ACC_RECEIVABLE, debit=line_total,
+                     description=f"Under-invoiced goods, {order.order_number}"),
+                Line(ACC_SALES, credit=line_total,
+                     description=f"Under-invoiced goods, {order.order_number}"),
+            ]
+            if cost_total > 0:
+                lines += [
+                    Line(ACC_COGS, debit=cost_total,
+                         description=f"Cost of goods, {order.order_number}"),
+                    Line(ACC_FINISHED_GOODS, credit=cost_total,
+                         description=f"Goods shipped, {order.order_number}"),
+                ]
+            else:
+                warn("no cost snapshot for the new line; COGS not posted, so "
+                     "the margin on this correction reads as 100%")
+
+            entry_id = await post_entry(
+                s,
+                entry_date=business_date(order.order_date),
+                description=(f"Goods delivered with {order.order_number} but "
+                             f"omitted from the invoice"),
+                source_module="sales.shortfall",
+                source_reference=reference,
+                lines=lines,
+                created_by=order.created_by,
+            )
+            ok(f"ledger corrected: revenue {float(line_total):,.2f}"
+               + (f", COGS {float(cost_total):,.2f}" if cost_total > 0 else "")
+               + f"  (entry {entry_id})")
+            info(f"dated {business_date(order.order_date)} -- the delivery "
+                 f"date, not today")
 
     if commit:
         await s.commit()
@@ -300,7 +385,8 @@ async def main(a):
             if a.order:
                 await apply(s, a.order, a.sku, Decimal(str(a.qty)),
                             money(a.unit_price) if a.unit_price else None,
-                            a.commit, a.allow_no_stock)
+                            a.commit, a.allow_no_stock, a.unit,
+                            money(a.unit_cost) if a.unit_cost else None)
             else:
                 await analyse(s, a.customer, money(a.shortfall))
     finally:
@@ -317,6 +403,9 @@ if __name__ == "__main__":
     ap.add_argument("--qty", type=float, help="quantity delivered")
     ap.add_argument("--unit-price", type=float, dest="unit_price",
                     help="override the price list")
+    ap.add_argument("--unit", help="override the unit label on the line")
+    ap.add_argument("--unit-cost", type=float, dest="unit_cost",
+                    help="explicit cost basis per unit, when WAC is unusable")
     ap.add_argument("--allow-no-stock", action="store_true",
                     help="skip the stock deduction (only if already deducted)")
     ap.add_argument("--commit", action="store_true",
