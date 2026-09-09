@@ -84,6 +84,15 @@ $backendFiles = @(
     'backend/app/main.py',
     'backend/alembic/versions/s8901234567r_mapd_settlement.py',
     'backend/scripts/setup_mapd.py',
+
+    # Staff operational wallet. main.py imports app.api.wallet, and router
+    # registration RE-RAISES on failure -- so shipping main.py without these
+    # three files takes the whole ERP down rather than just hiding the module.
+    # If you ever trim this list, these move or go together.
+    'backend/app/services/wallet.py',
+    'backend/app/api/wallet.py',
+    'backend/alembic/versions/t9012345678s_staff_wallet.py',
+
     'backend/requirements.txt'
 )
 
@@ -256,7 +265,7 @@ if [ "`$code" != "200" ]; then
 fi
 
 echo "--- route check (401 = exists and guarded) ---"
-for p in /api/health /api/payments/health /api/finance/accounts; do
+for p in /api/health /api/payments/health /api/finance/accounts /api/wallet/me; do
   printf '  %-32s HTTP ' "`$p"
   curl -s -o /dev/null -m 8 -w '%{http_code}\n' "http://127.0.0.1:8004`$p" || echo 000
 done
@@ -284,7 +293,7 @@ if ($LASTEXITCODE -ne 0) {
 Step 7 "External check..."
 Start-Sleep -Seconds 4
 $allGood = $true
-foreach ($path in '/api/health', '/api/payments/health', '/api/reports/settlements') {
+foreach ($path in '/api/health', '/api/payments/health', '/api/reports/settlements', '/api/wallet/me') {
     try {
         $r = Invoke-WebRequest -Uri "$Site$path" -Method GET -TimeoutSec 20 -UseBasicParsing
         Ok ("{0,-32} HTTP {1}" -f $path, $r.StatusCode)
@@ -316,11 +325,19 @@ Hard-refresh the browser (Ctrl+F5) -- the PWA service worker caches the old
 bundle otherwise.
 
 New in this deploy:
-  * Sales order form shows the customer's real outstanding balance (from
-    payments received, including brought-forward legacy debts) plus a live
-    TOTAL PAYABLE for the order being written.
-  * All three invoice formats print a PREVIOUS OUTSTANDING BALANCE section with
-    aging, and THIS INVOICE + PREVIOUS BALANCE = TOTAL AMOUNT PAYABLE.
-  * The invoice/receipt now actually downloads after creating an order; it read
-    the wrong field before and silently never fired.
+  * Staff Operational Wallet. Management records funds entrusted to an employee;
+    the employee records what they spend with a receipt photograph; management
+    approves, confirms returned cash and reconciles. The app records the
+    accountability -- the money still moves through the bank exactly as before.
+  * Two new sidebar entries under "Operational Funds": My Wallet (everyone) and
+    Wallet Control (admins and anyone granted approval authority).
+  * Migration t9012345678s adds 15 wallet_* tables plus GL accounts 1120 (Staff
+    Operational Advances) and 2160 (Staff Reimbursements Payable). It is
+    additive: no existing table is altered.
+  * Journal posting stays behind ACCOUNTING_POSTING_ENABLED, which is off by
+    default. The wallet works fully without it; switch it on when ready.
+
+First run: open a wallet under Wallet Control -> Wallets, then grant someone
+approval authority under Configuration, or every expense above a holder's
+self-approval limit waits on an administrator.
 "@ -ForegroundColor Gray
