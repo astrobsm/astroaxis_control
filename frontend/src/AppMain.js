@@ -7,6 +7,8 @@ import RegulatoryCompliance from './RegulatoryCompliance';
 import NetworkManagementDashboard from './NetworkManagementDashboard';
 import AccountingSuite from './AccountingSuite';
 import PaymentDistribution from './PaymentDistribution';
+import StaffWallet from './StaffWallet';
+import WalletAdmin from './WalletAdmin';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -223,6 +225,10 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  // Module Access Control state
  const [moduleAccessData, setModuleAccessData] = useState([]); // all users' module access for admin grid
  const [myModuleAccess, setMyModuleAccess] = useState(null); // current user's module access
+ // What the wallet module says this user may do. Approval authority is
+ // granted per-user in the wallet's own tables rather than through a global
+ // role, so the sidebar has to ask the server rather than read currentUser.role.
+ const [walletCaps, setWalletCaps] = useState(null);
  const [maLoading, setMaLoading] = useState(false);
  const [maSaving, setMaSaving] = useState({});
 
@@ -478,6 +484,17 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  useEffect(() => {
  fetchAllData();
  fetchUpcomingBirthdays();
+ }, []);
+
+ // Wallet capabilities, for the sidebar. A failure here must leave the rest
+ // of the app alone: the wallet menu simply stays at its default visibility.
+ useEffect(() => {
+ let cancelled = false;
+ authedFetch('/api/wallet/me')
+ .then((r) => (r.ok ? r.json() : null))
+ .then((d) => { if (!cancelled && d) setWalletCaps(d.capabilities || null); })
+ .catch(() => {});
+ return () => { cancelled = true; };
  }, []);
 
  // Refresh whatever the user is currently looking at.
@@ -3231,6 +3248,9 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        ['financial','Financial','wallet'],
        ['profits','Profits','trendup'],['reports','Reports','file'],
      ]],
+     ['Operational Funds', [
+       ['wallet','My Wallet','wallet'],['walletAdmin','Wallet Control','shield'],
+     ]],
      ['People', [
        ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
        ['attendance','Attendance','cal'],['salaryPayroll','Salary & Payroll','card'],
@@ -3267,6 +3287,16 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      split:'M3 12h4l3-7 4 14 3-7h4M3 5h.01M3 19h.01',
    };
    const visible = (m) => {
+     // Every member of staff may hold an operational wallet, so 'My Wallet' is
+     // never hidden -- it explains itself when there is no wallet yet.
+     if (m === 'wallet') return true;
+     // 'Wallet Control' follows the authority the wallet module actually
+     // granted, not the global role: a supervisor with approval rights is not
+     // an admin, and must still see the queue waiting for them.
+     if (m === 'walletAdmin') {
+       if (currentUser && currentUser.role === 'admin') return true;
+       return !!(walletCaps && (walletCaps.can_approve || walletCaps.can_fund || walletCaps.can_reconcile));
+     }
      if (['letters','profits','accounting','distribution','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
        return !currentUser || currentUser.role === 'admin';
      if (!currentUser || currentUser.role === 'admin') return true;
@@ -9178,6 +9208,16 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Multi-Account Payment Distribution (MAPD) */}
  {activeModule === 'distribution' && (
  <PaymentDistribution />
+ )}
+
+ {/* Staff Operational Wallet — the employee's own view */}
+ {activeModule === 'wallet' && (
+ <StaffWallet />
+ )}
+
+ {/* Staff Operational Wallet — approvals, funding and oversight */}
+ {activeModule === 'walletAdmin' && (
+ <WalletAdmin />
  )}
 
  {/* Settings */}
