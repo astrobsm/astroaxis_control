@@ -93,6 +93,15 @@ $backendFiles = @(
     'backend/app/api/wallet.py',
     'backend/alembic/versions/t9012345678s_staff_wallet.py',
 
+    # Company call log and click-to-call bridging. Same rule as the wallet
+    # above: main.py imports app.api.calls AND app.api.telephony_webhook, and
+    # router registration re-raises, so a partial upload is an outage.
+    'backend/app/api/calls.py',
+    'backend/app/api/telephony_webhook.py',
+    'backend/app/services/telephony.py',
+    'backend/alembic/versions/u0123456789t_call_log.py',
+    'backend/alembic/versions/v1234567890u_call_telephony.py',
+
     'backend/requirements.txt'
 )
 
@@ -265,7 +274,7 @@ if [ "`$code" != "200" ]; then
 fi
 
 echo "--- route check (401 = exists and guarded) ---"
-for p in /api/health /api/payments/health /api/finance/accounts /api/wallet/me; do
+for p in /api/health /api/payments/health /api/finance/accounts /api/wallet/me /api/calls/me; do
   printf '  %-32s HTTP ' "`$p"
   curl -s -o /dev/null -m 8 -w '%{http_code}\n' "http://127.0.0.1:8004`$p" || echo 000
 done
@@ -293,7 +302,7 @@ if ($LASTEXITCODE -ne 0) {
 Step 7 "External check..."
 Start-Sleep -Seconds 4
 $allGood = $true
-foreach ($path in '/api/health', '/api/payments/health', '/api/reports/settlements', '/api/wallet/me') {
+foreach ($path in '/api/health', '/api/payments/health', '/api/reports/settlements', '/api/wallet/me', '/api/calls/me') {
     try {
         $r = Invoke-WebRequest -Uri "$Site$path" -Method GET -TimeoutSec 20 -UseBasicParsing
         Ok ("{0,-32} HTTP {1}" -f $path, $r.StatusCode)
@@ -325,19 +334,21 @@ Hard-refresh the browser (Ctrl+F5) -- the PWA service worker caches the old
 bundle otherwise.
 
 New in this deploy:
-  * Staff Operational Wallet. Management records funds entrusted to an employee;
-    the employee records what they spend with a receipt photograph; management
-    approves, confirms returned cash and reconciles. The app records the
-    accountability -- the money still moves through the bank exactly as before.
-  * Two new sidebar entries under "Operational Funds": My Wallet (everyone) and
-    Wallet Control (admins and anyone granted approval authority).
-  * Migration t9012345678s adds 15 wallet_* tables plus GL accounts 1120 (Staff
-    Operational Advances) and 2160 (Staff Reimbursements Payable). It is
-    additive: no existing table is altered.
-  * Journal posting stays behind ACCOUNTING_POSTING_ENABLED, which is off by
-    default. The wallet works fully without it; switch it on when ready.
+  * Company Call Log. Staff pick a customer (or a contact from their phone),
+    tap Call, and the call is recorded against that customer with a purpose
+    and an outcome. Two new sidebar entries: "Make a Call" for everyone and
+    "Call Tracking" for management.
+  * Click-to-call bridging, OFF until configured. When a telephony provider is
+    set up, the system rings the staff member, then the customer, and the
+    CARRIER reports the duration and cost -- the one figure in the call log
+    nobody in the company can influence. Until then calls hand off to the
+    phone dialer or WhatsApp and the duration is an estimate the staff member
+    confirms, labelled as such on every screen.
+  * Migrations u0123456789t and v1234567890u add call_logs and
+    call_provider_events. Additive: no existing table is altered.
 
-First run: open a wallet under Wallet Control -> Wallets, then grant someone
-approval authority under Configuration, or every expense above a holder's
-self-approval limit waits on an administrator.
+To switch bridging on, set TELEPHONY_PROVIDER, AT_USERNAME, AT_API_KEY,
+AT_CALLER_ID, TELEPHONY_WEBHOOK_SECRET and PUBLIC_BASE_URL, then point the
+provider's voice callback at the URL shown by /api/calls/config. It stays off
+and harmless until all of those are present.
 "@ -ForegroundColor Gray

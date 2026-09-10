@@ -9,6 +9,8 @@ import AccountingSuite from './AccountingSuite';
 import PaymentDistribution from './PaymentDistribution';
 import StaffWallet from './StaffWallet';
 import WalletAdmin from './WalletAdmin';
+import CallModule from './CallModule';
+import CallAdmin from './CallAdmin';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3250,6 +3252,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      ]],
      ['Operational Funds', [
        ['wallet','My Wallet','wallet'],['walletAdmin','Wallet Control','shield'],
+       ['calls','Make a Call','comms'],['callTracking','Call Tracking','trendup'],
      ]],
      ['People', [
        ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
@@ -3290,10 +3293,12 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      // Every member of staff may hold an operational wallet, so 'My Wallet' is
      // never hidden -- it explains itself when there is no wallet yet.
      if (m === 'wallet') return true;
+     // Anyone may place a company call and see their own log.
+     if (m === 'calls') return true;
      // 'Wallet Control' follows the authority the wallet module actually
      // granted, not the global role: a supervisor with approval rights is not
      // an admin, and must still see the queue waiting for them.
-     if (m === 'walletAdmin') {
+     if (m === 'walletAdmin' || m === 'callTracking') {
        if (currentUser && currentUser.role === 'admin') return true;
        return !!(walletCaps && (walletCaps.can_approve || walletCaps.can_fund || walletCaps.can_reconcile));
      }
@@ -9218,6 +9223,16 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Staff Operational Wallet — approvals, funding and oversight */}
  {activeModule === 'walletAdmin' && (
  <WalletAdmin />
+ )}
+
+ {/* Company calls — place a call and log who was reached */}
+ {activeModule === 'calls' && (
+ <CallModule />
+ )}
+
+ {/* Company calls — management view */}
+ {activeModule === 'callTracking' && (
+ <CallAdmin />
  )}
 
  {/* Settings */}

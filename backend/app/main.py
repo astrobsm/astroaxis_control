@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -110,11 +110,17 @@ try:
     #                guarded individually inside the module)
     # wifi:          captive-portal login; already enforces its own HTTPBearer
     # profits:       already enforces its own _admin_only() on every route
+    # telephony_webhook:
+    #                telephony provider callbacks. A carrier cannot present a
+    #                bearer token, so this router authenticates by a long
+    #                random secret in the URL path, compared in constant time,
+    #                and records every attempt. See app/api/telephony_webhook.py.
     app.include_router(auth.router)
     app.include_router(attendance.router)
     app.include_router(public_orders.router)
     app.include_router(wifi.router)
     app.include_router(profits.router)
+    app.include_router(telephony_webhook.router)
 
     # --- Admin only -------------------------------------------------------
     app.include_router(permissions.router, dependencies=admin_only)
@@ -130,7 +136,7 @@ try:
         legacy_debts, communication, sop, production_tasks, announcements,
         radio, geo, regulatory, accounting, payroll, assets,
         budgeting, tax, maintenance, dashboard, costs, settlements,
-        wallet,
+        wallet, calls,
     ):
         app.include_router(_router.router, dependencies=authed)
     app.include_router(assets.cash_router, dependencies=authed)
