@@ -236,11 +236,11 @@ async def pending_expense_total(session: AsyncSession, wallet_id: UUID) -> Decim
     all five sat unapproved.
     """
     row = (await session.execute(
-        text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_expenses
+        text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_expenses
                  WHERE wallet_id = :w AND status = 'PENDING'"""),
         {"w": str(wallet_id)},
     )).first()
-    return money(row.t)
+    return money(row.total)
 
 
 async def outstanding_amount(
@@ -261,12 +261,12 @@ async def outstanding_amount(
     """
     totals = totals or await derive_totals(session, wallet_id)
     row = (await session.execute(
-        text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_fundings
+        text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_fundings
                  WHERE wallet_id = :w AND status = 'ISSUED'
                    AND account_by IS NOT NULL AND account_by < :d"""),
         {"w": str(wallet_id), "d": as_of or date.today()},
     )).first()
-    overdue = money(row.t)
+    overdue = money(row.total)
     discharged = totals["total_spent"] + totals["total_returned"]
     return max(ZERO, overdue - discharged)
 
@@ -659,12 +659,12 @@ async def check_limits(
     if wallet["daily_limit"] is not None:
         cap = money(wallet["daily_limit"])
         row = (await session.execute(
-            text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_expenses
+            text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_expenses
                      WHERE wallet_id = :w AND spent_on = :d
                        AND status IN ('PENDING','APPROVED')"""),
             {"w": str(wallet["id"]), "d": spent_on},
         )).first()
-        already = money(row.t)
+        already = money(row.total)
         if already + amount > cap:
             raise HTTPException(
                 status_code=400,
@@ -688,12 +688,12 @@ async def check_limits(
     if wallet["monthly_limit"] is not None:
         cap = money(wallet["monthly_limit"])
         row = (await session.execute(
-            text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_expenses
+            text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_expenses
                      WHERE wallet_id = :w AND spent_on >= :s AND spent_on < :e
                        AND status IN ('PENDING','APPROVED')"""),
             {"w": str(wallet["id"]), "s": month_start, "e": month_end},
         )).first()
-        already = money(row.t)
+        already = money(row.total)
         if already + amount > cap:
             raise HTTPException(
                 status_code=400,
@@ -716,14 +716,14 @@ async def check_limits(
     if cap_row and cap_row["cap"] is not None:
         cap = money(cap_row["cap"])
         row = (await session.execute(
-            text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_expenses
+            text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_expenses
                      WHERE wallet_id = :w AND category_id = :c
                        AND spent_on >= :s AND spent_on < :e
                        AND status IN ('PENDING','APPROVED')"""),
             {"w": str(wallet["id"]), "c": str(category_id),
              "s": month_start, "e": month_end},
         )).first()
-        already = money(row.t)
+        already = money(row.total)
         if already + amount > cap:
             raise HTTPException(
                 status_code=400,
@@ -1434,11 +1434,11 @@ async def declare_return(
     wallet = await lock_wallet(session, wallet_id)
     totals = await derive_totals(session, wallet_id)
     pending_returns = (await session.execute(
-        text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_returns
+        text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_returns
                  WHERE wallet_id = :w AND status = 'DECLARED'"""),
         {"w": str(wallet_id)},
     )).first()
-    already = money(pending_returns.t)
+    already = money(pending_returns.total)
     if amt + already > totals["balance"]:
         raise HTTPException(
             status_code=400,
@@ -1917,7 +1917,7 @@ async def submit_reconciliation(
 
     opening = (await session.execute(
         text("""SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT'
-                                         THEN amount ELSE -amount END), 0) AS t
+                                         THEN amount ELSE -amount END), 0) AS total
                   FROM wallet_ledger
                  WHERE wallet_id = :w AND occurred_on < :s"""),
         {"w": str(wallet_id), "s": period_start},
@@ -1949,7 +1949,7 @@ async def submit_reconciliation(
         {"w": str(wallet_id), "s": period_start, "e": period_end},
     )).mappings().first()
 
-    opening_balance = money(opening.t)
+    opening_balance = money(opening.total)
     closing_balance = opening_balance + money(period["net"])
     variance = (money(declared_cash_on_hand) - closing_balance
                 if declared_cash_on_hand is not None else None)
@@ -2101,7 +2101,7 @@ async def detect_expense_anomalies(
     # ladder rather than assuming the seeded numbers -- management may have
     # changed them, and a hard-coded 50,000 here would quietly stop working.
     threshold = (await session.execute(
-        text("""SELECT MIN(min_amount) AS t FROM wallet_approval_rules
+        text("""SELECT MIN(min_amount) AS total FROM wallet_approval_rules
                  WHERE is_active = TRUE AND min_amount > :amt
                    AND (scope = 'GLOBAL'
                         OR (scope = 'WALLET_TYPE' AND wallet_type = :wt)
@@ -2109,8 +2109,11 @@ async def detect_expense_anomalies(
         {"amt": str(amount), "wt": wallet["wallet_type"],
          "wid": str(wallet_id)},
     )).first()
-    if threshold and threshold.t:
-        band_top = money(threshold.t)
+    # MIN() over no rows still yields one row holding NULL, so the row itself
+    # is always truthy -- the value has to be tested explicitly. An expense in
+    # the top band has no threshold above it and nothing to split under.
+    if threshold is not None and threshold.total is not None:
+        band_top = money(threshold.total)
         band_floor = band_top * Decimal("0.90")
         if band_floor <= amount < band_top:
             near = (await session.execute(
@@ -2149,13 +2152,13 @@ async def detect_expense_anomalies(
     )).first()
     if hist and hist.days and hist.days >= 5 and hist.mean:
         today_total = (await session.execute(
-            text("""SELECT COALESCE(SUM(amount), 0) AS t FROM wallet_expenses
+            text("""SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_expenses
                      WHERE wallet_id = :w AND spent_on = :d
                        AND status <> 'REVERSED'"""),
             {"w": str(wallet_id), "d": spent_on},
         )).first()
         mean = money(hist.mean)
-        total = money(today_total.t)
+        total = money(today_total.total)
         if mean > 0 and total > mean * 4:
             await raise_flag(
                 session, wallet_id=wallet_id, expense_id=expense_id,
@@ -2385,19 +2388,19 @@ async def management_dashboard(
 
     pending = (await session.execute(
         text("""
-            SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS t
+            SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
               FROM wallet_expenses WHERE status = 'PENDING'
         """),
     )).mappings().first()
     requests = (await session.execute(
-        text("""SELECT COUNT(*) AS n, COALESCE(SUM(amount_requested), 0) AS t
+        text("""SELECT COUNT(*) AS n, COALESCE(SUM(amount_requested), 0) AS total
                   FROM wallet_fund_requests WHERE status = 'PENDING'"""),
     )).mappings().first()
     flags = (await session.execute(
         text("SELECT COUNT(*) AS n FROM wallet_flags WHERE status = 'OPEN'"),
     )).first()
     claims = (await session.execute(
-        text("""SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS t
+        text("""SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
                   FROM wallet_reimbursements WHERE status = 'PENDING'"""),
     )).mappings().first()
 
@@ -2424,11 +2427,11 @@ async def management_dashboard(
         ],
         "queues": {
             "pending_expenses": pending["n"],
-            "pending_expense_value": str(money(pending["t"])),
+            "pending_expense_value": str(money(pending["total"])),
             "pending_fund_requests": requests["n"],
-            "pending_fund_request_value": str(money(requests["t"])),
+            "pending_fund_request_value": str(money(requests["total"])),
             "pending_reimbursements": claims["n"],
-            "pending_reimbursement_value": str(money(claims["t"])),
+            "pending_reimbursement_value": str(money(claims["total"])),
             "open_flags": flags.n,
         },
     }
