@@ -895,3 +895,221 @@ async def recording_access_log(
         {"r": str(recording_id)},
     )).mappings().all()
     return {"access": _rows(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Integration diagnostics
+#
+# Telephony has many links and only one visible symptom: "the call did not
+# work". Credentials, the callback URL, the provider's reachability, storage,
+# and whether staff have phone numbers all fail the same way from the outside.
+#
+# This endpoint checks each link separately and names the one that is broken,
+# because the alternative is someone re-reading documentation hoping to spot
+# the difference. The most valuable line in it is `provider_events` -- whether
+# the provider has EVER reached this server. Almost every "bridging does not
+# work" report is that callback URL being wrong, and nothing else can tell you.
+# ---------------------------------------------------------------------------
+
+@router.get("/diagnostics")
+async def diagnostics(
+    probe_storage: bool = False,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Check the whole telephony chain. Administrators only.
+
+    `probe_storage=true` additionally writes, reads back and deletes a small
+    object, which is the only way to know the Spaces credentials actually work
+    -- configuration being present says nothing about it being correct. It is
+    opt-in because a health check that writes by default is a health check
+    people stop trusting.
+    """
+    from app.services import objectstore, recording as rec_svc, telephony as tel
+
+    checks: list[dict] = []
+
+    def add(name, ok, detail, fix=None, severity="error"):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail,
+                       "fix": fix, "severity": "ok" if ok else severity})
+
+    # --- 1. bridging credentials ----------------------------------------
+    bridge_ok, bridge_reason = tel.configured()
+    add("Telephony provider configured", bridge_ok,
+        f"Provider: {tel.PROVIDER or 'none'}" if bridge_ok else bridge_reason,
+        None if bridge_ok else
+        "Set TELEPHONY_PROVIDER, AT_USERNAME, AT_API_KEY, AT_CALLER_ID, "
+        "TELEPHONY_WEBHOOK_SECRET and PUBLIC_BASE_URL, then restart the "
+        "backend. Environment variables are read at start-up.")
+
+    # --- 2. the callback URL the provider must be given ------------------
+    callback = tel.callback_url() if bridge_ok else None
+    add("Callback URL available", bool(callback),
+        "Paste this into the provider's voice callback setting."
+        if callback else "Cannot be built until the provider is configured.",
+        None if callback else "Complete the configuration above first.")
+
+    # --- 3. has the provider ever actually reached us? -------------------
+    #
+    # The single most useful line here. A correct-looking configuration with
+    # zero inbound events means the callback URL is wrong or unreachable, and
+    # no amount of re-reading the credentials will reveal that.
+    ev = (await session.execute(
+        text("""SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE secret_ok IS FALSE) AS bad_secret,
+                       COUNT(*) FILTER (WHERE call_id IS NULL
+                                        AND secret_ok IS TRUE) AS unmatched,
+                       MAX(received_at) AS last_seen
+                  FROM call_provider_events"""),
+    )).mappings().first()
+
+    add("Provider has reached this server", ev["total"] > 0,
+        (f"{ev['total']} callback(s), last at {ev['last_seen']}"
+         if ev["total"] else
+         "No callback has EVER arrived from the provider."),
+        None if ev["total"] else
+        f"The provider cannot reach us, or the URL is wrong. Set the voice "
+        f"callback to exactly: {callback or '<configure the provider first>'} "
+        f"-- and check the site is reachable from the public internet.")
+
+    if ev["bad_secret"]:
+        add("Callback secret matches", False,
+            f"{ev['bad_secret']} callback(s) arrived with the WRONG secret and "
+            f"were refused.",
+            "The provider is using an out-of-date callback URL. Update it to "
+            "the current one, or rotate TELEPHONY_WEBHOOK_SECRET and update "
+            "both. Refused callbacks mean lost call records.")
+    else:
+        add("Callback secret matches", True,
+            "No callbacks have been refused for a bad secret.")
+
+    if ev["unmatched"]:
+        add("Callbacks match a known call", False,
+            f"{ev['unmatched']} callback(s) referenced a call this system did "
+            f"not place.",
+            "Usually calls placed directly on the provider's dashboard rather "
+            "than through this app. Check /api/calls/provider/events"
+            "?unmatched_only=true.", "warning")
+
+    # --- 4. staff can be rung --------------------------------------------
+    staff = (await session.execute(
+        text("""SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE phone IS NULL OR phone = '')
+                           AS no_phone
+                  FROM users WHERE is_active IS NOT FALSE"""),
+    )).mappings().first()
+    add("Staff have phone numbers", staff["no_phone"] == 0,
+        f"{staff['no_phone']} of {staff['total']} active users have no phone "
+        f"number.",
+        "Bridging rings the staff member's own line first. Anyone without a "
+        "number cannot place a bridged call until one is added to their "
+        "profile (they can type one per call as a workaround).",
+        "warning")
+
+    # --- 5. recording ------------------------------------------------------
+    rec_ok, rec_reason = rec_svc.configured()
+    add("Call recording", rec_ok,
+        (f"On. Recordings kept {rec_svc.RETENTION_DAYS} days."
+         if rec_ok else rec_reason),
+        None if rec_ok else
+        "This is a SEPARATE switch from bridging, on purpose. Read "
+        "CALL_RECORDING.md before enabling it -- the staff notice must be in "
+        "writing first.",
+        "info")
+
+    # --- 6. object storage, actually exercised ---------------------------
+    store_ok, store_reason = objectstore.configured()
+    if not store_ok:
+        add("Object storage", False, store_reason,
+            "Only needed if you are recording calls. Set SPACES_KEY, "
+            "SPACES_SECRET, SPACES_BUCKET, SPACES_REGION and SPACES_ENDPOINT.",
+            "info" if not rec_svc.RECORDING_ENABLED else "error")
+    elif probe_storage:
+        # Configuration being present proves nothing about it being correct.
+        probe_key = f"diagnostics/probe-{uuid4().hex}.txt"
+        try:
+            await objectstore.put_object(
+                probe_key, b"astro-asix storage probe",
+                content_type="text/plain")
+            url = objectstore.presigned_get_url(probe_key, expires_seconds=60)
+            import httpx
+            async with httpx.AsyncClient(timeout=30) as client:
+                got = await client.get(url)
+            readable = got.status_code == 200 and b"probe" in got.content
+            await objectstore.delete_object(probe_key)
+            add("Object storage write/read/delete", readable,
+                "Wrote, read back and deleted a test object successfully."
+                if readable else
+                f"Wrote the object but could not read it back "
+                f"(HTTP {got.status_code}).",
+                None if readable else
+                "The key can write but the presigned URL is not being "
+                "accepted. Check SPACES_REGION matches the Space exactly.")
+        except Exception as exc:
+            add("Object storage write/read/delete", False,
+                f"Failed: {exc}",
+                "Check the Spaces key, secret, bucket name and region. The "
+                "endpoint must be the regional one WITHOUT the bucket, e.g. "
+                "https://nyc3.digitaloceanspaces.com")
+    else:
+        add("Object storage configured", True,
+            f"Bucket {objectstore.SPACES_BUCKET} at "
+            f"{objectstore.SPACES_ENDPOINT}. Not yet tested -- re-run with "
+            f"probe_storage=true to actually write and read a test object.")
+
+    # --- 7. are durations arriving verified? -----------------------------
+    prov = (await session.execute(
+        text("""SELECT duration_source, COUNT(*) AS n
+                  FROM call_logs
+                 WHERE status = 'COMPLETED'
+                   AND started_at > NOW() - INTERVAL '30 days'
+                 GROUP BY duration_source"""),
+    )).mappings().all()
+    counts = {r["duration_source"]: r["n"] for r in prov}
+    verified = counts.get("VERIFIED", 0)
+    total_done = sum(counts.values())
+    if total_done == 0:
+        add("Verified durations arriving", False,
+            "No completed calls in the last 30 days to judge by.",
+            "Place one test call to your own second phone.", "info")
+    else:
+        add("Verified durations arriving", verified > 0,
+            f"{verified} of {total_done} completed calls carry the network's "
+            f"own duration.",
+            None if verified else
+            "Calls are completing but none carry a carrier-verified duration. "
+            "Either they were placed on the phone dialer rather than the "
+            "company line, or the completion callback is not arriving -- check "
+            "the provider-reached-us line above.",
+            "warning")
+
+    # --- 8. recordings stuck in transfer ---------------------------------
+    stuck = (await session.execute(
+        text("""SELECT COUNT(*) AS n FROM call_recordings
+                 WHERE status = 'PENDING'
+                   AND created_at < NOW() - INTERVAL '1 hour'"""),
+    )).first()
+    if stuck.n:
+        add("Recordings transferred to storage", False,
+            f"{stuck.n} recording(s) have been PENDING for over an hour.",
+            "The audio is still only on the provider's servers, under their "
+            "retention rather than yours. Check object storage above.",
+            "warning")
+
+    failing = [c for c in checks if not c["ok"] and c["severity"] == "error"]
+    warnings = [c for c in checks if not c["ok"] and c["severity"] == "warning"]
+
+    return {
+        "ready_for_bridged_calls": bridge_ok and ev["total"] > 0,
+        "recording_ready": rec_ok and store_ok,
+        "callback_url": callback,
+        "problems": len(failing),
+        "warnings": len(warnings),
+        "checks": checks,
+        "next_step": (
+            failing[0]["fix"] if failing
+            else warnings[0]["fix"] if warnings
+            else "Everything checks out. Place a test call to your own second "
+                 "phone and confirm it appears with a network-verified "
+                 "duration."),
+    }

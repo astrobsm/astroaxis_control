@@ -76,19 +76,22 @@ export default function CallAdmin() {
   const [tab, setTab] = useState('overview');
   const [recs, setRecs] = useState(null);
   const [playing, setPlaying] = useState(null);
+  const [diag, setDiag] = useState(null);
 
   const load = useCallback(async () => {
     setErr('');
     try {
-      const [d, l, r] = await Promise.all([
+      const [d, l, r, g] = await Promise.all([
         req('/api/calls/dashboard?days=30'),
         req(`/api/calls?date_from=${from}&date_to=${to}&limit=500`),
         // Administrators only; a 403 here must not blank the whole screen.
         req('/api/calls/recordings').catch(() => null),
+        req('/api/calls/diagnostics').catch(() => null),
       ]);
       setDash(d);
       setCalls(l.calls || []);
       setRecs(r);
+      setDiag(g);
     } catch (e) { setErr(e.message); }
     setLoading(false);
   }, [from, to]);
@@ -112,7 +115,10 @@ export default function CallAdmin() {
 
       <div style={{ display: 'flex', gap: space(1), flexWrap: 'wrap', marginBottom: space(2.5) }}>
         {[['overview', 'Overview'], ['log', 'Call log'],
-          ...(recs ? [['recordings', 'Recordings']] : [])].map(([k, label]) => (
+          ...(recs ? [['recordings', 'Recordings']] : []),
+          ...(diag ? [['setup', diag.problems > 0
+            ? `Setup & health (${diag.problems})` : 'Setup & health']] : []),
+         ].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding: '8px 15px', borderRadius: radius.pill, fontSize: 13, fontWeight: 600,
             border: `1px solid ${tab === k ? color.medical : color.borderStrong}`,
@@ -499,6 +505,144 @@ export default function CallAdmin() {
                 </div>
               </div>
             </div>
+          )}
+        </>
+      )}
+
+      {tab === 'setup' && (
+        <>
+          {diag ? (
+            <>
+              <Grid min={240}>
+                <KpiCard icon="check" label="Bridged calls"
+                  value={diag.ready_for_bridged_calls ? 'Ready' : 'Not ready'}
+                  sub={diag.ready_for_bridged_calls
+                    ? 'Provider is reaching this server'
+                    : 'Something in the chain is broken'}
+                  tone={diag.ready_for_bridged_calls ? 'success' : 'danger'} />
+                <KpiCard icon="ledger" label="Recording"
+                  value={diag.recording_ready ? 'Ready' : 'Off'}
+                  sub={diag.recording_ready
+                    ? 'Storage configured'
+                    : 'Switched off or not configured'}
+                  tone={diag.recording_ready ? 'success' : 'info'} />
+                <KpiCard icon="alert" label="Problems" value={diag.problems}
+                  sub="Must be fixed"
+                  tone={diag.problems > 0 ? 'danger' : 'success'} />
+                <KpiCard icon="alert" label="Warnings" value={diag.warnings}
+                  sub="Worth looking at"
+                  tone={diag.warnings > 0 ? 'warning' : 'success'} />
+              </Grid>
+
+              <div style={{ height: space(2.5) }} />
+
+              <Banner tone={diag.problems > 0 ? 'danger'
+                : diag.warnings > 0 ? 'warning' : 'success'}
+                title="What to do next">
+                {diag.next_step}
+              </Banner>
+
+              {diag.callback_url && (
+                <Card style={{ marginTop: space(2.5) }}>
+                  <SectionTitle>The callback URL the provider needs</SectionTitle>
+                  <p style={{ fontSize: 13, color: color.textSecondary, marginTop: 0, lineHeight: 1.6 }}>
+                    Paste this into your provider's <strong>voice callback</strong> setting,
+                    exactly as shown. This URL contains a secret — treat it as a
+                    password, give it to the provider and to nobody else.
+                  </p>
+                  <div style={{
+                    display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+                  }}>
+                    <code style={{
+                      flex: 1, minWidth: 260, padding: '10px 12px',
+                      background: '#F1F5F9', borderRadius: radius.sm,
+                      fontFamily: font.mono, fontSize: 12, wordBreak: 'break-all',
+                    }}>{diag.callback_url}</code>
+                    <Btn size="sm" variant="secondary" onClick={() => {
+                      navigator.clipboard.writeText(diag.callback_url)
+                        .then(() => alert('Callback URL copied.'))
+                        .catch(() => alert('Could not copy — select it by hand.'));
+                    }}>Copy</Btn>
+                  </div>
+                </Card>
+              )}
+
+              <Card style={{ marginTop: space(2.5) }}>
+                <SectionTitle right={
+                  <Btn size="sm" variant="secondary" onClick={async () => {
+                    try {
+                      // Opt-in: actually writes, reads and deletes a test
+                      // object, which is the only way to know the credentials
+                      // are right rather than merely present.
+                      const d = await req('/api/calls/diagnostics?probe_storage=true');
+                      setDiag(d);
+                      setErr('');
+                    } catch (e) { setErr(e.message); }
+                  }}>Test storage for real</Btn>
+                }>Every link in the chain</SectionTitle>
+
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {diag.checks.map((c, i) => (
+                    <div key={i} style={{
+                      display: 'flex', gap: 12, padding: space(1.5),
+                      border: `1px solid ${c.ok ? color.border
+                        : c.severity === 'error' ? color.danger
+                        : c.severity === 'warning' ? color.warning : color.border}`,
+                      borderRadius: radius.sm,
+                      background: c.ok ? '#fff'
+                        : c.severity === 'error' ? color.dangerBg
+                        : c.severity === 'warning' ? color.warningBg : color.infoBg,
+                    }}>
+                      <div style={{ fontSize: 18, lineHeight: 1.2, flexShrink: 0 }}>
+                        {c.ok ? '✅' : c.severity === 'error' ? '❌'
+                          : c.severity === 'warning' ? '⚠️' : 'ℹ️'}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.check}</div>
+                        <div style={{ fontSize: 12.5, color: color.textSecondary, marginTop: 2 }}>
+                          {c.detail}
+                        </div>
+                        {c.fix && !c.ok && (
+                          <div style={{
+                            fontSize: 12.5, color: color.text, marginTop: 6,
+                            paddingLeft: 10, borderLeft: `2px solid ${color.borderStrong}`,
+                          }}>
+                            <strong>Fix:</strong> {c.fix}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              <Card style={{ marginTop: space(2.5) }}>
+                <SectionTitle>Raw provider callbacks</SectionTitle>
+                <p style={{ fontSize: 13, color: color.textSecondary, marginTop: 0, lineHeight: 1.6 }}>
+                  Everything the provider has sent, stored exactly as it arrived
+                  — parsed or not. This is where to look if a call was billed but
+                  shows no duration, or if the provider renamed a field.
+                </p>
+                <Btn size="sm" variant="secondary" onClick={async () => {
+                  try {
+                    const d = await req('/api/calls/provider/events?limit=20');
+                    const lines = (d.events || []).map((e) =>
+                      `${new Date(e.received_at).toLocaleString()} · ${e.event_type || '?'}`
+                      + ` · secret ${e.secret_ok ? 'ok' : 'WRONG'}`
+                      + ` · ${e.call_id ? 'matched' : 'UNMATCHED'}`
+                      + (e.note ? ` · ${e.note}` : ''));
+                    alert(lines.join('\n') || 'The provider has never contacted this server.');
+                  } catch (e) { setErr(e.message); }
+                }}>Show the last 20</Btn>
+              </Card>
+            </>
+          ) : (
+            <Card>
+              <SectionTitle>Setup &amp; health</SectionTitle>
+              <p style={{ fontSize: 13, color: color.textSecondary }}>
+                Diagnostics are available to administrators only.
+              </p>
+            </Card>
           )}
         </>
       )}
