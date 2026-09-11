@@ -41,7 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.services import telephony
+from app.services import recording, telephony
 
 router = APIRouter(prefix="/api/telephony", tags=["Telephony"])
 
@@ -118,7 +118,8 @@ async def voice_callback(
     call = None
     if session_id:
         call = (await session.execute(
-            text("""SELECT id, status, contact_phone, duration_source
+            text("""SELECT id, status, contact_phone, duration_source,
+                             call_reference, recording_announced
                       FROM call_logs
                      WHERE provider_reference = :sid
                      FOR UPDATE"""),
@@ -138,16 +139,27 @@ async def voice_callback(
 
     # --- the staff member answered: dial the customer and bridge -----------
     if not parsed["finished"]:
+        rec_ok, _ = recording.configured()
         await session.execute(
-            text("""UPDATE call_logs SET bridge_state = 'BRIDGING',
-                           updated_at = NOW() WHERE id = :id"""),
-            {"id": str(call["id"])})
+            text("""UPDATE call_logs
+                       SET bridge_state = 'BRIDGING',
+                           recording_requested = :rec,
+                           recording_announced = :rec,
+                           updated_at = NOW()
+                     WHERE id = :id"""),
+            {"rec": rec_ok, "id": str(call["id"])})
         await _record(session, call_id=call["id"], session_id=session_id,
                       event_type="ANSWER", payload=payload, secret_ok=True,
                       remote_ip=remote_ip, applied=True)
         await session.commit()
+        # The announcement is spoken to the staff member, who answered first.
+        # It is a per-call reminder to give the customer the notice, not a
+        # substitute for it -- see app/services/recording.py.
         return Response(
-            content=telephony.bridge_instruction(call["contact_phone"]),
+            content=telephony.bridge_instruction(
+                call["contact_phone"],
+                record=rec_ok,
+                announcement=recording.ANNOUNCEMENT if rec_ok else None),
             media_type="application/xml")
 
     # --- the call ended: record what the network says ----------------------
@@ -183,5 +195,30 @@ async def voice_callback(
     await _record(session, call_id=call["id"], session_id=session_id,
                   event_type=parsed["state"] or "COMPLETED", payload=payload,
                   secret_ok=True, remote_ip=remote_ip, applied=True)
+
+    # The provider's recording URL arrives on this same callback. Register it
+    # before trying to download: audio that exists on someone else's server is
+    # still subject to a deletion request, so losing all trace of it would be
+    # worse than a failed transfer.
+    rec_id = None
+    if parsed.get("recording_url"):
+        rec_id = await recording.register(
+            session, call_id=call["id"], call_reference=call["call_reference"],
+            provider=telephony.PROVIDER or "unknown",
+            provider_url=parsed["recording_url"],
+            duration_seconds=duration,
+            announced=bool(call["recording_announced"]))
     await session.commit()
+
+    # Fetched after the commit and outside the provider's critical path: a slow
+    # or failed download must not make the callback time out, which would have
+    # the provider retry it and double-record everything.
+    if rec_id:
+        try:
+            await recording.store(session, recording_id=rec_id,
+                                  call_reference=call["call_reference"])
+        except Exception:
+            pass  # store() records its own failure on the row
+        await session.commit()
+
     return Response(status_code=200, content="")

@@ -1,4 +1,10 @@
-fastapi
+# Pinned to what production runs. FastAPI 0.141 changed include_router to
+# wrap routers instead of flattening them into app.routes, which the
+# router-registration guard in app/main.py reads. The guard now handles
+# both shapes, but an unpinned framework on a financial system is a
+# surprise waiting for whoever next rebuilds the image.
+fastapi==0.128.0
+starlette==0.50.0
 uvicorn[standard]
 SQLAlchemy==2.0.21
 asyncpg

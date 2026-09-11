@@ -505,6 +505,30 @@ function CallFlow({ contact, config, onClose, onDone }) {
             duration and cost come from the carrier, so nothing has to be
             confirmed afterwards.
           </Banner>
+          {config && config.recording && config.recording.recording_enabled && (
+            <>
+              <div style={{ height: space(2) }} />
+              {/* The automated notice is played to YOU, not the customer --
+                  their leg has not been dialled yet. Telling them is your
+                  job, so the words are here rather than in a policy nobody
+                  re-reads. */}
+              <Banner tone="warning" title="This call will be recorded — you must tell the customer">
+                The announcement you will hear is for you, not for them. Open
+                the call with these words:
+                <div style={{
+                  marginTop: space(1), padding: space(1.5), background: '#fff',
+                  borderRadius: radius.sm, fontStyle: 'italic',
+                  border: `1px solid ${color.borderStrong}`,
+                }}>
+                  “{(config.recording.staff_script || '').replace('{staff}', 'your name')}”
+                </div>
+                <div style={{ marginTop: space(1), fontSize: 11.5 }}>
+                  Recordings are kept for {config.recording.retention_days} days
+                  and then destroyed.
+                </div>
+              </Banner>
+            </>
+          )}
           <div style={{ height: space(2) }} />
           <Field label="Ring me on"
             hint="Your own line. Change it only if you are on a different phone today.">
@@ -547,12 +571,13 @@ export default function CallModule() {
     try {
       // Asked before any Call button is drawn, so the company-line option is
       // only offered where it will actually work.
-      const [m, c] = await Promise.all([
+      const [m, c, rc] = await Promise.all([
         getJSON('/api/calls/me'),
         getJSON('/api/calls/config').catch(() => null),
+        getJSON('/api/calls/recording/config').catch(() => null),
       ]);
       setMine(m);
-      setConfig(c);
+      setConfig(c ? { ...c, recording: rc } : null);
       setErr('');
     } catch (e) { setErr(e.message); }
     setLoading(false);

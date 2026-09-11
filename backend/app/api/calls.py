@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_authenticated_user
+from app.api.auth import require_admin, require_authenticated_user
 from app.db import get_session
 from app.models import User
 from app.services import wallet as wsvc
@@ -707,3 +707,191 @@ async def provider_events(
         {"lim": limit},
     )).mappings().all()
     return {"events": _rows(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Call recordings
+#
+# Every route here touches personal data about a customer who does not work
+# for this company. Access is administrators only, every playback is written
+# to an append-only log BEFORE the link is issued, and the retention sweep is
+# exposed so it can be seen to be running.
+# ---------------------------------------------------------------------------
+
+from app.services import recording as rec_svc  # noqa: E402
+
+
+class RecordingDeleteIn(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=255)
+
+
+@router.get("/recording/config")
+async def recording_config(
+    user: User = Depends(require_authenticated_user),
+):
+    """Whether recording is on, and the wording staff must say if it is."""
+    ok, reason = rec_svc.configured()
+    return {
+        "recording_enabled": ok,
+        "unavailable_reason": None if ok else reason,
+        "retention_days": rec_svc.RETENTION_DAYS,
+        # Shown on the call screen so the notice is given in the same words
+        # every time, and matches what the policy document says.
+        "staff_script": rec_svc.STAFF_SCRIPT if ok else None,
+        "announcement": rec_svc.ANNOUNCEMENT if ok else None,
+    }
+
+
+@router.get("/{call_id}/recording")
+async def get_recording_link(
+    call_id: UUID,
+    request: Request,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """A short-lived playback link. Administrators only, and always logged."""
+    row = (await session.execute(
+        text("""SELECT r.id, r.status, r.retention_until, r.announced
+                  FROM call_recordings r WHERE r.call_id = :c"""),
+        {"c": str(call_id)},
+    )).mappings().first()
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail="There is no recording for that call.")
+
+    client = _client(request)
+    if user.role != "admin":
+        # A refused attempt is logged too: who TRIED to listen is exactly as
+        # interesting as who succeeded.
+        await rec_svc.log_access(
+            session, recording_id=row["id"], call_id=call_id, user=user,
+            action="DENIED", note="not an administrator", **client)
+        await session.commit()
+        raise HTTPException(
+            status_code=403,
+            detail="Call recordings can only be played by an administrator.")
+
+    try:
+        url = await rec_svc.playback_url(
+            session, recording_id=row["id"], user=user, **client)
+    except LookupError as exc:
+        await session.commit()
+        raise HTTPException(status_code=404, detail=str(exc))
+    await session.commit()
+    return {
+        "url": url,
+        "expires_in_seconds": 300,
+        "retention_until": row["retention_until"],
+        "announced": row["announced"],
+    }
+
+
+@router.delete("/{call_id}/recording")
+async def delete_recording(
+    call_id: UUID,
+    body: RecordingDeleteIn,
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Destroy a recording early -- for instance on a customer's request.
+
+    The audio goes for good; the row stays, marked DELETED, because being able
+    to prove a recording was destroyed is the point of keeping the row at all.
+    """
+    row = (await session.execute(
+        text("SELECT id FROM call_recordings WHERE call_id = :c"),
+        {"c": str(call_id)},
+    )).mappings().first()
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail="There is no recording for that call.")
+    try:
+        result = await rec_svc.destroy(
+            session, recording_id=row["id"], user=user, reason=body.reason,
+            **_client(request))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"The recording could not be destroyed: {exc}")
+    await session.commit()
+    return result
+
+
+@router.get("/recordings")
+async def list_recordings(
+    include_deleted: bool = False,
+    limit: int = Query(100, ge=1, le=500),
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """What exists, what is overdue, and what has already been destroyed."""
+    clause = "" if include_deleted else "WHERE r.status <> 'DELETED'"
+    rows = (await session.execute(
+        text(f"""
+            SELECT r.id, r.call_id, r.status, r.byte_size, r.duration_seconds,
+                   r.announced, r.retention_until, r.deleted_at,
+                   r.delete_reason, r.failure_reason, r.created_at,
+                   (r.retention_until < CURRENT_DATE
+                    AND r.status <> 'DELETED') AS overdue,
+                   l.call_reference, l.contact_name, l.contact_phone,
+                   u.full_name AS caller, c.name AS customer_name
+              FROM call_recordings r
+              JOIN call_logs l ON l.id = r.call_id
+              JOIN users u ON u.id = l.user_id
+              LEFT JOIN customers c ON c.id = l.customer_id
+              {clause}
+             ORDER BY r.created_at DESC LIMIT :lim
+        """), {"lim": limit},
+    )).mappings().all()
+
+    summary = (await session.execute(
+        text("""SELECT
+                  COUNT(*) FILTER (WHERE status = 'STORED') AS stored,
+                  COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
+                  COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+                  COUNT(*) FILTER (WHERE status = 'DELETED') AS deleted,
+                  COUNT(*) FILTER (WHERE status <> 'DELETED'
+                                   AND retention_until < CURRENT_DATE)
+                      AS overdue,
+                  COALESCE(SUM(byte_size) FILTER (
+                      WHERE status = 'STORED'), 0) AS bytes_held
+                FROM call_recordings"""),
+    )).mappings().first()
+
+    return {"recordings": _rows(rows), "summary": _rows([summary])[0]}
+
+
+@router.post("/recordings/sweep")
+async def sweep_recordings(
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Destroy everything past its retention date.
+
+    Exposed rather than buried in a cron job so the retention promise can be
+    SEEN to be kept. `still_overdue` above zero after a sweep means something
+    is failing to delete and needs a person to look at it.
+    """
+    result = await rec_svc.sweep_expired(session)
+    await session.commit()
+    return result
+
+
+@router.get("/recordings/{recording_id}/access")
+async def recording_access_log(
+    recording_id: UUID,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Who has heard this recording. The answer to a data-subject request."""
+    rows = (await session.execute(
+        text("""SELECT a.action, a.actor_label, a.ip_address, a.note,
+                       a.created_at, u.full_name, u.email
+                  FROM call_recording_access a
+                  LEFT JOIN users u ON u.id = a.user_id
+                 WHERE a.recording_id = :r
+                 ORDER BY a.created_at DESC"""),
+        {"r": str(recording_id)},
+    )).mappings().all()
+    return {"access": _rows(rows)}

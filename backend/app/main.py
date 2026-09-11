@@ -154,10 +154,28 @@ try:
     # health checks pass, and that module's endpoints just do not exist.
     # This happened when `budgeting` was added to the import list but not to
     # the tuple above. Compare what was imported against what registered.
-    import sys as _sys
-    _registered_prefixes = {
-        r.path for r in app.routes if getattr(r, "path", "").startswith("/api")
-    }
+    # Collecting the registered paths is version-sensitive. Up to FastAPI
+    # 0.128 include_router() flattened a router's routes into app.routes; from
+    # 0.141 it appends a single _IncludedRouter wrapper holding the router on
+    # `original_router` instead. Reading only app.routes therefore finds NOTHING
+    # on a newer FastAPI, and this guard -- which exists to catch a module that
+    # registered no routes -- would report that every module had failed and
+    # refuse to start. Walk both shapes so an upgrade cannot turn a safety net
+    # into an outage.
+    def _collect_api_paths(routes):
+        found = set()
+        for r in routes:
+            path = getattr(r, "path", None)
+            if isinstance(path, str) and path.startswith("/api"):
+                found.add(path)
+            inner = getattr(r, "original_router", None)
+            if inner is None:
+                inner = getattr(r, "routes", None)
+            if inner is not None:
+                found |= _collect_api_paths(getattr(inner, "routes", inner))
+        return found
+
+    _registered_prefixes = _collect_api_paths(app.routes)
     _missing = []
     for _name, _mod in list(vars().items()):
         if not (hasattr(_mod, "__name__")

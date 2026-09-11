@@ -102,6 +102,12 @@ $backendFiles = @(
     'backend/alembic/versions/u0123456789t_call_log.py',
     'backend/alembic/versions/v1234567890u_call_telephony.py',
 
+    # Call recording. app/api/calls.py imports both of these, so they travel
+    # with it or the container will not start.
+    'backend/app/services/recording.py',
+    'backend/app/services/objectstore.py',
+    'backend/alembic/versions/w2345678901v_call_recording.py',
+
     'backend/requirements.txt'
 )
 
@@ -334,21 +340,22 @@ Hard-refresh the browser (Ctrl+F5) -- the PWA service worker caches the old
 bundle otherwise.
 
 New in this deploy:
-  * Company Call Log. Staff pick a customer (or a contact from their phone),
-    tap Call, and the call is recorded against that customer with a purpose
-    and an outcome. Two new sidebar entries: "Make a Call" for everyone and
-    "Call Tracking" for management.
-  * Click-to-call bridging, OFF until configured. When a telephony provider is
-    set up, the system rings the staff member, then the customer, and the
-    CARRIER reports the duration and cost -- the one figure in the call log
-    nobody in the company can influence. Until then calls hand off to the
-    phone dialer or WhatsApp and the duration is an estimate the staff member
-    confirms, labelled as such on every screen.
-  * Migrations u0123456789t and v1234567890u add call_logs and
-    call_provider_events. Additive: no existing table is altered.
+  * Call recording, OFF until switched on SEPARATELY from bridging. When
+    enabled, the provider records the bridged call, the audio is copied into
+    DigitalOcean Spaces, playback is administrators-only and every play,
+    refusal and deletion is written to a log nobody can edit.
+  * Every recording carries a destruction date. "Keep forever" is not a
+    storable state. Wallet Control -> Call Tracking -> Recordings shows what is
+    held, what is overdue, and runs the retention sweep.
+  * Migration w2345678901v adds call_recordings and call_recording_access.
+  * FIX, unrelated to recording but important: the router-registration guard in
+    main.py read app.routes, which FastAPI 0.141 stopped populating for
+    included routers. On an unpinned requirements.txt the next image rebuild
+    would have pulled 0.141 and the app would have REFUSED TO START, reporting
+    that every module had failed. The guard now handles both shapes and
+    fastapi/starlette are pinned to the versions production runs.
 
-To switch bridging on, set TELEPHONY_PROVIDER, AT_USERNAME, AT_API_KEY,
-AT_CALLER_ID, TELEPHONY_WEBHOOK_SECRET and PUBLIC_BASE_URL, then point the
-provider's voice callback at the URL shown by /api/calls/config. It stays off
-and harmless until all of those are present.
+Recording needs CALL_RECORDING_ENABLED plus SPACES_* credentials. Read
+CALL_RECORDING.md BEFORE switching it on: the staff notice must be in writing
+and the customer notice must actually be given.
 "@ -ForegroundColor Gray

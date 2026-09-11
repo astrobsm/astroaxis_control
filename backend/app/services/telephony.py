@@ -175,19 +175,35 @@ async def _at_place(staff_phone: str, customer_phone: str) -> dict:
     return {"session_id": str(session), "state": "QUEUED", "raw": body}
 
 
-def bridge_instruction(customer_phone: str) -> str:
+def bridge_instruction(customer_phone: str, *, record: bool = False,
+                       announcement: Optional[str] = None) -> str:
     """XML telling the provider to dial the customer and join the legs.
 
-    Returned when the provider calls back on answer. `record` is deliberately
-    off: recording a conversation raises consent obligations under the NDPA
-    that a duration figure does not, and this module exists to measure length,
-    not to listen.
+    Returned when the provider calls back on answer -- so anything spoken here
+    is heard by the STAFF MEMBER, whose leg answered first. The customer has
+    not been dialled yet and cannot hear it. That limit is real and is
+    documented in app/services/recording.py rather than papered over: the
+    announcement is a per-call reminder to the employee to give the notice, not
+    a substitute for giving it.
+
+    Recording defaults OFF. It is enabled only by an explicit switch that is
+    separate from bridging, because creating personal data about a customer is
+    a different decision from timing a call accurately.
     """
     safe = "".join(c for c in (customer_phone or "") if c.isdigit() or c == "+")
+    say = ""
+    if announcement:
+        # Escaped: the announcement is operator-configured, but it is still
+        # text being interpolated into a document the provider parses.
+        spoken = (announcement.replace("&", "&amp;").replace("<", "&lt;")
+                  .replace(">", "&gt;"))
+        say = f'<Say voice="woman" playBeep="false">{spoken}</Say>'
+    rec = "true" if record else "false"
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<Response>'
-        f'<Dial phoneNumbers="{safe}" record="false" sequential="true"/>'
+        f'{say}'
+        f'<Dial phoneNumbers="{safe}" record="{rec}" sequential="true"/>'
         '</Response>'
     )
 
@@ -259,7 +275,11 @@ def parse_callback(payload: dict) -> dict:
         or is_active in ("0", "false", "False")
     )
 
+    recording_url = _first(payload, "recordingUrl", "recording_url",
+                           "RecordingUrl", "recordingURL")
+
     return {
+        "recording_url": str(recording_url) if recording_url else None,
         "session_id": str(session) if session else None,
         "state": state or None,
         "duration_seconds": duration,
