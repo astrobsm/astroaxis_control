@@ -372,6 +372,27 @@ New in this deploy:
   * Migration x3456789012w. sales_orders, customers and warehouses each gain
     nullable columns with defaults -- no backfill, and every existing row
     behaves exactly as before. Regression tests cover that.
+  * Distributor compliance, phase 3. Facility assessment against a 25-item
+    checklist, corrective actions, and agreements with signatures.
+
+    TWO THINGS TO KNOW BEFORE ANYONE USES IT:
+
+    1. All 25 checklist items ship as COMPANY POLICY, not law. The migration
+       does not know which Nigerian regulations apply to your premises, and
+       putting a false legal claim in front of a distributor in Bonnesante's
+       name would be worse than saying nothing. To mark an item regulatory you
+       must name the authority that imposes it -- the database refuses a
+       regulatory claim without one. Have someone who knows the regulations
+       review the checklist and set those.
+
+    2. The app does NOT write your contracts. Paste in the agreement your legal
+       adviser has approved. The app freezes the text at issue, hashes it, and
+       ties each signature to the exact words signed -- it does not supply the
+       terms, and nothing in it is legal advice.
+
+    A critical or legal failure makes an assessment FAIL whatever the
+    percentage says. Submitted assessments and signatures cannot be edited.
+  * Migration y4567890123x -- seven new tables, no existing table touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --
