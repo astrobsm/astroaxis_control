@@ -11,6 +11,7 @@ import StaffWallet from './StaffWallet';
 import WalletAdmin from './WalletAdmin';
 import CallModule from './CallModule';
 import CallAdmin from './CallAdmin';
+import Distribution from './Distribution';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3254,6 +3255,9 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        ['wallet','My Wallet','wallet'],['walletAdmin','Wallet Control','shield'],
        ['calls','Make a Call','comms'],['callTracking','Call Tracking','trendup'],
      ]],
+     ['Distribution Network', [
+       ['distributors','Distributors & Territories','map'],
+     ]],
      ['People', [
        ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
        ['attendance','Attendance','cal'],['salaryPayroll','Salary & Payroll','card'],
@@ -3302,7 +3306,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        if (currentUser && currentUser.role === 'admin') return true;
        return !!(walletCaps && (walletCaps.can_approve || walletCaps.can_fund || walletCaps.can_reconcile));
      }
-     if (['letters','profits','accounting','distribution','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
+     if (['letters','profits','accounting','distribution','distributors','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
        return !currentUser || currentUser.role === 'admin';
      if (!currentUser || currentUser.role === 'admin') return true;
      if (m === 'dashboard') return true;
@@ -9233,6 +9237,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Company calls — management view */}
  {activeModule === 'callTracking' && (
  <CallAdmin />
+ )}
+
+ {/* Distributor network: territories, distributors, compliance */}
+ {activeModule === 'distributors' && (
+ <Distribution />
  )}
 
  {/* Settings */}

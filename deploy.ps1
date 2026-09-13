@@ -108,6 +108,15 @@ $backendFiles = @(
     'backend/app/services/objectstore.py',
     'backend/alembic/versions/w2345678901v_call_recording.py',
 
+    # Distributor foundation: geography, territories, distributor identity.
+    # main.py imports both routers, and registration re-raises, so these
+    # travel together or the container will not start.
+    'backend/app/services/geography.py',
+    'backend/app/services/distributors.py',
+    'backend/app/api/geography.py',
+    'backend/app/api/distributors.py',
+    'backend/alembic/versions/x3456789012w_distributor_foundation.py',
+
     'backend/requirements.txt'
 )
 
@@ -280,7 +289,7 @@ if [ "`$code" != "200" ]; then
 fi
 
 echo "--- route check (401 = exists and guarded) ---"
-for p in /api/health /api/payments/health /api/finance/accounts /api/wallet/me /api/calls/me; do
+for p in /api/health /api/payments/health /api/wallet/me /api/calls/me /api/geography/states /api/distributors; do
   printf '  %-32s HTTP ' "`$p"
   curl -s -o /dev/null -m 8 -w '%{http_code}\n' "http://127.0.0.1:8004`$p" || echo 000
 done
@@ -308,7 +317,7 @@ if ($LASTEXITCODE -ne 0) {
 Step 7 "External check..."
 Start-Sleep -Seconds 4
 $allGood = $true
-foreach ($path in '/api/health', '/api/payments/health', '/api/reports/settlements', '/api/wallet/me', '/api/calls/me') {
+foreach ($path in '/api/health', '/api/payments/health', '/api/wallet/me', '/api/calls/me', '/api/geography/states', '/api/distributors') {
     try {
         $r = Invoke-WebRequest -Uri "$Site$path" -Method GET -TimeoutSec 20 -UseBasicParsing
         Ok ("{0,-32} HTTP {1}" -f $path, $r.StatusCode)
@@ -340,22 +349,25 @@ Hard-refresh the browser (Ctrl+F5) -- the PWA service worker caches the old
 bundle otherwise.
 
 New in this deploy:
-  * Call recording, OFF until switched on SEPARATELY from bridging. When
-    enabled, the provider records the bridged call, the audio is copied into
-    DigitalOcean Spaces, playback is administrators-only and every play,
-    refusal and deletion is written to a log nobody can edit.
-  * Every recording carries a destruction date. "Keep forever" is not a
-    storable state. Wallet Control -> Call Tracking -> Recordings shows what is
-    held, what is overdue, and runs the retention sweep.
-  * Migration w2345678901v adds call_recordings and call_recording_access.
-  * FIX, unrelated to recording but important: the router-registration guard in
-    main.py read app.routes, which FastAPI 0.141 stopped populating for
-    included routers. On an unpinned requirements.txt the next image rebuild
-    would have pulled 0.141 and the app would have REFUSED TO START, reporting
-    that every module had failed. The guard now handles both shapes and
-    fastapi/starlette are pinned to the versions production runs.
+  * Distributor foundation, phases 1-2. A distributor is a CUSTOMER plus a
+    WAREHOUSE plus a profile -- approving one creates both automatically, so
+    invoices, payments, AR and stock transfers run through the EXISTING
+    accounting and inventory engines. There is no second ledger and no second
+    stock balance to reconcile.
+  * Territories, with Nigeria's 36 states and the FCT seeded. Targets are
+    superseded rather than edited, so a past month keeps the figure it was
+    measured against; assignments are closed rather than rewritten, so
+    historical sales stay attached to whoever made them; and exclusivity is a
+    partial unique index rather than an application check.
+  * Duplicate detection across BOTH distributors and existing customers, through
+    renaming, punctuation and phone formatting. Candidates are reported for a
+    person to judge; nothing is ever merged automatically.
+  * New sidebar group "Distribution Network".
+  * Migration x3456789012w. sales_orders, customers and warehouses each gain
+    nullable columns with defaults -- no backfill, and every existing row
+    behaves exactly as before. Regression tests cover that.
 
-Recording needs CALL_RECORDING_ENABLED plus SPACES_* credentials. Read
-CALL_RECORDING.md BEFORE switching it on: the staff notice must be in writing
-and the customer notice must actually be given.
+ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
+Import the rest from an authoritative source via /api/geography/lgas/import --
+a misspelt LGA silently corrupts every territory report built on it.
 "@ -ForegroundColor Gray
