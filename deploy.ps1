@@ -117,6 +117,12 @@ $backendFiles = @(
     'backend/app/api/distributors.py',
     'backend/alembic/versions/x3456789012w_distributor_foundation.py',
 
+    # Distributor compliance, phase 3. app/api/distributors.py imports
+    # services/compliance.py at module level, so shipping the API without the
+    # service would take the whole ERP down on the next restart.
+    'backend/app/services/compliance.py',
+    'backend/alembic/versions/y4567890123x_distributor_compliance.py',
+
     'backend/requirements.txt'
 )
 

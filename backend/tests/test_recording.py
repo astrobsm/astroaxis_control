@@ -41,13 +41,24 @@ DROP TABLE IF EXISTS customers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
 CREATE TABLE users (
+    -- Mirrors app.models.User in full. A cut-down users table here poisons the
+    -- shared test database for every later test that goes through the ORM, and
+    -- which test that is depends on collection order, so it is spelled out.
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     full_name VARCHAR(255) NOT NULL,
+    hashed_password VARCHAR(255) NOT NULL DEFAULT 'x',
     role VARCHAR(50) NOT NULL DEFAULT 'sales_staff',
     is_active BOOLEAN DEFAULT TRUE,
+    is_locked BOOLEAN DEFAULT FALSE,
+    failed_login_attempts INTEGER DEFAULT 0,
+    last_login TIMESTAMPTZ,
+    two_factor_enabled BOOLEAN DEFAULT FALSE,
+    two_factor_secret VARCHAR(255),
     phone VARCHAR(20),
-    department VARCHAR(100)
+    department VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
 );
 CREATE TABLE customers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

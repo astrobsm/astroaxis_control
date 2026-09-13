@@ -290,3 +290,63 @@ Three decisions I should not make unilaterally:
    and tested, then reassess. That gives you territories and distributors as
    real, usable, deployable functionality within one session rather than twelve
    half-finished features.
+
+---
+
+## 10. Delivered so far
+
+### Phases 1–2 — geography, territory, distributor identity (`x3456789012w`)
+
+As mapped in sections 3–4. A distributor resolves to a `customers` row and a
+`warehouses` row; there is no second ledger and no second stock balance.
+
+### Phase 3 — compliance (`y4567890123x`)
+
+Facility assessment, corrective actions and agreements. Two constraints in this
+phase are worth stating because they are the ones most easily eroded later:
+
+**Company policy is never recorded as law.** `facility_checklist_items` carries
+a `requirement_kind` of REGULATORY, COMPANY or COMMERCIAL, and a database check
+constraint refuses a REGULATORY item that does not name the authority imposing
+it. All 25 items seeded with the migration are COMPANY with no authority — the
+migration does not know which Nigerian regulations apply to this company's
+premises, and guessing would put a false legal claim in front of distributors in
+Bonnesante's name. Marking an item regulatory is a deliberate act by someone who
+knows which regulation they mean.
+
+**A critical failure is not absorbed by the score.** `score_assessment` returns
+the weighted percentage and the failed critical and regulatory items separately.
+The outcome is FAIL whenever either list is non-empty, whatever the percentage
+says. A store with no quarantine area scores 95% and still fails, and the screen
+says so in those words. `NOT_APPLICABLE` is excluded from both sides of the
+score, so a facility is not marked down for lacking a cold chain it does not
+need.
+
+Supporting guarantees, all enforced in the database rather than by convention:
+
+- An answer snapshots the requirement text, kind and weight as they read when
+  it was answered. Rewording the checklist next year cannot change what a past
+  inspector is recorded as having found.
+- A submitted assessment freezes and cannot be deleted. To change a finding you
+  carry out a new assessment; the earlier one stays on the record.
+- Every FAIL and REQUIRES_CORRECTION raises a tracked corrective action with a
+  severity, and closing one requires recording who verified the fix.
+- An agreement's text and hash freeze at issue. `sign_agreement` refuses a
+  signature whose `body_sha256` does not match the text on record, and the
+  browser computes that hash from the words actually displayed — so a signature
+  attaches to specific text rather than to a button press. Where the browser
+  cannot hash (no secure context), the UI disables signing rather than falling
+  back to a hash the signer never verified.
+- A signature must state what it means, in the signer's own words.
+- Signatures are append-only; agreements cannot be deleted; only one agreement
+  can be in force per distributor at a time.
+- Activation requires both a DISTRIBUTOR and a COMPANY signature.
+
+**What this phase deliberately does not do:** it does not draft contract
+language. Section 8 of the specification is explicit that the agreement template
+is a company document requiring legal review, and generating clauses that read
+as settled law would be the opposite of that. The app supplies the lifecycle,
+the hashing and the signature discipline; the words are pasted in by whoever is
+qualified to approve them.
+
+Tests: `backend/tests/test_compliance.py` (19), run against the real migration.

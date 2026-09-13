@@ -17,6 +17,7 @@ import {
   Banner, Btn, Card, Chip, DataTable, ErrorBox, Icon, KpiCard, SectionTitle,
   SkeletonCards,
 } from './ui/kit';
+import { CompliancePanel, CorrectiveActionQueue } from './DistributorCompliance';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -369,6 +370,7 @@ function NewTerritory({ states, onClose, onDone }) {
 function Dossier({ distributorId, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
+  const [pane, setPane] = useState('profile');
 
   const load = useCallback(async () => {
     try { setData(await getJSON(`/api/distributors/${distributorId}`)); setErr(''); }
@@ -415,6 +417,24 @@ function Dossier({ distributorId, onClose, onChanged }) {
             onClick={() => advance(status, `${label} — why?`)}>{label}</Btn>
         ))}
       </div>
+
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: space(2) }}>
+        {[['profile', 'Profile'], ['compliance', 'Facility & agreement']].map(([k, label]) => (
+          <button key={k} onClick={() => setPane(k)} style={{
+            padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5, fontWeight: 600,
+            border: `1px solid ${pane === k ? color.medical : color.borderStrong}`,
+            background: pane === k ? color.infoBg : '#fff',
+            color: pane === k ? color.royal : color.textSecondary, cursor: 'pointer',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {pane === 'compliance' && (
+        <CompliancePanel distributorId={distributorId} documents={data.documents}
+          onChanged={() => { load(); onChanged(); }} />
+      )}
+
+      {pane === 'profile' && (<>
 
       {/* The proof that this is an integration and not a parallel system. */}
       <Card pad={2.5} style={{ marginBottom: space(2) }}>
@@ -528,6 +548,8 @@ function Dossier({ distributorId, onClose, onChanged }) {
           }}
         />
       </Card>
+
+      </>)}
     </Modal>
   );
 }
@@ -713,6 +735,13 @@ export default function Distribution() {
             }}
           />
         </Card>
+      )}
+
+      {tab === 'compliance' && (
+        <>
+          <CorrectiveActionQueue onChanged={load} />
+          <div style={{ height: space(2.5) }} />
+        </>
       )}
 
       {tab === 'compliance' && expiring && (

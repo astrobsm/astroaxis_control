@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import require_admin, require_authenticated_user
 from app.db import get_session
 from app.models import User
+from app.services import compliance as csvc
 from app.services import distributors as svc
 
 router = APIRouter(prefix="/api/distributors", tags=["Distributors"])
@@ -495,3 +496,507 @@ async def expiring(
         "expiring_soon": [i for i in items if not i["expired"]],
         "total": len(items),
     }
+
+
+# ---------------------------------------------------------------------------
+# Compliance: storage facilities, assessments, corrective actions, agreements
+#
+# The checklist is DATA, not code, and every item declares whether it is a
+# regulatory requirement, a company policy or a commercial expectation --
+# because specification section 3 forbids presenting the second as the first.
+# A regulatory item must name the authority that imposes it, and the database
+# refuses one that does not.
+# ---------------------------------------------------------------------------
+
+
+
+class FacilityIn(BaseModel):
+    name: str = Field(..., min_length=2, max_length=255)
+    address: Optional[str] = None
+    state_id: Optional[UUID] = None
+    lga_id: Optional[UUID] = None
+    town: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    floor_area_sqm: Optional[Decimal] = Field(None, ge=0)
+    capacity_note: Optional[str] = None
+    responsible_person: Optional[str] = None
+    responsible_phone: Optional[str] = None
+
+
+class AssessmentStartIn(BaseModel):
+    assessed_on: Optional[date] = None
+
+
+class AnswerIn(BaseModel):
+    checklist_item_id: UUID
+    result: str
+    note: Optional[str] = None
+    evidence_document_id: Optional[UUID] = None
+
+
+class SubmitAssessmentIn(BaseModel):
+    summary: Optional[str] = None
+
+
+class CorrectiveActionIn(BaseModel):
+    status: Optional[str] = None
+    severity: Optional[str] = None
+    responsible_person: Optional[str] = None
+    deadline: Optional[date] = None
+    corrective_action: Optional[str] = None
+    evidence_document_id: Optional[UUID] = None
+    note: Optional[str] = None
+
+
+class ChecklistItemIn(BaseModel):
+    code: str = Field(..., min_length=2, max_length=48)
+    section: str = Field(..., min_length=2, max_length=64)
+    requirement: str = Field(..., min_length=5)
+    requirement_kind: str = Field("COMPANY")
+    # Mandatory when the kind is REGULATORY; the database enforces it too.
+    authority: Optional[str] = None
+    weight: int = Field(1, ge=1, le=10)
+    is_critical: bool = False
+    requires_evidence: bool = False
+    sort_order: int = 100
+
+
+class AgreementIn(BaseModel):
+    title: str = Field(..., min_length=3, max_length=255)
+    body: str = Field(..., min_length=20)
+    terms: Optional[dict] = None
+    territory_ids: list[UUID] = Field(default_factory=list)
+    template_document_id: Optional[str] = None
+    template_version: Optional[str] = None
+    effective_from: Optional[date] = None
+    expires_on: Optional[date] = None
+
+
+class SignIn(BaseModel):
+    signer_name: str = Field(..., min_length=2, max_length=255)
+    signer_role: str
+    meaning: str = Field(..., min_length=10)
+    # The hash of the text actually displayed to the signer. Checked against
+    # the stored agreement, so a signature is tied to specific words.
+    body_sha256: str = Field(..., min_length=64, max_length=64)
+
+
+class EndAgreementIn(BaseModel):
+    status: str
+    reason: str = Field(..., min_length=3)
+
+
+# ---- checklist configuration ----------------------------------------------
+
+@router.get("/compliance/checklist")
+async def get_checklist(
+    include_inactive: bool = False,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The storage checklist, with each item's provenance.
+
+    `requirement_kind` and `authority` are shown so a distributor can see which
+    requirements are law and which are this company's policy.
+    """
+    clause = "" if include_inactive else "WHERE is_active"
+    rows = (await session.execute(
+        text(f"""SELECT id, code, section, requirement, requirement_kind,
+                        authority, weight, is_critical, requires_evidence,
+                        sort_order, is_active
+                   FROM facility_checklist_items {clause}
+                  ORDER BY sort_order"""),
+    )).mappings().all()
+    kinds = {}
+    for r in rows:
+        kinds[r["requirement_kind"]] = kinds.get(r["requirement_kind"], 0) + 1
+    return {
+        "items": _rows(rows),
+        "by_kind": kinds,
+        "note": ("Items seeded with this module are COMPANY requirements. Mark "
+                 "an item REGULATORY only when a law or regulator imposes it, "
+                 "and name that authority -- the system will not accept a "
+                 "regulatory claim without one."),
+    }
+
+
+@router.post("/compliance/checklist", status_code=201)
+async def add_checklist_item(
+    body: ChecklistItemIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    if body.requirement_kind not in ("REGULATORY", "COMPANY", "COMMERCIAL"):
+        raise HTTPException(
+            status_code=400,
+            detail="Kind must be REGULATORY, COMPANY or COMMERCIAL.")
+    if body.requirement_kind == "REGULATORY" and not (body.authority or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail=("A regulatory requirement must name the authority that "
+                    "imposes it. Company policy must not be recorded as law."))
+    await session.execute(
+        text("""INSERT INTO facility_checklist_items
+                    (id, code, section, requirement, requirement_kind,
+                     authority, weight, is_critical, requires_evidence,
+                     sort_order)
+                VALUES (gen_random_uuid(), :c, :s, :r, :k, :a, :w, :crit,
+                        :ev, :ord)"""),
+        {"c": body.code.upper(), "s": body.section, "r": body.requirement,
+         "k": body.requirement_kind, "a": (body.authority or "").strip() or None,
+         "w": body.weight, "crit": body.is_critical,
+         "ev": body.requires_evidence, "ord": body.sort_order},
+    )
+    await session.commit()
+    return {"code": body.code.upper(), "requirement_kind": body.requirement_kind}
+
+
+# ---- facilities -------------------------------------------------------------
+
+@router.post("/{distributor_id}/facilities", status_code=201)
+async def add_facility(
+    distributor_id: UUID,
+    body: FacilityIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await csvc.create_facility(
+        session, distributor_id=distributor_id, name=body.name,
+        address=body.address, state_id=body.state_id, lga_id=body.lga_id,
+        town=body.town, latitude=body.latitude, longitude=body.longitude,
+        floor_area_sqm=body.floor_area_sqm, capacity_note=body.capacity_note,
+        responsible_person=body.responsible_person,
+        responsible_phone=body.responsible_phone, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/{distributor_id}/facilities")
+async def list_facilities(
+    distributor_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = (await session.execute(
+        text("""SELECT f.id, f.name, f.address, f.town, f.status,
+                       f.responsible_person, f.floor_area_sqm, f.is_primary,
+                       s.name AS state, l.name AS lga,
+                       (SELECT fa.assessed_on FROM facility_assessments fa
+                         WHERE fa.facility_id = f.id AND fa.status <> 'DRAFT'
+                         ORDER BY fa.assessed_on DESC LIMIT 1) AS last_assessed,
+                       (SELECT fa.score FROM facility_assessments fa
+                         WHERE fa.facility_id = f.id AND fa.status <> 'DRAFT'
+                         ORDER BY fa.assessed_on DESC LIMIT 1) AS last_score
+                  FROM distributor_facilities f
+                  LEFT JOIN states s ON s.id = f.state_id
+                  LEFT JOIN lgas l ON l.id = f.lga_id
+                 WHERE f.distributor_id = :d
+                 ORDER BY f.is_primary DESC, f.created_at"""),
+        {"d": str(distributor_id)},
+    )).mappings().all()
+    return {"facilities": _rows(rows)}
+
+
+# ---- assessment -------------------------------------------------------------
+
+@router.post("/facilities/{facility_id}/assessments", status_code=201)
+async def start_assessment(
+    facility_id: UUID,
+    body: AssessmentStartIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Open a draft assessment and return the checklist to work through."""
+    result = await csvc.start_assessment(
+        session, facility_id=facility_id, assessed_on=body.assessed_on,
+        actor=user)
+    await session.commit()
+    return result
+
+
+@router.put("/assessments/{assessment_id}/items")
+async def answer_item(
+    assessment_id: UUID,
+    body: AnswerIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record one checklist answer. The question is snapshotted as answered."""
+    result = await csvc.answer_item(
+        session, assessment_id=assessment_id,
+        checklist_item_id=body.checklist_item_id, result=body.result,
+        note=body.note, evidence_document_id=body.evidence_document_id)
+    await session.commit()
+    return result
+
+
+@router.get("/assessments/{assessment_id}/score")
+async def preview_score(
+    assessment_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The running score while the assessment is still open.
+
+    Read `outcome`, not `score`. A critical or regulatory failure makes the
+    outcome FAIL regardless of how good the percentage looks.
+    """
+    return await csvc.score_assessment(session, assessment_id)
+
+
+@router.post("/assessments/{assessment_id}/submit")
+async def submit_assessment(
+    assessment_id: UUID,
+    body: SubmitAssessmentIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Freeze the findings and raise a corrective action for every failure."""
+    result = await csvc.submit_assessment(
+        session, assessment_id=assessment_id, summary=body.summary, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/assessments/{assessment_id}")
+async def assessment_detail(
+    assessment_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    head = (await session.execute(
+        text("""SELECT fa.*, f.name AS facility_name,
+                       d.distributor_code, d.legal_name,
+                       u.full_name AS assessor
+                  FROM facility_assessments fa
+                  JOIN distributor_facilities f ON f.id = fa.facility_id
+                  JOIN distributors d ON d.id = fa.distributor_id
+                  LEFT JOIN users u ON u.id = fa.assessor_id
+                 WHERE fa.id = :a"""),
+        {"a": str(assessment_id)},
+    )).mappings().first()
+    if head is None:
+        raise HTTPException(status_code=404, detail="Assessment not found.")
+
+    items = (await session.execute(
+        text("""SELECT fai.id, fai.result, fai.note, fai.requirement_snapshot,
+                       fai.kind_snapshot, fai.was_critical,
+                       fai.evidence_document_id, ci.code, ci.section,
+                       ci.authority
+                  FROM facility_assessment_items fai
+                  JOIN facility_checklist_items ci
+                       ON ci.id = fai.checklist_item_id
+                 WHERE fai.assessment_id = :a
+                 ORDER BY ci.sort_order"""),
+        {"a": str(assessment_id)},
+    )).mappings().all()
+
+    actions = (await session.execute(
+        text("""SELECT id, action_reference, finding, severity, status,
+                       responsible_person, deadline, corrective_action,
+                       verified_at
+                  FROM facility_corrective_actions
+                 WHERE assessment_id = :a ORDER BY severity DESC, created_at"""),
+        {"a": str(assessment_id)},
+    )).mappings().all()
+
+    return {
+        "assessment": _rows([head])[0],
+        "items": _rows(items),
+        "corrective_actions": _rows(actions),
+        "live_score": await csvc.score_assessment(session, assessment_id),
+    }
+
+
+# ---- corrective actions -----------------------------------------------------
+
+@router.patch("/corrective-actions/{action_id}")
+async def update_corrective_action(
+    action_id: UUID,
+    body: CorrectiveActionIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Progress a finding. Closing it records who verified the fix."""
+    result = await csvc.update_corrective_action(
+        session, action_id=action_id, status=body.status,
+        severity=body.severity, responsible_person=body.responsible_person,
+        deadline=body.deadline, corrective_action=body.corrective_action,
+        evidence_document_id=body.evidence_document_id, note=body.note,
+        user=user)
+    await session.commit()
+    return result
+
+
+@router.get("/compliance/corrective-actions")
+async def open_corrective_actions(
+    overdue_only: bool = False,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    clause = "AND ca.deadline < CURRENT_DATE" if overdue_only else ""
+    rows = (await session.execute(
+        text(f"""SELECT ca.id, ca.action_reference, ca.finding, ca.severity,
+                        ca.status, ca.responsible_person, ca.deadline,
+                        (ca.deadline < CURRENT_DATE) AS overdue,
+                        d.distributor_code, d.legal_name
+                   FROM facility_corrective_actions ca
+                   JOIN distributors d ON d.id = ca.distributor_id
+                  WHERE ca.status <> 'CLOSED' {clause}
+                  ORDER BY CASE ca.severity WHEN 'CRITICAL' THEN 0
+                                            WHEN 'HIGH' THEN 1
+                                            WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+                           ca.deadline NULLS LAST"""),
+    )).mappings().all()
+    return {"corrective_actions": _rows(rows)}
+
+
+# ---- agreements -------------------------------------------------------------
+
+@router.post("/{distributor_id}/agreements", status_code=201)
+async def create_agreement(
+    distributor_id: UUID,
+    body: AgreementIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Draft an agreement from rendered text.
+
+    This endpoint provides the lifecycle, hashing and signature discipline --
+    not the contract language. Section 8 is explicit that the template is a
+    company document requiring legal review before execution.
+    """
+    result = await csvc.create_agreement(
+        session, distributor_id=distributor_id, title=body.title,
+        body=body.body, terms=body.terms, territory_ids=body.territory_ids,
+        template_document_id=body.template_document_id,
+        template_version=body.template_version,
+        effective_from=body.effective_from, expires_on=body.expires_on,
+        actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/{distributor_id}/agreements")
+async def list_agreements(
+    distributor_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = (await session.execute(
+        text("""SELECT a.id, a.agreement_reference, a.title, a.status,
+                       a.effective_from, a.expires_on, a.issued_at,
+                       a.accepted_at, a.countersigned_at, a.activated_at,
+                       a.ended_at, a.end_reason, a.body_sha256,
+                       (SELECT COUNT(*) FROM distributor_agreement_signatures s
+                         WHERE s.agreement_id = a.id) AS signature_count
+                  FROM distributor_agreements a
+                 WHERE a.distributor_id = :d
+                 ORDER BY a.created_at DESC"""),
+        {"d": str(distributor_id)},
+    )).mappings().all()
+    return {"agreements": _rows(rows)}
+
+
+@router.get("/agreements/{agreement_id}")
+async def agreement_detail(
+    agreement_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """The agreement as issued, with its signatures.
+
+    `body_sha256` is what a signer must echo back, so a signature is tied to
+    the exact text rather than to the act of clicking.
+    """
+    row = (await session.execute(
+        text("""SELECT a.*, d.distributor_code, d.legal_name
+                  FROM distributor_agreements a
+                  JOIN distributors d ON d.id = a.distributor_id
+                 WHERE a.id = :a"""),
+        {"a": str(agreement_id)},
+    )).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agreement not found.")
+
+    signatures = (await session.execute(
+        text("""SELECT signer_name, signer_role, meaning, content_hash,
+                       signed_at, ip_address
+                  FROM distributor_agreement_signatures
+                 WHERE agreement_id = :a ORDER BY signed_at"""),
+        {"a": str(agreement_id)},
+    )).mappings().all()
+
+    return {"agreement": _rows([row])[0], "signatures": _rows(signatures)}
+
+
+@router.post("/agreements/{agreement_id}/issue")
+async def issue_agreement(
+    agreement_id: UUID,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Present the agreement. Its text freezes at this point."""
+    result = await csvc.issue_agreement(
+        session, agreement_id=agreement_id, actor=user)
+    await session.commit()
+    return result
+
+
+@router.post("/agreements/{agreement_id}/sign")
+async def sign_agreement(
+    agreement_id: UUID,
+    body: SignIn,
+    request: Request,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Sign the agreement, echoing back the hash of the text you were shown."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",")[0].strip() or (
+        request.client.host if request.client else "")
+    result = await csvc.sign_agreement(
+        session, agreement_id=agreement_id, signer_name=body.signer_name,
+        signer_role=body.signer_role, meaning=body.meaning,
+        body_sha256=body.body_sha256, user=user, ip_address=ip,
+        user_agent=request.headers.get("user-agent", ""))
+    await session.commit()
+    return result
+
+
+@router.post("/agreements/{agreement_id}/activate")
+async def activate_agreement(
+    agreement_id: UUID,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Bring a countersigned agreement into force. Both signatures required."""
+    result = await csvc.activate_agreement(
+        session, agreement_id=agreement_id, actor=user)
+    await session.commit()
+    return result
+
+
+@router.post("/agreements/{agreement_id}/end")
+async def end_agreement(
+    agreement_id: UUID,
+    body: EndAgreementIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await csvc.end_agreement(
+        session, agreement_id=agreement_id, status=body.status,
+        reason=body.reason, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/{distributor_id}/compliance")
+async def compliance_summary(
+    distributor_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is this distributor fit to trade, and if not, exactly why."""
+    return await csvc.compliance_summary(session, distributor_id)
