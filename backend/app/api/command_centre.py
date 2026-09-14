@@ -1,8 +1,8 @@
 """The distribution command centre.
 
-Reads are open to any authenticated user. Exports are administrator-only and
-recorded: a CSV of the distributor register takes names, phone numbers and
-trading history out of the building on somebody's laptop.
+Reads require a distribution role (admin, sales, customer care). Exports are
+administrator-only and recorded: a CSV of the distributor register takes names,
+phone numbers and trading history out of the building on somebody's laptop.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import require_admin, require_distribution_access
 from app.db import get_session
 from app.models import User
 from app.services import command_centre as svc
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/command-centre",
 
 @router.get("")
 async def overview(
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Counts, coverage and this month's sales by provenance.
@@ -39,7 +39,7 @@ async def overview(
 async def coverage(
     since: Optional[date] = None,
     until: Optional[date] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Per-state coverage and verified sales.
@@ -56,7 +56,7 @@ async def coverage(
 async def ranking(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Distributors ranked on VERIFIED sales for one month."""
@@ -67,7 +67,7 @@ async def ranking(
 async def territory_rollup(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Territories with the target in force and what was verified against it."""
@@ -76,7 +76,7 @@ async def territory_rollup(
 
 @router.get("/exports")
 async def list_exports(
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
 ):
     return {
         "datasets": [{"name": k, "description": v}

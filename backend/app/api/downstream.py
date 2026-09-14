@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import require_admin, require_distribution_access
 from app.db import get_session
 from app.models import User
 from app.services import downstream as svc
@@ -105,7 +105,7 @@ async def add_marketer(
 async def list_marketers(
     distributor_id: UUID,
     include_former: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await svc.list_marketers(
@@ -130,7 +130,7 @@ async def end_marketer(
 async def add_outlet(
     distributor_id: UUID,
     body: OutletIn,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     result = await svc.add_outlet(
@@ -144,7 +144,7 @@ async def add_outlet(
 @router.get("/{distributor_id}/outlets")
 async def list_outlets(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await svc.list_outlets(session, distributor_id=distributor_id)
@@ -156,7 +156,7 @@ async def list_outlets(
 @router.post("/sales", status_code=201)
 async def record_sale(
     body: SaleIn,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Record a sale the distributor says they made.
@@ -179,7 +179,7 @@ async def list_sales(
     provenance: Optional[str] = None,
     discrepancies_only: bool = False,
     limit: int = Query(200, ge=1, le=1000),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await svc.list_sales(
@@ -191,7 +191,7 @@ async def list_sales(
 @router.get("/sales/{sale_id}")
 async def sale_detail(
     sale_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     return await svc.sale_detail(session, sale_id)
@@ -203,7 +203,7 @@ async def upload_evidence(
     file: UploadFile = File(...),
     evidence_type: str = Form("OTHER"),
     note: Optional[str] = Form(None),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Attach the invoice, receipt or photograph a verification rests on."""
@@ -219,7 +219,7 @@ async def upload_evidence(
 @router.get("/evidence/{evidence_id}")
 async def fetch_evidence(
     evidence_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     row = (await session.execute(
@@ -274,7 +274,7 @@ async def sell_through(
     territory_id: Optional[UUID] = None,
     since: Optional[date] = None,
     until: Optional[date] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Downstream sales with REPORTED and VERIFIED kept apart.
@@ -292,7 +292,7 @@ async def sell_through(
 async def by_marketer(
     distributor_id: UUID,
     since: Optional[date] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Per-marketer totals, provenance kept apart.

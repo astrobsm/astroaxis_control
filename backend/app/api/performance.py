@@ -1,7 +1,9 @@
 """Distributor performance: run-rate, periods, reviews, scorecard.
 
-Reads are open to any authenticated user. Opening and closing a performance
-review is administrator-only: it is the process that can end a distributorship.
+Reads require a distribution role (admin, sales, customer care): a distributor's
+performance is commercial information, not something every staff login needs.
+Opening and closing a performance review is administrator-only -- it is the
+process that can end a distributorship.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import require_admin, require_distribution_access
 from app.db import get_session
 from app.models import User
 from app.services import performance as svc
@@ -49,7 +51,7 @@ class CloseReviewIn(BaseModel):
 @router.get("/{distributor_id}/run-rate")
 async def run_rate(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Where this month is heading, or a refusal to guess.
@@ -66,7 +68,7 @@ async def period(
     distributor_id: UUID,
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """One month, measured against the target that was in force THEN."""
@@ -78,7 +80,7 @@ async def period(
 async def history(
     distributor_id: UUID,
     months: int = Query(12, ge=1, le=36),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await svc.history(
@@ -89,7 +91,7 @@ async def history(
 @router.get("/{distributor_id}/scorecard")
 async def scorecard(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Performance, compliance and evidence quality as three separate readings.
@@ -104,7 +106,7 @@ async def scorecard(
 async def snapshots(
     distributor_id: UUID,
     limit: int = Query(24, ge=1, le=120),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Frozen month-end figures: what was known when a decision was taken."""
@@ -131,7 +133,7 @@ async def snapshot(
 @router.get("/{distributor_id}/review-due")
 async def review_due(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Consecutive months below threshold, and whether that warrants a review.
@@ -179,7 +181,7 @@ async def close_review(
 async def list_reviews(
     distributor_id: Optional[UUID] = None,
     open_only: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await svc.list_reviews(
@@ -191,7 +193,7 @@ async def list_reviews(
 async def leaderboard(
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Active distributors for one month, ranked on VERIFIED sales only."""

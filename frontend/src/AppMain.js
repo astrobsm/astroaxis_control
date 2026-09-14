@@ -3314,7 +3314,19 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        if (currentUser && currentUser.role === 'admin') return true;
        return !!(walletCaps && (walletCaps.can_approve || walletCaps.can_fund || walletCaps.can_reconcile));
      }
-     if (['letters','profits','accounting','distribution','distributors','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
+     // The distributor register and the commercial screens hanging off it.
+     // A distributor record carries what they owe, what they claim to have
+     // sold and where they are failing -- commercial information, not
+     // something every staff login needs. Mirrors require_distribution_access
+     // in app/api/auth.py; if these disagree, the API is the one that decides,
+     // and a hidden menu item that 403s is the better failure of the two.
+     if (['distributors','commandCentre'].includes(m))
+       return !!currentUser && ['admin','sales_staff','customer_care']
+         .includes(currentUser.role);
+     // batches, attention and recalls are deliberately NOT in that list: a
+     // picker has to know which batch to take, and a recall has to be
+     // collected by whoever is actually in the warehouse.
+     if (['letters','profits','accounting','distribution','announcements','geomap','regulatoryCompliance','networkWifi'].includes(m))
        return !currentUser || currentUser.role === 'admin';
      if (!currentUser || currentUser.role === 'admin') return true;
      if (m === 'dashboard') return true;

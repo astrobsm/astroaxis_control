@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import require_admin, require_distribution_access
 from app.db import get_session
 from app.models import User
 from app.services import compliance as csvc
@@ -119,7 +119,7 @@ async def check_duplicate(
     email: str = "",
     cac_number: str = "",
     tin: str = "",
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Search existing distributors AND customers for a probable match.
@@ -147,7 +147,7 @@ async def list_distributors(
     state_id: Optional[UUID] = None,
     q: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     where = ["1 = 1"]
@@ -216,7 +216,7 @@ async def create_distributor(
 @router.get("/{distributor_id}")
 async def distributor_detail(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """The distributor dossier: identity, linkage, territories, compliance.
@@ -370,7 +370,7 @@ async def upload_document(
     title: Optional[str] = Form(None),
     issue_date: Optional[date] = Form(None),
     expiry_date: Optional[date] = Form(None),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     buf = bytearray()
@@ -398,7 +398,7 @@ async def upload_document(
 @router.get("/documents/{document_id}")
 async def download_document(
     document_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     row = (await session.execute(
@@ -486,7 +486,7 @@ async def verify_qualification(
 @router.get("/compliance/expiring")
 async def expiring(
     within_days: int = Query(90, ge=1, le=365),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Documents and qualifications at or past expiry, soonest first."""
@@ -593,7 +593,7 @@ class EndAgreementIn(BaseModel):
 @router.get("/compliance/checklist")
 async def get_checklist(
     include_inactive: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """The storage checklist, with each item's provenance.
@@ -676,7 +676,7 @@ async def add_facility(
 @router.get("/{distributor_id}/facilities")
 async def list_facilities(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (await session.execute(
@@ -735,7 +735,7 @@ async def answer_item(
 @router.get("/assessments/{assessment_id}/score")
 async def preview_score(
     assessment_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """The running score while the assessment is still open.
@@ -763,7 +763,7 @@ async def submit_assessment(
 @router.get("/assessments/{assessment_id}")
 async def assessment_detail(
     assessment_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     head = (await session.execute(
@@ -833,7 +833,7 @@ async def update_corrective_action(
 @router.get("/compliance/corrective-actions")
 async def open_corrective_actions(
     overdue_only: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     clause = "AND ca.deadline < CURRENT_DATE" if overdue_only else ""
@@ -882,7 +882,7 @@ async def create_agreement(
 @router.get("/{distributor_id}/agreements")
 async def list_agreements(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (await session.execute(
@@ -903,7 +903,7 @@ async def list_agreements(
 @router.get("/agreements/{agreement_id}")
 async def agreement_detail(
     agreement_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """The agreement as issued, with its signatures.
@@ -950,7 +950,7 @@ async def sign_agreement(
     agreement_id: UUID,
     body: SignIn,
     request: Request,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Sign the agreement, echoing back the hash of the text you were shown."""
@@ -996,7 +996,7 @@ async def end_agreement(
 @router.get("/{distributor_id}/compliance")
 async def compliance_summary(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Is this distributor fit to trade, and if not, exactly why."""
@@ -1050,7 +1050,7 @@ async def issue_order_link(
 async def list_order_links(
     distributor_id: UUID,
     include_dead: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Links for this distributor. The tokens are not here and never will be."""
@@ -1093,7 +1093,7 @@ async def order_link_activity(
 async def distributor_orders(
     distributor_id: UUID,
     limit: int = Query(100, ge=1, le=500),
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Orders this distributor has placed.

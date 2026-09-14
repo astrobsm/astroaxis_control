@@ -4,13 +4,17 @@ Administrative geography (country / state / LGA) is reference data. Territories
 are commercial decisions laid on top of it. The two are separate on purpose --
 see app/services/geography.py.
 
-PERMISSIONS, FOR NOW
---------------------
-Reads are open to any authenticated user; everything that changes a territory,
-a target or an assignment is administrator-only. The specification asks for a
-granular distribution-manager role, and that arrives with the compliance phase
-using the same per-user grant pattern the wallet module already proved -- rather
-than by extending the global role enum that all fifty routers depend on.
+PERMISSIONS
+-----------
+Reads require a distribution role -- admin, sales_staff or customer_care. A
+territory names the distributor holding it and the target they are measured
+against, which is commercial information rather than something every staff login
+needs. Everything that changes a territory, a target or an assignment is
+administrator-only.
+
+This uses the EXISTING role enum through require_roles rather than adding a new
+global role, because fifty routers depend on that enum and widening it is a
+change to all of them. See app/api/auth.py for who is deliberately excluded.
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import require_admin, require_distribution_access
 from app.db import get_session
 from app.models import User
 from app.services import applications as apps
@@ -104,7 +108,7 @@ class TerritoryStatusIn(BaseModel):
 @router.get("/states")
 async def list_states(
     country: str = "NG",
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (await session.execute(
@@ -125,7 +129,7 @@ async def list_states(
 @router.get("/lgas")
 async def list_lgas(
     state_id: Optional[UUID] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     clause = "WHERE l.state_id = :s" if state_id else ""
@@ -206,7 +210,7 @@ async def import_lgas(
 
 @router.get("/regions")
 async def list_regions(
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = (await session.execute(
@@ -224,7 +228,7 @@ async def list_territories(
     state_id: Optional[UUID] = None,
     status: Optional[str] = None,
     unassigned_only: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     where = ["1 = 1"]
@@ -292,7 +296,7 @@ async def create_territory(
 @router.get("/territories/{territory_id}")
 async def territory_detail(
     territory_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """One territory, with its coverage, current target and full history."""
@@ -397,7 +401,7 @@ async def set_target(
 @router.get("/targets/rollup")
 async def target_rollup(
     on: Optional[date] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Territory targets summed to state, geopolitical zone and national."""
@@ -501,7 +505,7 @@ class WithdrawIn(BaseModel):
 async def apply_for_territory(
     territory_id: UUID,
     body: ApplyIn,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Request a territory. Nothing is granted here."""
@@ -520,7 +524,7 @@ async def list_applications(
     distributor_id: Optional[UUID] = None,
     territory_id: Optional[UUID] = None,
     open_only: bool = False,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     rows = await apps.list_applications(
@@ -532,7 +536,7 @@ async def list_applications(
 @router.get("/applications/{application_id}")
 async def application_detail(
     application_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Everything a reviewer needs, as three separate judgements.
@@ -577,7 +581,7 @@ async def decide_application(
 async def withdraw_application(
     application_id: UUID,
     body: WithdrawIn,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     result = await apps.withdraw(
@@ -590,7 +594,7 @@ async def withdraw_application(
 async def territory_conflicts(
     territory_id: UUID,
     distributor_id: Optional[UUID] = None,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """Who else already holds ground this territory covers.
@@ -607,7 +611,7 @@ async def territory_conflicts(
 @router.get("/distributors/{distributor_id}/territories")
 async def distributor_territories(
     distributor_id: UUID,
-    user: User = Depends(require_authenticated_user),
+    user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
     """What this distributor holds now, and what it held before."""

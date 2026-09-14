@@ -32,7 +32,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import require_admin, require_authenticated_user
+from app.api.auth import (
+    DISTRIBUTION_ROLES, require_admin, require_authenticated_user,
+    require_distribution_access,
+)
 from app.db import get_session
 from app.models import User
 
@@ -90,9 +93,14 @@ def _callables(obj, depth: int = 0) -> set:
 
 
 def _classify(calls: set) -> str:
-    # Identity, not name: see _callables.
+    # Identity, not name: see _callables. Ordered narrowest first, because
+    # require_distribution_access and require_admin both nest
+    # require_authenticated_user beneath them -- checking the broad one first
+    # would report every guarded route as merely authenticated.
     if require_admin in calls:
         return "ADMIN"
+    if require_distribution_access in calls:
+        return "DISTRIBUTION"
     if require_authenticated_user in calls:
         return "AUTHENTICATED"
     return "PUBLIC"
@@ -188,6 +196,18 @@ async def permissions_matrix(
         # looked at.
         "public_routes": public,
         "unexpected_public_routes": unexpected,
+        "role_meanings": {
+            "ADMIN": "role = admin only.",
+            "DISTRIBUTION": ("A distributor record is commercial information. "
+                             f"Restricted to: {', '.join(DISTRIBUTION_ROLES)}. "
+                             "Marketers, production and warehouse staff are "
+                             "deliberately excluded -- see app/api/auth.py."),
+            "AUTHENTICATED": ("Any staff login. Batches and recalls sit here on "
+                              "purpose: a picker has to know which batch to "
+                              "take, and a recall has to be collected by "
+                              "whoever is in the warehouse."),
+            "PUBLIC": "No credential beyond the token in the URL.",
+        },
         "known_limitations": [
             "This reports what the dependencies REQUIRE. It catches a missing "
             "guard; it does not catch a guard that is present and wrong.",

@@ -45,6 +45,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 _ORDER = {s: i for i, s in enumerate(SEVERITIES)}
 
+# Categories that reveal the company's commercial position with a distributor --
+# who is failing, what they claim to have sold, whose licence has lapsed.
+COMMERCIAL_CATEGORIES = {
+    "COMPLIANCE", "TERRITORY", "SELL_THROUGH", "PERFORMANCE", "ORDERING",
+}
+# Categories anyone in the building needs regardless of role. A recalled batch
+# sitting in a warehouse has to be visible to the people in that warehouse, and
+# a picker needs to know what is about to expire. Filtering these out to protect
+# commercial confidentiality would hide a safety problem from the people
+# standing next to it.
+OPERATIONAL_CATEGORIES = {"RECALL", "STOCK"}
+
 MAX_SNOOZE_DAYS = 90
 
 
@@ -321,6 +333,10 @@ async def attention_items(
     Nothing here is read from a notifications table, because there is not one.
     See the module docstring.
     """
+    from app.api.auth import DISTRIBUTION_ROLES
+    may_see_commercial = (
+        user is None or getattr(user, "role", None) in DISTRIBUTION_ROLES)
+
     groups = [
         await _recalled_stock_still_out(session),
         await _critical_corrective_actions(session),
@@ -342,6 +358,14 @@ async def attention_items(
                      WHERE user_id = :u AND snoozed_until > NOW()"""),
             {"u": str(user.id)})).mappings().all()
         snoozed_keys = {r["item_key"]: r["snoozed_until"] for r in rows}
+
+    # Roles outside distribution see the operational items only. They still see
+    # every recalled batch and every expiring one -- see the category notes.
+    withheld = 0
+    if not may_see_commercial:
+        before = len(items)
+        items = [i for i in items if i["category"] in OPERATIONAL_CATEGORIES]
+        withheld = before - len(items)
 
     shown, hidden = [], 0
     for item in items:
@@ -368,12 +392,18 @@ async def attention_items(
         "counts": counts,
         "total": len(shown),
         "snoozed_hidden": hidden,
+        "withheld_by_role": withheld,
+        "sees_commercial_items": may_see_commercial,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "note": ("This list is computed from live data every time it is opened. "
                  "Nothing here is stored, so nothing can be out of date -- an "
                  "item disappears the moment the underlying problem is fixed. "
                  "The app does not send these anywhere; see the module notes on "
-                 "why push notifications would reach the wrong people."),
+                 "why push notifications would reach the wrong people."
+                 + ("" if may_see_commercial else
+                    f" {withheld} item(s) about distributor commercial "
+                    f"performance are not shown to your role; recalls and "
+                    f"stock always are.")),
     }
 
 

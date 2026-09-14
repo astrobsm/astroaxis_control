@@ -173,6 +173,13 @@ $backendFiles = @(
     # from the running app, and the miss-log cap is a code change only.
     'backend/app/api/security_review.py',
 
+    # Distributor access restricted to admin/sales/customer care, and all 774
+    # LGAs seeded. auth.py defines the new guard, so it must travel with the
+    # routers that import it or the container will not start.
+    'backend/app/api/auth.py',
+    'backend/app/services/inbox.py',
+    'backend/alembic/versions/g2345678901f_all_lgas.py',
+
     'backend/requirements.txt'
 )
 
@@ -668,6 +675,30 @@ New in this deploy:
     is present but wrong. Record-level access is not modelled -- any staff
     login can read any distributor's record, and document and evidence
     downloads are authenticated but not scoped to a distributor.
+  * WHO CAN SEE A DISTRIBUTOR RECORD is now restricted. The register,
+    territories, sell-through, performance and the command centre require
+    admin, sales_staff or customer_care. Marketers, production and warehouse
+    staff no longer see them, and the sidebar entries disappear for those
+    roles.
+
+    Batches, recalls and the attention list are DELIBERATELY still open to
+    every staff login: a picker has to know which batch to take, and a recall
+    has to be collected by whoever is in the warehouse. The attention list
+    filters instead -- non-distribution roles see recall and stock items but
+    not a distributor's commercial position.
+
+    NOTE: 'marketer' is excluded because the instruction named admin, sales
+    and customer care. If marketers need the register, add 'marketer' to
+    DISTRIBUTION_ROLES in backend/app/api/auth.py.
+
+  * ALL 774 LGAs ARE NOW SEEDED, up from 26. Every state has its full
+    complement, so territories can be drawn anywhere in Nigeria and the
+    coverage map no longer reports most of the country as "unknown".
+
+    The migration CHECKS ITSELF against the official per-state counts and
+    refuses to apply if any state is short, has a duplicate, or the national
+    total is not 774. Re-running it changes nothing and existing Lagos and FCT
+    rows keep their ids, so any territory already drawn on them is untouched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

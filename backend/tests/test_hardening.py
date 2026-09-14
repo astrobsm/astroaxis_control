@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api.auth import DISTRIBUTION_ROLES
 from app.api.security_review import (
     DISTRIBUTION_PREFIXES, EXPECTED_PUBLIC, _walk,
 )
@@ -118,6 +119,57 @@ def test_the_destructive_actions_are_admin_only():
         assert key in actual, f"{key} has disappeared; update this list"
         assert actual[key] == "ADMIN", (
             f"{key[0]} {key[1]} is {actual[key]}, not ADMIN")
+
+
+def test_the_distributor_register_is_not_open_to_every_staff_login():
+    """A distributor record is commercial information.
+
+    What they owe, what they claim to have sold, where they are failing. That
+    is not something every account in the building needs, and "everyone sees
+    everything" stops being defensible the moment a departing employee still
+    has a login.
+    """
+    commercial = ("/api/distributors", "/api/geography", "/api/downstream",
+                  "/api/performance", "/api/command-centre")
+    routes = [r for r in _distribution_routes()
+              if any(r["path"].startswith(p) for p in commercial)]
+    assert routes, "the walk found no commercial routes"
+
+    too_open = [r for r in routes if r["requires"] == "AUTHENTICATED"]
+    assert not too_open, (
+        f"these read a distributor's commercial position but accept any staff "
+        f"login: {[(r['method'], r['path']) for r in too_open]}")
+
+    for route in routes:
+        assert route["requires"] in ("ADMIN", "DISTRIBUTION"), (
+            f"{route['method']} {route['path']} is {route['requires']}")
+
+
+def test_batches_and_recalls_stay_open_to_every_staff_login():
+    """Deliberately NOT restricted, and the reason matters.
+
+    A picker has to know which batch to take, and a recall has to be collected
+    by whoever is actually in the warehouse. Hiding those behind a sales role to
+    protect commercial confidentiality would keep a safety problem from the
+    people standing next to it.
+    """
+    operational = [r for r in _distribution_routes()
+                   if r["path"].startswith("/api/batches")
+                   or r["path"].startswith("/api/recalls")]
+    assert operational
+
+    reads = [r for r in operational if r["method"] == "GET"]
+    assert reads
+    assert all(r["requires"] == "AUTHENTICATED" for r in reads), (
+        "warehouse and production staff must still be able to read batch and "
+        "recall information")
+
+
+def test_the_distribution_role_list_is_what_was_asked_for():
+    assert set(DISTRIBUTION_ROLES) == {"admin", "sales_staff", "customer_care"}
+    # marketer exists in this system and is deliberately NOT included.
+    assert "marketer" not in DISTRIBUTION_ROLES
+    assert "production_staff" not in DISTRIBUTION_ROLES
 
 
 def test_the_matrix_admits_what_it_does_not_check():

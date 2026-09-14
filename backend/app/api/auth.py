@@ -185,6 +185,27 @@ def require_roles(*roles: str):
 
 require_admin = require_roles("admin")
 
+# Who may see the distributor register and everything hanging off it:
+# territories, applications, sell-through, performance and the command centre.
+#
+# A distributor record carries the company's commercial position -- what a
+# distributor owes, what they claim to have sold, what they are paid, where they
+# are failing. That is not information every staff login needs, and "everyone can
+# see everything" stops being defensible the moment a distributor's own staff or
+# a departing employee has an account.
+#
+# DELIBERATELY NOT INCLUDED:
+#   marketer          -- a marketer works a patch; the distributor register,
+#                        their margins and their performance reviews are not
+#                        theirs to read.
+#   production_staff  -- no commercial involvement.
+#   warehouse_*       -- they need BATCHES and RECALLS (which stay open to
+#                        every authenticated user, because a picker has to know
+#                        which batch to take and a recall has to be collected by
+#                        whoever is in the warehouse), but not the register.
+DISTRIBUTION_ROLES = ("admin", "sales_staff", "customer_care")
+require_distribution_access = require_roles(*DISTRIBUTION_ROLES)
+
 
 # Register new user
 @router.post("/register")
