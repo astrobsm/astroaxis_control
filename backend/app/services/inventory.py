@@ -22,6 +22,7 @@ completely or not at all.
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -112,6 +113,88 @@ async def _lock_or_create_level(
     return row
 
 
+async def batch_balance(
+    session: AsyncSession, *, batch_id: UUID,
+    warehouse_id: Optional[UUID] = None,
+):
+    """How much of a batch is on hand, DERIVED from the movements.
+
+    There is no stored batch balance, on purpose: a second copy of a quantity
+    the system already knows drifts, and the drift surfaces during a recall --
+    the one moment the number has to be right. See migration b7890123456a.
+    """
+    clauses = ["batch_id = :b"]
+    params = {"b": str(batch_id)}
+    if warehouse_id is not None:
+        clauses.append("warehouse_id = :w")
+        params["w"] = str(warehouse_id)
+
+    inbound = ", ".join(f"'{t}'" for t in sorted(INBOUND))
+    outbound = ", ".join(f"'{t}'" for t in sorted(OUTBOUND))
+    row = (await session.execute(
+        text(f"""
+            SELECT COALESCE(SUM(CASE WHEN movement_type IN ({inbound})
+                                     THEN quantity ELSE 0 END), 0)
+                 - COALESCE(SUM(CASE WHEN movement_type IN ({outbound})
+                                     THEN quantity ELSE 0 END), 0) AS balance
+              FROM stock_movements
+             WHERE {' AND '.join(clauses)}
+        """), params)).first()
+    return _as_decimal(row.balance if row else 0)
+
+
+async def _check_batch(
+    session: AsyncSession, *, batch_id: UUID, product_id: Optional[UUID],
+    warehouse_id: UUID, movement_type: str, qty: Decimal, direction: int,
+    allow_negative: bool,
+) -> None:
+    """Refuse a movement the batch cannot support, with a readable reason."""
+    batch = (await session.execute(
+        text("""SELECT id, batch_number, product_id, status, expiry_date
+                  FROM product_batches WHERE id = :b"""),
+        {"b": str(batch_id)})).mappings().first()
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found.")
+
+    if product_id is None or str(batch["product_id"]) != str(product_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Batch {batch['batch_number']} belongs to a different "
+                    f"product. Stock cannot be attributed to a batch of "
+                    f"something else."))
+
+    if direction < 0:
+        blocked = {
+            "RECALLED": (f"Batch {batch['batch_number']} has been RECALLED and "
+                         f"cannot be despatched. Goods on hand must be "
+                         f"returned or destroyed, not sold."),
+            "QUARANTINED": (f"Batch {batch['batch_number']} is QUARANTINED "
+                            f"pending investigation. Release it first, with a "
+                            f"reason."),
+            "WITHDRAWN": (f"Batch {batch['batch_number']} has been withdrawn "
+                          f"from sale and cannot be despatched."),
+        }.get(batch["status"])
+        if blocked:
+            raise HTTPException(status_code=409, detail=blocked)
+
+        if batch["expiry_date"] is not None and batch["expiry_date"] < date.today():
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Batch {batch['batch_number']} expired on "
+                        f"{batch['expiry_date']} and cannot be despatched."))
+
+        if not allow_negative:
+            held = await batch_balance(
+                session, batch_id=batch_id, warehouse_id=warehouse_id)
+            if qty > held:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"Batch {batch['batch_number']} holds {held} in "
+                            f"this warehouse; {qty} was requested. Issuing "
+                            f"more of a batch than arrived would make its "
+                            f"trace unusable."))
+
+
 async def apply_stock_movement(
     session: AsyncSession,
     *,
@@ -125,10 +208,24 @@ async def apply_stock_movement(
     created_by: Optional[UUID] = None,
     unit_cost=None,
     allow_negative: bool = False,
+    batch_id: Optional[UUID] = None,
 ) -> UUID:
     """Apply one stock movement, updating the balance and writing the ledger.
 
     Returns the new `stock_movements` row id. Does not commit.
+
+    BATCHES
+    -------
+    `batch_id` is optional and stays optional. Stock that moved before batches
+    existed has none, and nothing invents one for it -- see migration
+    b7890123456a. When a batch IS given, two further guarantees hold:
+
+      5. A batch cannot be issued for more than it holds. The batch balance is
+         derived from this same table, so it cannot disagree with itself.
+      6. A quarantined, recalled, withdrawn or expired batch cannot leave the
+         building. The database enforces this too, on every INSERT; the check
+         here exists so the caller gets a useful error instead of a raw
+         constraint violation.
     """
     if (product_id is None) == (raw_material_id is None):
         raise HTTPException(
@@ -153,6 +250,12 @@ async def apply_stock_movement(
             detail="Quantity must be a positive magnitude; "
                    "use movement_type to indicate direction.",
         )
+
+    if batch_id is not None:
+        await _check_batch(
+            session, batch_id=batch_id, product_id=product_id,
+            warehouse_id=warehouse_id, movement_type=movement_type, qty=qty,
+            direction=direction, allow_negative=allow_negative)
 
     level = await _lock_or_create_level(
         session, warehouse_id, product_id, raw_material_id)
@@ -180,9 +283,10 @@ async def apply_stock_movement(
         text("""
             INSERT INTO stock_movements
                 (id, warehouse_id, product_id, raw_material_id, movement_type,
-                 quantity, unit_cost, reference, notes, created_by, created_at)
+                 quantity, unit_cost, reference, notes, created_by, batch_id,
+                 created_at)
             VALUES (gen_random_uuid(), :wid, :pid, :rmid, :mtype,
-                    :qty, :cost, :ref, :notes, :by, NOW())
+                    :qty, :cost, :ref, :notes, :by, CAST(:batch AS uuid), NOW())
             RETURNING id
         """),
         {
@@ -195,6 +299,7 @@ async def apply_stock_movement(
             "ref": reference,
             "notes": notes,
             "by": str(created_by) if created_by else None,
+            "batch": str(batch_id) if batch_id else None,
         },
     )).scalar_one()
 
@@ -212,6 +317,7 @@ async def transfer_stock(
     reference: Optional[str] = None,
     notes: Optional[str] = None,
     created_by: Optional[UUID] = None,
+    batch_id: Optional[UUID] = None,
 ) -> tuple[UUID, UUID]:
     """Move stock between warehouses as one atomic pair of movements.
 
@@ -246,6 +352,10 @@ async def transfer_stock(
             reference=reference,
             notes=notes,
             created_by=created_by,
+            # Carried on BOTH legs. A transfer that dropped the batch at the
+            # destination would move goods out of traceability by moving them
+            # between shelves, which is the failure this phase exists to stop.
+            batch_id=batch_id,
         )
     return ids["TRANSFER_OUT"], ids["TRANSFER_IN"]
 

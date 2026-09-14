@@ -12,6 +12,7 @@ import WalletAdmin from './WalletAdmin';
 import CallModule from './CallModule';
 import CallAdmin from './CallAdmin';
 import Distribution from './Distribution';
+import Batches from './Batches';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3257,6 +3258,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      ]],
      ['Distribution Network', [
        ['distributors','Distributors & Territories','map'],
+       ['batches','Batches & Recall','asset'],
      ]],
      ['People', [
        ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
@@ -9242,6 +9244,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Distributor network: territories, distributors, compliance */}
  {activeModule === 'distributors' && (
  <Distribution />
+ )}
+
+ {/* Batch traceability, quarantine and recall */}
+ {activeModule === 'batches' && (
+ <Batches />
  )}
 
  {/* Settings */}

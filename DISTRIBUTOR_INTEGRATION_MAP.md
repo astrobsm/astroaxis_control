@@ -467,3 +467,57 @@ transaction and the caller's later commit rolled back the order itself. The
 distributor was handed an order number for an order that did not exist.
 
 Tests: `backend/tests/test_portal.py` (19), run against the real migration chain.
+
+### Phase 6 — batches, quarantine and recall (`b7890123456a`)
+
+This is the phase the map flagged as the largest single piece of work, and the
+one §19 traceability and §41 recall were waiting on.
+
+**There is no batch balance table.** A batch's quantity on hand is derived by
+summing `stock_movements`, exactly as every other balance already is. A
+`batch_stock_levels` cache would have been faster and is the obvious thing to
+build; it is also a second copy of a number the system already knows, and two
+stores of the same quantity drift. The drift would be discovered during a
+recall — the one moment the figure has to be right.
+
+**Quarantine and recall are enforced in the database as well as the service.**
+`inventory.apply_stock_movement` is the single write path and checks it, but
+that module's own docstring records that ~12 call sites once hand-rolled their
+own balance updates. A recalled batch leaving the building because someone wrote
+a raw INSERT is not a failure mode worth leaving open to save one trigger, so
+the trigger exists too. Both were tested by going straight at the table.
+
+Only *outbound* movements are blocked. Stock must still be able to come back in,
+or a recall could never be collected — a rule that blocked returns would make
+recalled goods impossible to retrieve.
+
+**A recall produces two lists, not a total.** Stock still held can be stopped
+with a call to a warehouse; stock already despatched has to be chased to a named
+customer with a phone number. Merging them would hide which work is urgent.
+Recall is permanent: a recalled batch can never return to sale, and if a recall
+was raised in error that is a decision recorded against new stock rather than an
+edit to the old record.
+
+**What cannot be traced is stated, not smoothed over.** Every unit that moved
+before this migration has no batch and never will. Nothing is backfilled,
+because inventing a batch number for it would be fabricating a traceability
+record — worse than having none. `traceability_report` answers in two absolute
+quantities and returns no percentage at all: "94% traced" reads like a pass mark
+when what it means is that some quantity of medical goods is somewhere nobody
+can name. The report also compares the movement history against `stock_levels`
+and says so loudly when they disagree, rather than quietly reporting the
+prettier number.
+
+**Picking is first-expiry-first-out.** FIFO is a proxy for FEFO and the two
+differ exactly when it matters: a batch received later with a shorter life is
+the one that should go first. Batches with no expiry recorded sort *last*, not
+first — an unknown date is not a distant one.
+
+**Transfers carry the batch on both legs**, so moving goods between shelves
+cannot move them out of traceability.
+
+A batch is registered and received separately. Registering one creates no stock,
+so inventory cannot be conjured by filling in a form.
+
+Tests: `backend/tests/test_batches.py` (22), run against the real migration
+chain, including the raw-INSERT bypass attempts.

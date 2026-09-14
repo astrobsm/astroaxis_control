@@ -76,6 +76,10 @@ async def engine():
                 reference VARCHAR(255),
                 notes TEXT,
                 created_by UUID,
+                -- Added by migration b7890123456a. apply_stock_movement names
+                -- it on every INSERT, batch or no batch, so the harness needs
+                -- it even though these tests are not about batches.
+                batch_id UUID,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 CONSTRAINT ck_stock_movements_one_item_type
                     CHECK ((product_id IS NULL) <> (raw_material_id IS NULL)),

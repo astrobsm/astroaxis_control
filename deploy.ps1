@@ -135,6 +135,15 @@ $backendFiles = @(
     'backend/app/services/portal.py',
     'backend/alembic/versions/a6789012345z_distributor_portal.py',
 
+    # Batch traceability, phase 6. inventory.py now names batch_id on every
+    # stock movement INSERT, so it and the migration must travel together --
+    # shipping the service without the migration would break EVERY stock
+    # movement in the system, not just batched ones.
+    'backend/app/services/inventory.py',
+    'backend/app/services/batches.py',
+    'backend/app/api/batches.py',
+    'backend/alembic/versions/b7890123456a_product_batches.py',
+
     'backend/requirements.txt'
 )
 
@@ -442,6 +451,32 @@ New in this deploy:
     being lifted, screenshotted or forwarded in one go.
   * Migration a6789012345z -- two new tables plus one nullable column on
     sales_orders. No existing data is touched.
+  * Batch traceability, quarantine and recall, phase 6. New sidebar entry
+    "Batches & Recall" under Distribution Network.
+
+    A quarantined, recalled, withdrawn or expired batch CANNOT be despatched.
+    Both the service and a database trigger refuse it, so no code path -- not
+    even a raw INSERT -- can let affected goods leave. Stock can still be
+    returned IN, or a recall could never be collected.
+
+    A recall produces two lists: what is still on a shelf (stop it) and who was
+    already sent it (chase them). Recall is permanent -- a recalled batch can
+    never go back on sale.
+
+    READ THE TRACEABILITY TAB BEFORE RELYING ON ANY OF THIS. Everything that
+    moved before this deploy has NO batch and cannot be traced. Nothing has
+    invented a batch number for it, because that would be fabricating a
+    traceability record. The screen shows traceable and untraceable as two
+    quantities, never as a percentage. Untraceable stock clears as it sells
+    through, or sooner if a physical count assigns real batch numbers to what
+    is on the shelf.
+
+    Picking is offered first-expiry-first-out, not first-in-first-out. Batches
+    with no expiry date recorded sort LAST -- an unknown date is not a distant
+    one.
+  * Migration b7890123456a -- two new tables, plus nullable batch_id on
+    stock_movements and sales_order_lines. No existing row is changed, and no
+    batch is invented for historical stock.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

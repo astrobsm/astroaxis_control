@@ -169,6 +169,40 @@ class Warehouse(Base):
     # User access relationship
     authorized_users = relationship("User", secondary=user_warehouses, back_populates="accessible_warehouses")
 
+class ProductBatch(Base):
+    """A manufactured or purchased lot. See migration b7890123456a.
+
+    Declared here so a database built from this metadata has the table the
+    stock_movements and sales_order_lines foreign keys point at. There is
+    deliberately NO quantity-on-hand column: a batch balance is derived by
+    summing stock_movements, because a second stored copy of a quantity drifts
+    from the first, and the drift is discovered during a recall.
+    """
+    __tablename__ = 'product_batches'
+    __table_args__ = (
+        sa.UniqueConstraint('product_id', 'batch_number',
+                            name='uq_batch_per_product'),
+    )
+    id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('products.id'),
+                           nullable=False, index=True)
+    batch_number = sa.Column(sa.String(64), nullable=False)
+    manufactured_on = sa.Column(sa.Date)
+    expiry_date = sa.Column(sa.Date)
+    status = sa.Column(sa.String(16), nullable=False, default='AVAILABLE')
+    status_reason = sa.Column(sa.Text)
+    origin = sa.Column(sa.String(16), nullable=False, default='PRODUCTION')
+    origin_reference = sa.Column(sa.String(128))
+    supplier_name = sa.Column(sa.String(255))
+    quantity_produced = sa.Column(sa.Numeric(18, 6))
+    notes = sa.Column(sa.Text)
+    created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    created_at = sa.Column(sa.TIMESTAMP(timezone=True),
+                           server_default=func.now())
+    updated_at = sa.Column(sa.TIMESTAMP(timezone=True),
+                           server_default=func.now())
+
+
 class StockMovement(Base):
     __tablename__ = 'stock_movements'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -181,6 +215,11 @@ class StockMovement(Base):
     reference = sa.Column(sa.String(255))  # Order number, invoice, etc.
     notes = sa.Column(sa.Text)
     created_by = sa.Column(UUID(as_uuid=True), sa.ForeignKey('users.id'))
+    # Which batch this movement was of. NULL for everything that moved before
+    # batch recording began (migration b7890123456a) -- nothing is backfilled,
+    # because inventing a batch number would be fabricating a traceability
+    # record. app.services.batches derives every batch balance from this column.
+    batch_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('product_batches.id'))
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
 
 class StockLevel(Base):
@@ -296,6 +335,10 @@ class SalesOrderLine(Base):
     unit_cost = sa.Column(sa.Numeric(18,6))
     cost_total = sa.Column(sa.Numeric(18,2))
     cost_source = sa.Column(sa.String(32))  # wac_warehouse|wac_global|price_list_unit|product_cost_price|unknown|backfill_estimate
+    # The batch actually picked for this line. This is what makes a downstream
+    # recall possible: without it, "who did we send that batch to" cannot be
+    # answered. NULL on lines picked before migration b7890123456a.
+    batch_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('product_batches.id'))
 
     # Relationships
     sales_order = relationship("SalesOrder", back_populates="lines")
