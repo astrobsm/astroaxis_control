@@ -777,3 +777,63 @@ being investigated, and an investigation that rewrites the complaint as it goes
 is not an investigation.
 
 Tests: `backend/tests/test_recalls.py` (18).
+
+### Phase 12 -- hardening (no migration)
+
+**The permissions matrix is derived, not written.** A matrix kept as a document
+is wrong the first time somebody adds a route and forgets to update it, and
+nobody finds out until the wrong person reads something. `GET
+/api/security/permissions` walks the running FastAPI application and reports
+what each route actually requires. It cannot disagree with the code because it
+is read from the code.
+
+Two traps had to be handled, both of which have already cost this application
+once. `include_router()` flattened routes into `app.routes` up to FastAPI 0.128;
+from 0.141 it appends a wrapper holding the router on `original_router` -- the
+change that broke `main.py`'s own startup guard and stopped the app booting. And
+`require_admin` is not a plain function but `require_roles("admin")`, a closure
+named `_guard` that nests `require_authenticated_user` beneath it, so matching on
+names silently reports every admin route as merely authenticated. Classification
+is therefore by callable identity, walked recursively, and guards are inherited
+from every wrapper on the way down.
+
+Current state of the distributor module: **44 admin-only, 70 authenticated, and
+exactly 3 public** -- all three the ordering portal, each named in
+`EXPECTED_PUBLIC` with a written justification.
+
+**A test now fails when the mistake is made.**
+`test_no_new_public_route_appears` asserts the set of unauthenticated routes is
+exactly those three. It was verified by removing a guard and watching it fail
+with the offending route named. That is the only kind of security check worth
+having in a suite: one that fails when somebody makes the mistake, not one that
+passes because somebody remembered to run it.
+
+**A real hole this review found and fixed.** The public ordering portal wrote a
+database row for every failed token. Logging misses is the right instinct -- a
+run of them is what guessing at links looks like -- but from an *unauthenticated*
+endpoint it meant anyone on the internet could grow the table without bound. That
+is the failure mode where the monitoring is the outage. Attempts past
+`MISS_LOG_CAP_PER_HOUR` from one address are still refused and simply stop being
+written; the cap is per address so one prober cannot silence the log for
+everybody, and the final row records that the cap was reached rather than going
+quiet.
+
+**Audit and immutability review.** `GET /api/security/audit` returns the trail
+*with* the triggers that make it append-only, because a trail is worth exactly
+what the trigger protecting it is worth. `GET /api/security/immutability` lists
+every immutability guarantee the module claims, so somebody can check they are
+still true of the database actually running rather than of the documentation.
+
+**What the matrix does not check, stated plainly in its own response.** It
+reports what the guards REQUIRE. It catches a missing guard; it does not catch a
+guard that is present and wrong. Record-level access is not modelled: every
+authenticated user is company staff and can read any distributor's record, and
+document and evidence downloads are authenticated but not scoped. Those are real
+limitations and they are returned with the report rather than left for somebody
+to discover.
+
+Two further structural tests: no migration in the whole eleven-phase chain
+contains a DROP, TRUNCATE or DELETE in its `upgrade()`, and every added column is
+nullable or defaulted so an existing row keeps behaving exactly as it did.
+
+Tests: `backend/tests/test_hardening.py` (11). Full suite 546.

@@ -60,6 +60,14 @@ DEFAULT_VALIDITY_DAYS = 30
 MAX_VALIDITY_DAYS = 365
 MAX_BASKET_LINES = 200
 
+# How many failed-token attempts from one address get their own log row per
+# hour. Logging every miss is the right instinct -- a run of them is what
+# guessing at links looks like -- but the endpoint is UNAUTHENTICATED, so an
+# unbounded row per request is a way for anyone on the internet to fill the
+# disk. Past the cap the attempts are still refused; they just stop writing.
+# The signal is not lost: hitting the cap is itself the finding.
+MISS_LOG_CAP_PER_HOUR = 20
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -251,6 +259,42 @@ async def _log(
     )
 
 
+async def _log_miss(
+    session: AsyncSession, *, token_hint: Optional[str] = None,
+    detail: Optional[str] = None, ip: str = "", user_agent: str = "",
+) -> None:
+    """Log a failed token attempt, but not without limit.
+
+    This is called from an UNAUTHENTICATED endpoint. Writing a row per request
+    means anyone on the internet can grow the table without bound, so a
+    security log becomes a denial-of-service vector -- the failure mode where
+    the monitoring is the outage.
+
+    Past MISS_LOG_CAP_PER_HOUR from one address the attempts are still refused
+    and simply stop being written. The signal survives: twenty misses from one
+    address in an hour already says everything a hundred would, and the final
+    row records that the cap was reached rather than going quiet.
+    """
+    recent = (await session.execute(
+        text("""SELECT COUNT(*) FROM distributor_order_link_events
+                 WHERE event_type = 'NOT_FOUND'
+                   AND ip_address = :ip
+                   AND created_at > NOW() - INTERVAL '1 hour'"""),
+        {"ip": (ip or "")[:64] or None})).scalar() or 0
+
+    if recent > MISS_LOG_CAP_PER_HOUR:
+        return
+    if recent == MISS_LOG_CAP_PER_HOUR:
+        detail = (f"{MISS_LOG_CAP_PER_HOUR}+ failed attempts from this address "
+                  f"in an hour; further attempts are refused but no longer "
+                  f"logged individually.")
+        token_hint = None
+
+    await _log(session, link_id=None, event_type="NOT_FOUND",
+               detail=detail, token_hint=token_hint, ip=ip,
+               user_agent=user_agent)
+
+
 # ---------------------------------------------------------------------------
 # Resolving a token
 # ---------------------------------------------------------------------------
@@ -266,8 +310,8 @@ async def resolve(
     otherwise.
     """
     if not token or len(token) < 20:
-        await _log(session, link_id=None, event_type="NOT_FOUND",
-                   detail="malformed token", ip=ip, user_agent=user_agent)
+        await _log_miss(session, detail="malformed token", ip=ip,
+                        user_agent=user_agent)
         raise HTTPException(status_code=404, detail="This link is not valid.")
 
     row = (await session.execute(
@@ -282,8 +326,8 @@ async def resolve(
         {"h": _hash(token)})).mappings().first()
 
     if row is None:
-        await _log(session, link_id=None, event_type="NOT_FOUND",
-                   token_hint=token[-6:], ip=ip, user_agent=user_agent)
+        await _log_miss(session, token_hint=token[-6:], ip=ip,
+                        user_agent=user_agent)
         raise HTTPException(status_code=404, detail="This link is not valid.")
 
     if row["revoked_at"] is not None:

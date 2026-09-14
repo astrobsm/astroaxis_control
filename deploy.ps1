@@ -169,6 +169,10 @@ $backendFiles = @(
     'backend/app/api/recalls.py',
     'backend/alembic/versions/f1234567890e_recall_workflow.py',
 
+    # Hardening, phase 12. No migration: the permissions matrix is derived
+    # from the running app, and the miss-log cap is a code change only.
+    'backend/app/api/security_review.py',
+
     'backend/requirements.txt'
 )
 
@@ -632,6 +636,38 @@ New in this deploy:
     complainant said is the thing being investigated.
   * Migration f1234567890e -- three new tables, two nullable columns on the
     existing returned_stock. No existing data is touched.
+  * Hardening, phase 12. NO MIGRATION.
+
+    A PERMISSIONS MATRIX YOU CAN TRUST, because it is not a document. GET
+    /api/security/permissions walks the running application and reports what
+    each route actually requires. It cannot drift from the code, because it is
+    read from the code. Current state of the distributor module: 44 admin-only,
+    70 authenticated, and exactly 3 public -- all three the distributor
+    ordering portal, each listed by name with its justification.
+
+    A TEST NOW FAILS IF ANYONE ADDS AN UNAUTHENTICATED ROUTE. Forgetting a
+    dependency, registering a router in the wrong block, or copying an existing
+    file all break the build and name the offending route, instead of shipping
+    quietly.
+
+    FIXED A REAL HOLE THIS REVIEW FOUND: the public ordering portal wrote a
+    database row for EVERY failed token. Logging misses is right -- a run of
+    them is what guessing at links looks like -- but from an unauthenticated
+    endpoint it let anyone on the internet grow the table without bound. That
+    is the failure mode where the monitoring is the outage. Attempts past 20
+    per address per hour are still refused; they just stop being written, and
+    the last row records that the cap was reached.
+
+    ALSO NEW: /api/security/audit shows the audit trail WITH the triggers that
+    make it append-only, and /api/security/immutability lists every
+    immutability guarantee this module claims so somebody can check they are
+    still true of the database actually running.
+
+    KNOWN LIMITATION, STATED RATHER THAN HIDDEN: the matrix reports what the
+    guards REQUIRE. It catches a missing guard; it does not catch a guard that
+    is present but wrong. Record-level access is not modelled -- any staff
+    login can read any distributor's record, and document and evidence
+    downloads are authenticated but not scoped to a distributor.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --
