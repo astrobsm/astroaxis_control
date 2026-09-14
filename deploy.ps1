@@ -149,6 +149,11 @@ $backendFiles = @(
     'backend/app/api/downstream.py',
     'backend/alembic/versions/c8901234567b_downstream_sales.py',
 
+    # Performance engine, phase 8.
+    'backend/app/services/performance.py',
+    'backend/app/api/performance.py',
+    'backend/alembic/versions/d9012345678c_performance.py',
+
     'backend/requirements.txt'
 )
 
@@ -505,6 +510,34 @@ New in this deploy:
     Batches follow the goods to the outlet, so a recall can now name the
     pharmacy that bought an affected batch.
   * Migration c8901234567b -- five new tables. No existing table is touched.
+  * Performance engine, phase 8. New "Performance" tab in the distributor
+    dossier: run-rate, month-by-month history, reviews and a scorecard.
+
+    EARLY IN A MONTH THE APP REFUSES TO PROJECT. Below a quarter of the
+    month's selling days it shows what has been verified so far and says no
+    forecast is possible yet. That is deliberate: four days of sales
+    extrapolated across a month is arithmetic, not a forecast, and a red light
+    built on it gets a distributor phoned about nothing.
+
+    Elapsed time is counted in SELLING DAYS (weekends excluded). Public
+    holidays are not, because Nigeria's move and some are declared days ahead
+    -- a fixed list would be confidently wrong rather than roughly right.
+
+    Every past month is measured against the target THAT WAS IN FORCE THEN.
+    Raising a target today does not retrospectively fail a distributor.
+
+    ONLY VERIFIED SALES COUNT toward any band, projection or review trigger.
+    The claimed figure is shown greyed beside it and counts toward nothing.
+
+    THERE IS NO OVERALL SCORE. Performance, compliance and evidence quality are
+    three separate readings -- averaging them would let a good sales month
+    outvote an expired licence.
+
+    Three consecutive months below 70% of target raise a review. A month with
+    NO target set breaks the run rather than counting as a failure: nobody can
+    miss a target that was never set. A review can conclude TARGET_RESET --
+    sometimes the honest finding is that the target was wrong.
+  * Migration d9012345678c -- two new tables. No existing table is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

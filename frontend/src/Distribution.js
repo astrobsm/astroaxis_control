@@ -21,6 +21,7 @@ import { CompliancePanel, CorrectiveActionQueue } from './DistributorCompliance'
 import { ApplicationQueue, TerritoryHoldings } from './TerritoryApplications';
 import { OrderingPanel } from './DistributorOrdering';
 import { DownstreamPanel } from './DownstreamSales';
+import { PerformancePanel } from './Performance';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -424,6 +425,7 @@ function Dossier({ distributorId, territories, onClose, onChanged }) {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: space(2) }}>
         {[['profile', 'Profile'], ['territory', 'Territory'],
           ['ordering', 'Ordering'], ['downstream', 'Sell-through'],
+          ['performance', 'Performance'],
           ['compliance', 'Facility & agreement']].map(([k, label]) => (
           <button key={k} onClick={() => setPane(k)} style={{
             padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5, fontWeight: 600,
@@ -447,6 +449,10 @@ function Dossier({ distributorId, territories, onClose, onChanged }) {
 
       {pane === 'downstream' && (
         <DownstreamPanel distributorId={distributorId} />
+      )}
+
+      {pane === 'performance' && (
+        <PerformancePanel distributorId={distributorId} />
       )}
 
       {pane === 'compliance' && (

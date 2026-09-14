@@ -569,3 +569,55 @@ Marketers work for the distributor: no `users` row, no login, no access to
 anything. Naming someone here must never become a route to granting access.
 
 Tests: `backend/tests/test_downstream.py` (16).
+
+### Phase 8 -- performance (`d9012345678c`)
+
+Run-rate, bands, frozen month-ends and the review a run of bad months triggers.
+
+**Early in a month the engine refuses to project.** Below `MIN_CONFIDENT_ELAPSED`
+(a quarter of the month's selling days) `run_rate` returns band `TOO_EARLY`, no
+projection, and a sentence saying why. Four days of sales extrapolated across a
+month is arithmetic, not a forecast; colouring it red gets a distributor phoned
+about what was never evidence of anything. The UI renders that as plain text
+rather than a grey dot, because a grey dot in a traffic light still reads as a
+verdict.
+
+**Elapsed time is counted in selling days**, not calendar days. A month that is
+40% gone by the calendar may be 25% gone in days anyone could have sold on, and
+dividing by the wrong denominator marks a distributor down for a long weekend.
+Weekends only -- this is deliberately not a public-holiday calendar, because
+Nigeria's holidays move and some are declared days ahead, so a fixed list would
+be confidently wrong rather than roughly right. The docstring says so instead of
+implying precision that does not exist.
+
+**Every period is measured against the target in force then.** `target_on`
+already made this possible; this phase uses it everywhere, including for the
+territory the distributor held *at the time* rather than the one they hold now.
+Raising a target today cannot retrospectively fail a past month.
+
+**Only VERIFIED sales count** toward any band, projection or trigger. The
+reported figure travels alongside so the gap stays visible -- a distributor
+claiming three times what they can evidence is a finding -- but it never adds in.
+
+**`performance_periods` is a snapshot table, and the justification has to be
+better than speed.** It is this: a review is judged on what was known when it
+was raised. Sales get verified weeks later and targets are versioned, so a
+distributor told in April that they missed February must be able to see
+February as it stood in April. Recomputation remains the primary live view; the
+snapshot records what a decision was actually taken on. Immutable, and a
+part-month cannot be frozen.
+
+**The review trigger is three consecutive months below 70%.** A month with no
+target in force breaks the run rather than counting as a strike -- nobody can
+miss a target that was never set, and counting it would punish a distributor for
+an administrative gap. `TARGET_RESET` is one of the four outcomes because a
+review process whose only outcomes blame the distributor will always find the
+distributor at fault.
+
+**The scorecard returns no single number.** Performance, compliance and evidence
+quality are three readings plus a list of blockers, for the same reason
+eligibility and facility assessment work that way: a weighted average lets a good
+sales month outvote an expired licence. A test asserts no key called overall,
+score, total, rating or grade exists in the response.
+
+Tests: `backend/tests/test_performance.py` (16).

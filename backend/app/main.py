@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream, performance
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -136,7 +136,7 @@ try:
 
     # --- Authenticated ----------------------------------------------------
     for _router in (
-        batches, downstream,
+        batches, downstream, performance,
         staff, products, raw_materials, stock, warehouses, production, sales,
         stock_management, bom, settings, bulk_upload, notifications,
         production_consumables, machines_equipment, production_completions,
