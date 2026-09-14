@@ -14,6 +14,7 @@ import CallAdmin from './CallAdmin';
 import Distribution from './Distribution';
 import Batches from './Batches';
 import Attention from './Attention';
+import CommandCentre from './CommandCentre';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3258,6 +3259,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        ['calls','Make a Call','comms'],['callTracking','Call Tracking','trendup'],
      ]],
      ['Distribution Network', [
+       ['commandCentre','Command Centre','chart'],
        ['distributors','Distributors & Territories','map'],
        ['batches','Batches & Recall','asset'],
        ['attention','Needs Attention','alert'],
@@ -9256,6 +9258,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Derived attention list and scheduled jobs */}
  {activeModule === 'attention' && (
  <Attention />
+ )}
+
+ {/* Distribution command centre: coverage, ranking, exports */}
+ {activeModule === 'commandCentre' && (
+ <CommandCentre />
  )}
 
  {/* Settings */}

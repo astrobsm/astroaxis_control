@@ -160,6 +160,10 @@ $backendFiles = @(
     'backend/app/api/inbox.py',
     'backend/alembic/versions/e0123456789d_inbox_jobs.py',
 
+    # Command centre, phase 10. No migration: this phase stores nothing.
+    'backend/app/services/command_centre.py',
+    'backend/app/api/command_centre.py',
+
     'backend/requirements.txt'
 )
 
@@ -576,6 +580,28 @@ New in this deploy:
     ADJUST_OUT are now permitted, because destroying the goods is how a recall
     is completed. Selling, transferring and consuming remain blocked.
   * Migration e0123456789d -- two new tables. No existing table is touched.
+  * Distribution command centre, phase 10. New sidebar entry "Command Centre".
+    Coverage map, monthly ranking, territory roll-up and CSV exports.
+
+    NO MIGRATION AND NO CACHE. This phase stores nothing: every figure is
+    computed from the data that already holds it. A cached aggregate is wrong
+    for exactly as long as nobody notices.
+
+    ZERO IS NOT UNKNOWN, and the coverage screen is built around that. A state
+    with no LGAs loaded reports "not known", hatched, NOT a zero in pale green.
+    Those are opposite findings -- one says sell harder, the other says finish
+    the data entry -- and a single colour ramp renders them identically. Only
+    26 of Nigeria's 774 LGAs are loaded, so most of the map is currently
+    "unknown" and the screen says so at the top.
+
+    THERE IS NO HEALTH SCORE. One number for a board pack would have to average
+    a compliance failure against a good sales month.
+
+    EXPORTS ARE RECORDED in the distributor audit trail: a distributor CSV
+    carries names, phone numbers and trading history out of the building. The
+    sales export has separate verified and claimed columns rather than one
+    total -- a spreadsheet is where a claim becomes a fact, and nothing can put
+    the distinction back once the file is sent on.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

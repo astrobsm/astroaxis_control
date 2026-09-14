@@ -678,3 +678,45 @@ completed.
 
 Tests: `backend/tests/test_inbox.py` (17), plus a new disposal test in
 `test_batches.py`.
+
+### Phase 10 -- the command centre (`no migration`)
+
+Coverage, ranking, territory roll-up and exports. **This phase stores nothing.**
+There is no migration and no dashboard cache: a cached aggregate is a copy of a
+number the system already has, and it is wrong for exactly as long as nobody
+notices. A test asserts no summary or rollup table exists.
+
+**Zero is not unknown, and a dashboard is where that difference usually dies.** A
+map showing NGN 0 across most of Nigeria looks like a sales problem. What it
+actually means is that 748 of the country's 774 LGAs have never been loaded, so
+no sale could be recorded there at all. One says sell harder, the other says
+finish the data entry, and a single grey-to-green ramp renders them identically.
+
+So `coverage_map` returns `verified_amount = NULL` and `status =
+NO_COVERAGE_DATA` for a state with no LGAs, the UI renders those hatched and
+labelled "not known" rather than as a pale shade at the bottom of the scale, and
+the national caveat is carried into every response that touches geography. A test
+asserts the NULL, because a 0.00 there would be a lie that looks like data.
+
+The same distinction runs through the rest of the phase: territories with no
+target in force are counted as **not measurable**, never as failing; verified and
+reported sales stay apart; and untraceable stock stays a quantity.
+
+**There is no overall health score.** Every dashboard wants one number for the
+board pack, and that number would have to average a compliance failure against a
+good sales month.
+
+**Ranking reuses `performance.leaderboard`** rather than re-aggregating. A second
+implementation of "how did they do" would eventually disagree with the first, and
+the first is the one the review process acts on.
+
+**Exports are recorded in `distributor_audit_logs`** -- the table that already
+exists for this domain, rather than a new one. A distributor CSV takes names,
+phone numbers and trading history out of the building on somebody's laptop, and
+that is worth a record. The sales export has separate verified and reported
+columns rather than one total: a spreadsheet is where a claim and a confirmed
+fact become the same column, and nothing here can put the distinction back once
+the file has been forwarded. The batch export carries a `dispatchable` column, so
+a recalled batch is not just a row with a status somebody might skim past.
+
+Tests: `backend/tests/test_command_centre.py` (12).
