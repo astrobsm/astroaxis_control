@@ -18,6 +18,7 @@ import {
   SkeletonCards,
 } from './ui/kit';
 import { CompliancePanel, CorrectiveActionQueue } from './DistributorCompliance';
+import { ApplicationQueue, TerritoryHoldings } from './TerritoryApplications';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -367,7 +368,7 @@ function NewTerritory({ states, onClose, onDone }) {
 // Distributor dossier
 // ---------------------------------------------------------------------------
 
-function Dossier({ distributorId, onClose, onChanged }) {
+function Dossier({ distributorId, territories, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [pane, setPane] = useState('profile');
@@ -419,7 +420,8 @@ function Dossier({ distributorId, onClose, onChanged }) {
       </div>
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: space(2) }}>
-        {[['profile', 'Profile'], ['compliance', 'Facility & agreement']].map(([k, label]) => (
+        {[['profile', 'Profile'], ['territory', 'Territory'],
+          ['compliance', 'Facility & agreement']].map(([k, label]) => (
           <button key={k} onClick={() => setPane(k)} style={{
             padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5, fontWeight: 600,
             border: `1px solid ${pane === k ? color.medical : color.borderStrong}`,
@@ -428,6 +430,12 @@ function Dossier({ distributorId, onClose, onChanged }) {
           }}>{label}</button>
         ))}
       </div>
+
+      {pane === 'territory' && (
+        <TerritoryHoldings distributorId={distributorId}
+          territories={territories}
+          onChanged={() => { load(); onChanged(); }} />
+      )}
 
       {pane === 'compliance' && (
         <CompliancePanel distributorId={distributorId} documents={data.documents}
@@ -608,7 +616,8 @@ export default function Distribution() {
 
       <div style={{ display: 'flex', gap: space(1), flexWrap: 'wrap', marginBottom: space(2.5) }}>
         {[['overview', 'Overview'], ['territories', 'Territories'],
-          ['distributors', 'Distributors'], ['compliance', 'Compliance']].map(([k, label]) => (
+          ['distributors', 'Distributors'], ['applications', 'Applications'],
+          ['compliance', 'Compliance']].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding: '8px 15px', borderRadius: radius.pill, fontSize: 13, fontWeight: 600,
             border: `1px solid ${tab === k ? color.medical : color.borderStrong}`,
@@ -737,6 +746,8 @@ export default function Distribution() {
         </Card>
       )}
 
+      {tab === 'applications' && <ApplicationQueue onChanged={load} />}
+
       {tab === 'compliance' && (
         <>
           <CorrectiveActionQueue onChanged={load} />
@@ -795,8 +806,8 @@ export default function Distribution() {
           onDone={async (msg) => { setModal(null); flash(msg); await load(); }} />
       )}
       {modal && modal.kind === 'dossier' && (
-        <Dossier distributorId={modal.id} onClose={() => setModal(null)}
-          onChanged={load} />
+        <Dossier distributorId={modal.id} territories={territories}
+          onClose={() => setModal(null)} onChanged={load} />
       )}
     </div>
   );

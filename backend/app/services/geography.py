@@ -452,6 +452,37 @@ async def end_assignment(
             "assigned_to": str(end)}
 
 
+async def release_all_assignments(
+    session: AsyncSession, *, distributor_id: UUID, reason: str, actor=None,
+) -> list[dict]:
+    """End every live assignment a distributor holds, and say which.
+
+    Called when a distributor is terminated. Without this a terminated
+    distributor keeps holding its territories forever: the exclusivity index is
+    satisfied by its row, so nobody else can be granted that ground, and the
+    territory silently stops being sellable with no record of why.
+
+    The assignments are ENDED, never deleted -- historical sales stay attached
+    to whoever actually made them.
+    """
+    rows = (await session.execute(
+        text("""SELECT ta.id, t.code AS territory_code
+                  FROM territory_assignments ta
+                  JOIN territories t ON t.id = ta.territory_id
+                 WHERE ta.distributor_id = :d
+                   AND ta.assigned_to IS NULL AND ta.status = 'ACTIVE'"""),
+        {"d": str(distributor_id)},
+    )).mappings().all()
+
+    released = []
+    for row in rows:
+        await end_assignment(session, assignment_id=row["id"], reason=reason,
+                             actor=actor)
+        released.append({"assignment_id": str(row["id"]),
+                         "territory": row["territory_code"]})
+    return released
+
+
 async def current_holder(
     session: AsyncSession, territory_id: UUID,
 ) -> Optional[dict]:

@@ -350,3 +350,64 @@ the hashing and the signature discipline; the words are pasted in by whoever is
 qualified to approve them.
 
 Tests: `backend/tests/test_compliance.py` (19), run against the real migration.
+
+### Phase 4 — territory applications and real exclusivity (`z5678901234y`)
+
+**The correction this phase makes.** Phase 1 enforced exclusivity with a partial
+unique index: one live exclusive holder per territory. That is correct, and it
+stays. It is also not sufficient, and the gap only appears once real territories
+are drawn.
+
+`territory_lgas` is the authoritative coverage, and nothing stopped two
+territories covering the same LGA. "Lagos Mainland" and "Ikeja Corridor" can
+both include Ikeja. Each is exclusive, each has exactly one holder, and the
+per-territory index is satisfied in both cases — while two distributors now hold
+exclusive rights over the same ground. That is the precise dispute exclusivity
+exists to prevent, it surfaces months later when both are selling into Ikeja and
+each holds a signed agreement saying the area is theirs, and by then the company
+has promised the same thing twice in writing.
+
+Exclusivity is now enforced **per LGA**, by database triggers, on both routes in:
+
+- granting an assignment whose territory shares an LGA with another exclusive
+  territory held by a different distributor;
+- adding an LGA to a territory that is already assigned, which would otherwise
+  create the same clash without touching `territory_assignments` at all.
+
+The error names the LGA, the conflicting territory and the incumbent. Overlap
+between territories held by the *same* distributor is allowed — that is one
+promise made twice, not a contradiction. Overlap where either side is
+non-exclusive is also allowed, and reported as advisory rather than blocking.
+
+Triggers rather than application checks, because an application check is one
+untested code path away from not running, and this is a promise the company makes
+in a contract.
+
+**Applications.** `distributor_applications` arrived in phase 1 and nothing used
+it. It already modelled what a territory request needs — an applicant, a scored
+review, a decision with a note and a decider — so rather than create a second
+near-identical table it gained a `kind` and a nullable `territory_id`. One table,
+one review queue.
+
+An approved application creates its assignment in the same transaction and
+records which one, so a decision and its effect cannot drift apart. The
+eligibility score is snapshotted when review begins and never recomputed —
+rerunning today's weights against last year's decision would rewrite why that
+decision was made. The conflicts as they stood are stored with the decision, so a
+reviewer who granted over a known overlap cannot later say the system never
+showed them one.
+
+**Termination releases territory.** Previously a terminated distributor kept its
+live assignment, which satisfied the exclusivity index and made the territory
+permanently ungrantable with nothing on screen explaining why. `set_status` now
+ends those assignments — ended, never deleted, so historical sales stay attached
+to whoever made them.
+
+**What the UI refuses to do.** A blocking conflict is not offered with a
+confirmation, because the database will refuse it regardless and a button that
+always fails teaches people to distrust every other button. Only advisory
+overlaps get an "I intend this" checkbox. Eligibility, compliance and conflicts
+are shown as three separate answers and never combined into one score.
+
+Tests: `backend/tests/test_territory_applications.py` (16), run against the real
+migration chain.

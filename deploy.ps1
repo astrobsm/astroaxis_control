@@ -123,6 +123,11 @@ $backendFiles = @(
     'backend/app/services/compliance.py',
     'backend/alembic/versions/y4567890123x_distributor_compliance.py',
 
+    # Territory applications, phase 4. app/api/geography.py imports
+    # services/applications.py at module level.
+    'backend/app/services/applications.py',
+    'backend/alembic/versions/z5678901234y_territory_applications.py',
+
     'backend/requirements.txt'
 )
 
@@ -393,6 +398,25 @@ New in this deploy:
     A critical or legal failure makes an assessment FAIL whatever the
     percentage says. Submitted assessments and signatures cannot be edited.
   * Migration y4567890123x -- seven new tables, no existing table touched.
+  * Territory applications, phase 4. A territory is now normally granted by
+    DECIDING AN APPLICATION rather than by a direct assign: the application
+    records who asked, what the reviewer was shown, and what the conflicts were
+    at the moment of the decision.
+
+    THE CHANGE THAT MATTERS: exclusivity is now enforced per LGA, not per
+    territory. Two exclusive territories can cover the same LGA -- "Lagos
+    Mainland" and "Ikeja Corridor" both include Ikeja. Each satisfied the old
+    per-territory check. Together they promised the same ground to two
+    distributors, in writing, and nobody found out until both were selling
+    there. The database now refuses that, by every route in, and names the LGA
+    and the incumbent when it does.
+
+    Terminating a distributor now RELEASES its territories. Previously a
+    terminated distributor kept holding ground forever -- its live assignment
+    satisfied the exclusivity index, so the territory could never be granted to
+    anyone else and nothing on screen said why.
+  * Migration z5678901234y -- columns added to distributor_applications, which
+    nothing was using; no existing data is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

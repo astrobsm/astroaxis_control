@@ -553,12 +553,26 @@ async def set_status(
             text("UPDATE warehouses SET is_active = TRUE WHERE id = :w"),
             {"w": str(dist["warehouse_id"])})
 
+    # A terminated distributor must not keep holding ground. The exclusivity
+    # index is satisfied by its live assignment, so leaving it in place makes
+    # the territory permanently ungrantable to anyone else -- and nothing on
+    # the screen would say why. The assignments are ended, not deleted.
+    released = []
+    if new_status == "TERMINATED":
+        from app.services.geography import release_all_assignments
+        released = await release_all_assignments(
+            session, distributor_id=distributor_id,
+            reason=f"Distributor terminated: {reason.strip()}", actor=actor)
+
     await audit(session, event_type=f"DISTRIBUTOR_{new_status}",
                 entity_type="distributor", entity_id=distributor_id,
                 distributor_id=distributor_id, actor=actor, reason=reason,
-                old_value={"status": old}, new_value={"status": new_status})
+                old_value={"status": old},
+                new_value={"status": new_status,
+                           "territories_released": released} if released
+                          else {"status": new_status})
     return {"id": str(distributor_id), "status": new_status, "changed": True,
-            "was": old}
+            "was": old, "territories_released": released}
 
 
 # ---------------------------------------------------------------------------

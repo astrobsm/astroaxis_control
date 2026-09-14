@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import require_admin, require_authenticated_user
 from app.db import get_session
 from app.models import User
+from app.services import applications as apps
 from app.services import geography as geo
 
 router = APIRouter(prefix="/api/geography", tags=["Geography & Territories"])
@@ -465,3 +466,150 @@ async def audit_trail(
                   ORDER BY a.created_at DESC LIMIT :lim"""), params,
     )).mappings().all()
     return {"events": _rows(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Territory applications -- phase 4
+#
+# A territory is normally granted BY DECIDING AN APPLICATION rather than by the
+# direct /assign call above. Both write the same assignment row; the difference
+# is that the application carries why, who reviewed it, and what conflicts were
+# on the screen at the moment of the decision.
+# ---------------------------------------------------------------------------
+
+class ApplyIn(BaseModel):
+    distributor_id: UUID
+    requested_from: Optional[date] = None
+    requested_exclusive: bool = True
+    statement: Optional[str] = None
+
+
+class DecisionIn(BaseModel):
+    approve: bool
+    note: str = Field(..., min_length=3)
+    assigned_from: Optional[date] = None
+    # Approving over a known conflict has to be said out loud. The database
+    # refuses it regardless; this makes it a decision rather than an error.
+    acknowledge_conflicts: bool = False
+
+
+class WithdrawIn(BaseModel):
+    reason: str = Field(..., min_length=3)
+
+
+@router.post("/territories/{territory_id}/applications", status_code=201)
+async def apply_for_territory(
+    territory_id: UUID,
+    body: ApplyIn,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Request a territory. Nothing is granted here."""
+    result = await apps.apply_for_territory(
+        session, distributor_id=body.distributor_id, territory_id=territory_id,
+        requested_from=body.requested_from,
+        requested_exclusive=body.requested_exclusive,
+        statement=body.statement, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/applications")
+async def list_applications(
+    status: Optional[str] = None,
+    distributor_id: Optional[UUID] = None,
+    territory_id: Optional[UUID] = None,
+    open_only: bool = False,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await apps.list_applications(
+        session, status=status, distributor_id=distributor_id,
+        territory_id=territory_id, open_only=open_only)
+    return {"applications": _rows(rows)}
+
+
+@router.get("/applications/{application_id}")
+async def application_detail(
+    application_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Everything a reviewer needs, as three separate judgements.
+
+    `eligibility`, `compliance` and `conflicts` are reported side by side and
+    never combined into one number -- a good score must not be able to hide a
+    missing licence or an overlapping grant.
+    """
+    return await apps.review_packet(session, application_id=application_id)
+
+
+@router.post("/applications/{application_id}/review")
+async def begin_review(
+    application_id: UUID,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Take an application up. Snapshots the score the reviewer works from."""
+    result = await apps.begin_review(
+        session, application_id=application_id, actor=user)
+    await session.commit()
+    return result
+
+
+@router.post("/applications/{application_id}/decide")
+async def decide_application(
+    application_id: UUID,
+    body: DecisionIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Approve or refuse. Approval creates the assignment in the same act."""
+    result = await apps.decide(
+        session, application_id=application_id, approve=body.approve,
+        note=body.note, assigned_from=body.assigned_from,
+        acknowledge_conflicts=body.acknowledge_conflicts, actor=user)
+    await session.commit()
+    return result
+
+
+@router.post("/applications/{application_id}/withdraw")
+async def withdraw_application(
+    application_id: UUID,
+    body: WithdrawIn,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await apps.withdraw(
+        session, application_id=application_id, reason=body.reason, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/territories/{territory_id}/conflicts")
+async def territory_conflicts(
+    territory_id: UUID,
+    distributor_id: Optional[UUID] = None,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Who else already holds ground this territory covers.
+
+    Exclusivity is enforced per LGA, not per territory, because two territories
+    can cover the same LGA -- and each would satisfy a per-territory check while
+    together promising the same ground twice.
+    """
+    rows = await apps.territory_conflicts(
+        session, territory_id=territory_id, distributor_id=distributor_id)
+    return {"conflicts": _rows(rows), "has_conflicts": bool(rows)}
+
+
+@router.get("/distributors/{distributor_id}/territories")
+async def distributor_territories(
+    distributor_id: UUID,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What this distributor holds now, and what it held before."""
+    result = await apps.distributor_territories(session, distributor_id)
+    return {"current": _rows(result["current"]), "past": _rows(result["past"])}
