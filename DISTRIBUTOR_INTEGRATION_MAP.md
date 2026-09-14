@@ -912,4 +912,18 @@ revoking and deciding are `require_admin`. The four new public routes are in
 `test_the_public_registration_cannot_search_customers_by_name`, which fails if
 anybody ever adds the dropdown.
 
-Tests: `backend/tests/test_registration.py` (17).
+**A 422 that no test could have caught, and the test that now would.** Both
+staff endpoints were appended to the end of `distributors.py`, below
+`@router.get("/{distributor_id}")`. FastAPI matches in declaration order, so
+`/registrations` and `/registration-links` were swallowed by the parameter
+route, which tried to read them as UUIDs and answered 422 on every request. The
+suite passed throughout, because those tests call the service layer and never go
+through the router; the screen failed the moment it was opened in production.
+They are now declared above `/{distributor_id}`, with a comment saying why they
+must stay there, and `test_no_static_route_is_shadowed_by_a_parameter_route`
+walks the whole application in MATCHING order -- not `_walk`, which sorts -- and
+fails when any literal path is unreachable. It reports those two routes against
+the version that shipped, and nothing against the current one.
+
+Tests: `backend/tests/test_registration.py` (17), plus the shadowing test in
+`test_hardening.py`. Full suite 577.

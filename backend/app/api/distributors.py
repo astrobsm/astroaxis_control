@@ -214,6 +214,135 @@ async def create_distributor(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Self-registration: the shareable link, and the queue it feeds
+#
+# DECLARED HERE, ABOVE /{distributor_id}, AND IT HAS TO STAY HERE.
+# FastAPI matches routes in declaration order, so a later literal path of one
+# segment -- /registrations, /registration-links -- is swallowed by the
+# earlier /{distributor_id} and answered with 422 'not a valid uuid'. That is
+# what happened the first time these were appended to the end of the file, and
+# test_no_static_route_is_shadowed_by_a_parameter_route now fails if it
+# happens again.
+# ---------------------------------------------------------------------------
+
+class RegistrationLinkIn(BaseModel):
+    label: str = Field(..., min_length=3, max_length=160)
+    campaign: Optional[str] = None
+    valid_days: int = Field(90, ge=1, le=730)
+    max_submissions: Optional[int] = Field(None, ge=1, le=100000)
+
+
+class RevokeRegistrationLinkIn(BaseModel):
+    reason: str = Field(..., min_length=3)
+
+
+class RegistrationDecisionIn(BaseModel):
+    approve: bool
+    note: str = Field(..., min_length=3)
+    # The reviewer's decision about who this applicant already is. Separate
+    # from whatever the applicant claimed on the form.
+    link_customer_id: Optional[UUID] = None
+    acknowledge_duplicates: bool = False
+
+
+@router.post("/registration-links", status_code=201)
+async def issue_registration_link(
+    body: RegistrationLinkIn,
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create a link prospective distributors can use to apply.
+
+    Unlike an ordering link this is meant to be shared widely -- it lets anyone
+    APPLY and nothing more. The token is in the response and nowhere else.
+    """
+    base = str(request.base_url).rstrip("/")
+    result = await reg.issue_link(
+        session, label=body.label, campaign=body.campaign,
+        valid_days=body.valid_days, max_submissions=body.max_submissions,
+        base_url=base, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/registration-links")
+async def list_registration_links(
+    include_dead: bool = False,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await reg.list_links(session, include_dead=include_dead)
+    return {"links": _rows(rows)}
+
+
+@router.post("/registration-links/{link_id}/revoke")
+async def revoke_registration_link(
+    link_id: UUID,
+    body: RevokeRegistrationLinkIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Stop a link accepting applications. Immediate and recorded."""
+    result = await reg.revoke_link(
+        session, link_id=link_id, reason=body.reason, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/registrations")
+async def list_registrations(
+    status: Optional[str] = None,
+    pending_only: bool = False,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    """Applications received. Everything here is unverified."""
+    rows = await reg.list_registrations(
+        session, status=status, pending_only=pending_only)
+    return {"registrations": _rows(rows)}
+
+
+@router.get("/registrations/{registration_id}")
+async def registration_detail(
+    registration_id: UUID,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    """The application, and who the company thinks this already is.
+
+    The candidate list is built HERE rather than on the public form: matching
+    on the public side would mean showing an anonymous visitor who the company
+    already trades with. It also catches an applicant who does not realise
+    they are already a customer under a slightly different name.
+    """
+    return await reg.review_packet(session, registration_id=registration_id)
+
+
+@router.post("/registrations/{registration_id}/decide")
+async def decide_registration(
+    registration_id: UUID,
+    body: RegistrationDecisionIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Approve or refuse. Approving creates the distributor.
+
+    Where `link_customer_id` is given, the applicant's EXISTING customer
+    account is attached rather than a new one being created, and the orders
+    already recorded against it are attributed to the new distributor. Nothing
+    is copied: those orders were always theirs, and the response says how many
+    became visible.
+    """
+    result = await reg.review(
+        session, registration_id=registration_id, approve=body.approve,
+        note=body.note, link_customer_id=body.link_customer_id,
+        acknowledge_duplicates=body.acknowledge_duplicates, actor=user)
+    await session.commit()
+    return result
+
+
 @router.get("/{distributor_id}")
 async def distributor_detail(
     distributor_id: UUID,
@@ -1106,124 +1235,3 @@ async def distributor_orders(
     rows = await portal.distributor_orders(
         session, distributor_id=distributor_id, limit=limit)
     return {"orders": _rows(rows)}
-
-
-# ---------------------------------------------------------------------------
-# Self-registration: the shareable link, and the queue it feeds
-# ---------------------------------------------------------------------------
-
-class RegistrationLinkIn(BaseModel):
-    label: str = Field(..., min_length=3, max_length=160)
-    campaign: Optional[str] = None
-    valid_days: int = Field(90, ge=1, le=730)
-    max_submissions: Optional[int] = Field(None, ge=1, le=100000)
-
-
-class RevokeRegistrationLinkIn(BaseModel):
-    reason: str = Field(..., min_length=3)
-
-
-class RegistrationDecisionIn(BaseModel):
-    approve: bool
-    note: str = Field(..., min_length=3)
-    # The reviewer's decision about who this applicant already is. Separate
-    # from whatever the applicant claimed on the form.
-    link_customer_id: Optional[UUID] = None
-    acknowledge_duplicates: bool = False
-
-
-@router.post("/registration-links", status_code=201)
-async def issue_registration_link(
-    body: RegistrationLinkIn,
-    request: Request,
-    user: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-):
-    """Create a link prospective distributors can use to apply.
-
-    Unlike an ordering link this is meant to be shared widely -- it lets anyone
-    APPLY and nothing more. The token is in the response and nowhere else.
-    """
-    base = str(request.base_url).rstrip("/")
-    result = await reg.issue_link(
-        session, label=body.label, campaign=body.campaign,
-        valid_days=body.valid_days, max_submissions=body.max_submissions,
-        base_url=base, actor=user)
-    await session.commit()
-    return result
-
-
-@router.get("/registration-links")
-async def list_registration_links(
-    include_dead: bool = False,
-    user: User = Depends(require_distribution_access),
-    session: AsyncSession = Depends(get_session),
-):
-    rows = await reg.list_links(session, include_dead=include_dead)
-    return {"links": _rows(rows)}
-
-
-@router.post("/registration-links/{link_id}/revoke")
-async def revoke_registration_link(
-    link_id: UUID,
-    body: RevokeRegistrationLinkIn,
-    user: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-):
-    """Stop a link accepting applications. Immediate and recorded."""
-    result = await reg.revoke_link(
-        session, link_id=link_id, reason=body.reason, actor=user)
-    await session.commit()
-    return result
-
-
-@router.get("/registrations")
-async def list_registrations(
-    status: Optional[str] = None,
-    pending_only: bool = False,
-    user: User = Depends(require_distribution_access),
-    session: AsyncSession = Depends(get_session),
-):
-    """Applications received. Everything here is unverified."""
-    rows = await reg.list_registrations(
-        session, status=status, pending_only=pending_only)
-    return {"registrations": _rows(rows)}
-
-
-@router.get("/registrations/{registration_id}")
-async def registration_detail(
-    registration_id: UUID,
-    user: User = Depends(require_distribution_access),
-    session: AsyncSession = Depends(get_session),
-):
-    """The application, and who the company thinks this already is.
-
-    The candidate list is built HERE rather than on the public form: matching
-    on the public side would mean showing an anonymous visitor who the company
-    already trades with. It also catches an applicant who does not realise
-    they are already a customer under a slightly different name.
-    """
-    return await reg.review_packet(session, registration_id=registration_id)
-
-
-@router.post("/registrations/{registration_id}/decide")
-async def decide_registration(
-    registration_id: UUID,
-    body: RegistrationDecisionIn,
-    user: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-):
-    """Approve or refuse. Approving creates the distributor.
-
-    Where `link_customer_id` is given, the applicant's EXISTING customer
-    account is attached rather than a new one being created, and the orders
-    already recorded against it are attributed to the new distributor. Nothing
-    is copied: those orders were always theirs, and the response says how many
-    became visible.
-    """
-    result = await reg.review(
-        session, registration_id=registration_id, approve=body.approve,
-        note=body.note, link_customer_id=body.link_customer_id,
-        acknowledge_duplicates=body.acknowledge_duplicates, actor=user)
-    await session.commit()
-    return result

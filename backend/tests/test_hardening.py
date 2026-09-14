@@ -48,6 +48,72 @@ def _distribution_routes():
             if any(r["path"].startswith(p) for p in DISTRIBUTION_PREFIXES)]
 
 
+def _routes_in_matching_order(app):
+    """Every route in the order Starlette will TRY to match it.
+
+    Deliberately not `_walk`, which sorts its output for the report. Order is
+    the whole point here: FastAPI stops at the first route whose path matches,
+    so declaration order decides which handler answers.
+    """
+    out = []
+
+    def visit(routes):
+        for route in routes:
+            inner = getattr(route, "original_router", None)
+            if inner is None and not hasattr(route, "methods"):
+                inner = getattr(route, "routes", None)
+            if inner is not None:
+                visit(getattr(inner, "routes", inner))
+                continue
+            path = getattr(route, "path", None)
+            if not path:
+                continue
+            for method in sorted(getattr(route, "methods", None) or []):
+                out.append((method, path))
+
+    visit(app.routes)
+    return out
+
+
+def test_no_static_route_is_shadowed_by_a_parameter_route():
+    """A literal path declared after /{id} is unreachable, and says 422.
+
+    This is not hypothetical. /api/distributors/registrations and
+    /api/distributors/registration-links were appended to the end of
+    distributors.py, below the `/{distributor_id}` route. FastAPI matched the
+    parameter route first, tried to read "registrations" as a UUID, and
+    answered every request with 422 "not a valid uuid" -- in production, on a
+    screen whose whole test suite passed, because those tests called the
+    service layer and never went through the router.
+
+    The failure is silent in exactly the way that matters: nothing is logged as
+    an error, the route is in the OpenAPI schema, and `_walk` reports it as
+    present and correctly guarded. Only a request reveals it.
+
+    Whole application, not just this module -- the mistake has nothing to do
+    with distributors, and today every one of the ~700 routes is clean.
+    """
+    import re
+
+    import app.main as main
+
+    routes = _routes_in_matching_order(main.app)
+    shadowed = []
+    for i, (method, path) in enumerate(routes):
+        if "{" in path:
+            continue
+        for earlier_method, earlier in routes[:i]:
+            if "{" not in earlier or earlier_method != method:
+                continue
+            pattern = "^" + re.sub(r"\{[^}]+\}", "[^/]+", earlier) + "$"
+            if re.match(pattern, path):
+                shadowed.append(f"{method} {path} is swallowed by {earlier}")
+
+    assert shadowed == [], (
+        "these routes can never be reached -- move them ABOVE the parameter "
+        "route that matches them: " + "; ".join(shadowed))
+
+
 def test_no_new_public_route_appears():
     """The one test that fails when the mistake is made.
 
