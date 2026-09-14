@@ -68,8 +68,8 @@ DROP TABLE IF EXISTS regions CASCADE;
 DROP TABLE IF EXISTS lgas CASCADE;
 DROP TABLE IF EXISTS states CASCADE;
 DROP TABLE IF EXISTS countries CASCADE;
-DROP TABLE IF EXISTS journal_lines CASCADE;
-DROP TABLE IF EXISTS journal_entries CASCADE;
+DROP TABLE IF EXISTS gl_journal_lines CASCADE;
+DROP TABLE IF EXISTS gl_journal_entries CASCADE;
 DROP TABLE IF EXISTS sales_order_lines CASCADE;
 DROP TABLE IF EXISTS sales_orders CASCADE;
 DROP TABLE IF EXISTS stock_movements CASCADE;
@@ -161,15 +161,17 @@ CREATE TABLE sales_order_lines (
     unit VARCHAR(50), quantity NUMERIC(18,6) NOT NULL,
     unit_price NUMERIC(18,6) NOT NULL, line_total NUMERIC(18,2) NOT NULL
 );
--- Minimal stand-ins so this test can assert that NOTHING is written to them.
-CREATE TABLE journal_entries (
+-- The REAL general ledger table names (app/services/ledger.py writes these).
+-- Named exactly so this test asserts nothing is written to the tables the
+-- application would actually post to, rather than to invented stand-ins.
+CREATE TABLE gl_journal_entries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     entry_date DATE NOT NULL, description TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE TABLE journal_lines (
+CREATE TABLE gl_journal_lines (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entry_id UUID REFERENCES journal_entries(id),
+    entry_id UUID REFERENCES gl_journal_entries(id),
     debit NUMERIC(18,2) DEFAULT 0, credit NUMERIC(18,2) DEFAULT 0
 );
 """
@@ -332,7 +334,7 @@ async def test_a_downstream_sale_posts_no_journal_entry(db):
     did, _ = await _distributor(db, admin, stocked={product: 500})
 
     before = (await db.execute(
-        text("SELECT COUNT(*) FROM journal_entries"))).scalar()
+        text("SELECT COUNT(*) FROM gl_journal_entries"))).scalar()
 
     await svc.record_sale(
         db, distributor_id=did, sold_on=date.today(),
@@ -340,11 +342,11 @@ async def test_a_downstream_sale_posts_no_journal_entry(db):
     await db.commit()
 
     after = (await db.execute(
-        text("SELECT COUNT(*) FROM journal_entries"))).scalar()
+        text("SELECT COUNT(*) FROM gl_journal_entries"))).scalar()
     assert after == before, (
         "posting here would double-count revenue in a live general ledger")
     assert (await db.execute(
-        text("SELECT COUNT(*) FROM journal_lines"))).scalar() == 0
+        text("SELECT COUNT(*) FROM gl_journal_lines"))).scalar() == 0
 
 
 @pytest.mark.asyncio
