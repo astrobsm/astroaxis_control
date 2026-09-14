@@ -30,12 +30,16 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import text
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.services import portal as svc
+from app.services import registration as reg
 
 router = APIRouter(prefix="/api/portal", tags=["Distributor ordering portal"])
 
@@ -119,4 +123,121 @@ async def place_order(
     # person who just placed it -- being told "you are over your limit" by a
     # screen that cannot say what to pay or to whom helps nobody.
     result.pop("credit", None)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Distributor self-registration -- ALSO UNAUTHENTICATED, and a different risk
+#
+# The ordering link above is a credential for ONE distributor's account. A
+# registration link is shared widely so that anyone can APPLY, so it is a
+# credential for nothing: every submission is an unverified claim from a
+# stranger and lands in a review queue, never in the distributor register.
+#
+# These live in this router rather than a new one so that every public route in
+# the system stays in one file, where the hardening test and anyone reviewing
+# the permissions matrix will find them together.
+# ---------------------------------------------------------------------------
+
+class CustomerCheckIn(BaseModel):
+    phone: str = Field(..., min_length=7, max_length=40)
+
+
+class RegistrationIn(BaseModel):
+    legal_name: str = Field(..., min_length=2, max_length=255)
+    phone: str = Field(..., min_length=7, max_length=40)
+    trading_name: Optional[str] = None
+    entity_type: str = "COMPANY"
+    contact_name: Optional[str] = None
+    whatsapp: Optional[str] = None
+    email: Optional[str] = None
+    business_address: Optional[str] = None
+    state_id: Optional[UUID] = None
+    lga_id: Optional[UUID] = None
+    town: Optional[str] = None
+    cac_number: Optional[str] = None
+    tin: Optional[str] = None
+    years_in_operation: Optional[int] = Field(None, ge=0, le=200)
+    business_type: Optional[str] = None
+    employee_count: Optional[int] = Field(None, ge=0, le=100000)
+    marketer_count: Optional[int] = Field(None, ge=0, le=100000)
+    storage_description: Optional[str] = None
+    products_of_interest: Optional[str] = None
+    applicant_note: Optional[str] = None
+    claims_existing_customer: bool = False
+    claimed_customer_id: Optional[UUID] = None
+
+
+@router.get("/register/{token}")
+async def open_registration(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Open the registration form, and the geography it needs.
+
+    Returns states and LGAs because the form has to offer them. That is
+    reference data -- the administrative map of Nigeria -- and carries nothing
+    about the company or who it trades with.
+    """
+    link = await reg.resolve(session, token=token, count_view=True)
+    states = (await session.execute(
+        text("""SELECT s.id, s.code, s.name FROM states s
+                  JOIN countries c ON c.id = s.country_id
+                 WHERE c.iso2 = 'NG' ORDER BY s.name"""))).mappings().all()
+    await session.commit()
+    return {
+        "campaign": link["campaign"],
+        "states": [dict(s) | {"id": str(s["id"])} for s in states],
+        "note": ("Applying does not create an account and does not let you "
+                 "order. Somebody at Bonnesante Medicals reviews every "
+                 "application."),
+    }
+
+
+@router.get("/register/{token}/lgas/{state_id}")
+async def registration_lgas(
+    token: str,
+    state_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """The LGAs of one state, for the form's second dropdown."""
+    await reg.resolve(session, token=token)
+    rows = (await session.execute(
+        text("""SELECT id, name FROM lgas WHERE state_id = :s AND is_active
+                 ORDER BY name"""), {"s": str(state_id)})).mappings().all()
+    return {"lgas": [dict(r) | {"id": str(r["id"])} for r in rows]}
+
+
+@router.post("/register/{token}/check-customer")
+async def check_customer(
+    token: str,
+    body: CustomerCheckIn,
+    session: AsyncSession = Depends(get_session),
+):
+    """Does a FULL phone number match one existing account?
+
+    Deliberately not a name search. A type-ahead over customer names on a
+    public form is a way to export the customer list to anyone holding the
+    link; this requires the applicant to already know the number and answers
+    about at most one account, with the name masked.
+    """
+    result = await reg.confirm_existing_customer(
+        session, token=token, phone=body.phone)
+    await session.commit()
+    return result
+
+
+@router.post("/register/{token}", status_code=201)
+async def submit_registration(
+    token: str,
+    body: RegistrationIn,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Send an application. Creates no distributor and grants nothing."""
+    client = _client(request)
+    result = await reg.submit(
+        session, token=token, payload=body.model_dump(mode="json"),
+        ip=client["ip"], user_agent=client["user_agent"])
+    await session.commit()
     return result

@@ -797,13 +797,13 @@ names silently reports every admin route as merely authenticated. Classification
 is therefore by callable identity, walked recursively, and guards are inherited
 from every wrapper on the way down.
 
-Current state of the distributor module: **44 admin-only, 70 authenticated, and
-exactly 3 public** -- all three the ordering portal, each named in
-`EXPECTED_PUBLIC` with a written justification.
+Current state of the distributor module: **admin-only, authenticated, and
+exactly 7 public** -- three the ordering portal and four the registration form
+(phase 13), each named in `EXPECTED_PUBLIC` with a written justification.
 
 **A test now fails when the mistake is made.**
 `test_no_new_public_route_appears` asserts the set of unauthenticated routes is
-exactly those three. It was verified by removing a guard and watching it fail
+exactly those named in `EXPECTED_PUBLIC`. It was verified by removing a guard and watching it fail
 with the offending route named. That is the only kind of security check worth
 having in a suite: one that fails when somebody makes the mistake, not one that
 passes because somebody remembered to run it.
@@ -837,3 +837,79 @@ contains a DROP, TRUNCATE or DELETE in its `upgrade()`, and every added column i
 nullable or defaulted so an existing row keeps behaving exactly as it did.
 
 Tests: `backend/tests/test_hardening.py` (11). Full suite 546.
+
+### Phase 13 -- the shareable registration link ("data capture") (`h3456789012g`)
+
+**The ask.** A link distributors can be sent so they register themselves; some
+of them are already customers, and where they are, their existing transactions
+should populate the distributor's activity.
+
+**Two public links that must not be confused.** `/order/<token>` is a credential
+for ONE distributor's account and must never be forwarded. `/register/<token>`
+is meant to be forwarded -- trade fair, WhatsApp group, a rep's contact list --
+because it is a credential for nothing: every submission is an unverified claim
+from a stranger and lands in a review queue. The two screens say the opposite
+thing about sharing, deliberately. The registration form says twice, in its own
+words, that applying creates no account and grants no ability to order, because
+somebody who believes otherwise will try to order and be refused.
+
+**The customer dropdown, and why it is not one.** The obvious build is a
+type-ahead over customer names on the public form. That is a way to export the
+company's customer book to anyone holding a forwarded link: type "a", collect
+every customer beginning with A, work through the alphabet. So
+`confirm_existing_customer` is a CONFIRMATION, not a search -- it matches a FULL
+phone number (last 10 digits, so `+234` and `0` prefixes agree), returns at most
+ONE account with the name masked (`DIVIDEND PHARMACY` -> `DIV••••••• PH•••••`),
+answers "we could not match that" identically for zero matches and for several
+so the count itself leaks nothing, is capped at 30 lookups per link per hour,
+and writes an audit row for every attempt.
+
+**The real matching is on the staff side, and it is better.** The review screen
+runs the existing `find_possible_duplicates` over everything the applicant typed
+-- name, phone, email, CAC, TIN -- and shows each candidate with the reason it
+matched, to somebody authenticated who can judge. That also catches the case the
+dropdown never would: an applicant who does not know they are already a customer
+under a slightly different name.
+
+**"Import all their transactions" is attribution, not import.** This is the
+phase where decision 1 pays for itself. A distributor IS a customer plus a
+warehouse plus a profile, so an approved applicant linked to an existing
+customer ALREADY has their whole history in `sales_orders`. Copying those rows
+into distributor tables would double-count revenue, give two answers to "what
+did they buy", and break the recall trace by splitting one order across two
+records. `attribute_history` therefore sets `distributor_id` on the orders that
+were always theirs and stamps `distributor_attributed_at`, so an order
+attributed later is distinguishable from one actually placed as a distributor
+order.
+
+`sales_channel` is deliberately NOT rewritten. Those were direct sales when they
+happened; restating them as distributor sales to make a report look tidy would
+falsify history and silently move every figure measured by channel.
+
+Performance is unaffected, and that is correct. The performance engine measures
+DOWNSTREAM sales -- distributor to outlet -- not what the company sold them. A
+new distributor does not acquire a sell-through record by being linked, and the
+review screen says how many orders and what value linking would bring across
+*before* the decision, because that is the consequence being agreed to.
+
+**Approval has exactly one path.** `review(approve=True)` calls the ordinary
+`create_distributor`, so there remains one way a distributor comes into
+existence, and the result is a DRAFT that still has to walk the usual lifecycle.
+Nothing about being approved from a public form shortcuts it.
+
+**What bounds the queue.** Links expire (default 90 days, 730 max), can carry a
+submission cap, and can be revoked with a recorded reason; only a SHA-256 of the
+token is stored, so an issued link cannot be recovered, only replaced.
+Submissions are capped at 5 per address per hour so one script cannot flood the
+queue. A `claimed_customer_id` that does not exist is dropped rather than
+trusted, so a forged one cannot attach an application to somebody else's account
+in the review queue.
+
+**Who can see any of it.** The queue and the link list sit behind
+`require_distribution_access` (admin, sales staff, customer care); issuing,
+revoking and deciding are `require_admin`. The four new public routes are in
+`EXPECTED_PUBLIC` with justifications, and `test_hardening.py` gained
+`test_the_public_registration_cannot_search_customers_by_name`, which fails if
+anybody ever adds the dropdown.
+
+Tests: `backend/tests/test_registration.py` (17).

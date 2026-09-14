@@ -73,12 +73,48 @@ def test_no_new_public_route_appears():
         "keeps describing reality.")
 
 
-def test_the_public_routes_are_only_the_ordering_portal():
-    """Nothing but the distributor's own ordering page is open."""
+def test_the_public_routes_are_only_the_portal():
+    """Nothing outside the distributor portal is open.
+
+    Two kinds live there and they are not the same risk: the ordering link is a
+    credential for ONE distributor's account, the registration link is shared
+    widely and is a credential for nothing. Both are public; only the first
+    reaches an existing account.
+    """
     for method, path in EXPECTED_PUBLIC:
         assert path.startswith("/api/portal/"), (
-            f"{method} {path} is public but is not the ordering portal")
-    assert len(EXPECTED_PUBLIC) == 3
+            f"{method} {path} is public but is not part of the portal")
+
+    ordering = {p for _, p in EXPECTED_PUBLIC
+                if not p.startswith("/api/portal/register")}
+    registration = {p for _, p in EXPECTED_PUBLIC
+                    if p.startswith("/api/portal/register")}
+    assert len(ordering) == 3, sorted(ordering)
+    assert registration, "the registration form should be public"
+
+    for key, reason in EXPECTED_PUBLIC.items():
+        assert len(reason) > 40, f"{key} needs a real justification, not a label"
+
+
+def test_the_public_registration_cannot_search_customers_by_name():
+    """A type-ahead here would export the customer list.
+
+    The endpoint takes a phone number and nothing else, so an applicant has to
+    already know the number rather than browse for one.
+    """
+    import inspect
+    from app.api import portal as portal_api
+
+    fields = portal_api.CustomerCheckIn.model_fields
+    assert set(fields) == {"phone"}, (
+        f"check-customer accepts {sorted(fields)} -- anything beyond a phone "
+        f"number turns a confirmation into a search")
+
+    source = inspect.getsource(
+        __import__("app.services.registration", fromlist=["x"]))
+    assert "ILIKE" not in source.upper().replace("LIKE :TAIL", ""), (
+        "a name-prefix match would make this browsable")
+    assert "_mask" in source, "the matched name must be masked"
 
 
 def test_everything_that_changes_data_needs_more_than_a_login():

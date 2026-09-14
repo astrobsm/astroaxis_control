@@ -133,6 +133,7 @@ $backendFiles = @(
     # these two files takes the whole ERP down on the next restart.
     'backend/app/api/portal.py',
     'backend/app/services/portal.py',
+    'backend/app/services/registration.py',
     'backend/alembic/versions/a6789012345z_distributor_portal.py',
 
     # Batch traceability, phase 6. inventory.py now names batch_id on every
@@ -179,6 +180,7 @@ $backendFiles = @(
     'backend/app/api/auth.py',
     'backend/app/services/inbox.py',
     'backend/alembic/versions/g2345678901f_all_lgas.py',
+    'backend/alembic/versions/h3456789012g_registration_links.py',
 
     'backend/requirements.txt'
 )

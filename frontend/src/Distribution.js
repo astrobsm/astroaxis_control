@@ -22,6 +22,7 @@ import { ApplicationQueue, TerritoryHoldings } from './TerritoryApplications';
 import { OrderingPanel } from './DistributorOrdering';
 import { DownstreamPanel } from './DownstreamSales';
 import { PerformancePanel } from './Performance';
+import { RegistrationDesk } from './DistributorRegistrations';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -635,6 +636,7 @@ export default function Distribution() {
       <div style={{ display: 'flex', gap: space(1), flexWrap: 'wrap', marginBottom: space(2.5) }}>
         {[['overview', 'Overview'], ['territories', 'Territories'],
           ['distributors', 'Distributors'], ['applications', 'Applications'],
+          ['datacapture', 'Data capture'],
           ['compliance', 'Compliance']].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding: '8px 15px', borderRadius: radius.pill, fontSize: 13, fontWeight: 600,
@@ -765,6 +767,8 @@ export default function Distribution() {
       )}
 
       {tab === 'applications' && <ApplicationQueue onChanged={load} />}
+
+      {tab === 'datacapture' && <RegistrationDesk onChanged={load} />}
 
       {tab === 'compliance' && (
         <>

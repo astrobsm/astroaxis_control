@@ -61,6 +61,25 @@ EXPECTED_PUBLIC = {
     ("POST", "/api/portal/{token}/orders"): (
         "Places the order. Every price is looked up server-side; nothing about "
         "money is trusted from the client."),
+
+    # Self-registration. A DIFFERENT risk from the ordering link above: this
+    # one is shared widely and is a credential for nothing. Every submission
+    # is an unverified claim that lands in a review queue, never in the
+    # distributor register.
+    ("GET", "/api/portal/register/{token}"): (
+        "Opens the application form and returns Nigeria's states. Reference "
+        "geography only -- nothing about the company or who it trades with."),
+    ("GET", "/api/portal/register/{token}/lgas/{state_id}"): (
+        "The LGAs of one state, for the form's second dropdown. Public "
+        "administrative geography."),
+    ("POST", "/api/portal/register/{token}/check-customer"): (
+        "Confirms whether a FULL phone number matches one existing account, "
+        "with the name masked. Deliberately not a name search: a type-ahead "
+        "over customer names here would export the customer list to anyone "
+        "holding the link. Rate-limited per link and every lookup is logged."),
+    ("POST", "/api/portal/register/{token}"): (
+        "Sends an application. Creates no distributor, grants nothing, and is "
+        "rate-limited per address."),
 }
 
 

@@ -5,6 +5,7 @@ import Settings from './Settings';
 import NotificationSettings from './NotificationSettings';
 import WifiLogin from './WifiLogin';
 import DistributorOrderPage from './DistributorOrderPage';
+import DistributorRegistrationPage from './DistributorRegistrationPage';
 import API_BASE_URL from './config';
 import { isPushSupported, getNotificationPermission, subscribeToPush } from './utils/pushNotifications';
 import './styles.css';
@@ -185,6 +186,15 @@ function App() {
       && window.location.pathname.startsWith('/order/')) {
     const orderToken = window.location.pathname.slice('/order/'.length);
     if (orderToken) return <DistributorOrderPage token={orderToken} />;
+  }
+
+  // Distributor application form -- /register/<token>. Also before the gate,
+  // and for the opposite reason: this link is meant to be forwarded, so the
+  // people opening it have no account and never will until they are approved.
+  if (typeof window !== 'undefined'
+      && window.location.pathname.startsWith('/register/')) {
+    const registerToken = window.location.pathname.slice('/register/'.length);
+    if (registerToken) return <DistributorRegistrationPage token={registerToken} />;
   }
 
   // Captive portal route — render the Wi-Fi login page regardless of app auth.
