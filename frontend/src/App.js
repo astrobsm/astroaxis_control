@@ -4,6 +4,7 @@ import AppMain from './AppMain';
 import Settings from './Settings';
 import NotificationSettings from './NotificationSettings';
 import WifiLogin from './WifiLogin';
+import DistributorOrderPage from './DistributorOrderPage';
 import API_BASE_URL from './config';
 import { isPushSupported, getNotificationPermission, subscribeToPush } from './utils/pushNotifications';
 import './styles.css';
@@ -176,6 +177,15 @@ function App() {
     setCurrentUser(null);
     setShowSettings(false);
   };
+
+  // Distributor ordering link — /order/<token>. Rendered before the auth gate
+  // because the token in the URL IS the credential; a distributor has no
+  // account here and must never be shown a login screen.
+  if (typeof window !== 'undefined'
+      && window.location.pathname.startsWith('/order/')) {
+    const orderToken = window.location.pathname.slice('/order/'.length);
+    if (orderToken) return <DistributorOrderPage token={orderToken} />;
+  }
 
   // Captive portal route — render the Wi-Fi login page regardless of app auth.
   if (typeof window !== 'undefined' && window.location.pathname === '/wifi-login') {

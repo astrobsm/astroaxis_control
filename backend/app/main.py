@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -115,12 +115,20 @@ try:
     #                bearer token, so this router authenticates by a long
     #                random secret in the URL path, compared in constant time,
     #                and records every attempt. See app/api/telephony_webhook.py.
+    # portal:        the distributor ordering link. A distributor orders without
+    #                an account, so the long random token in the URL path IS the
+    #                credential -- only its hash is stored, it expires, it is
+    #                revocable, and every use and every miss is logged. Every
+    #                route is scoped to the one distributor that token resolves
+    #                to and reads nothing else. Issuing and revoking links is
+    #                NOT here: that is in distributors.py behind require_admin.
     app.include_router(auth.router)
     app.include_router(attendance.router)
     app.include_router(public_orders.router)
     app.include_router(wifi.router)
     app.include_router(profits.router)
     app.include_router(telephony_webhook.router)
+    app.include_router(portal.router)
 
     # --- Admin only -------------------------------------------------------
     app.include_router(permissions.router, dependencies=admin_only)

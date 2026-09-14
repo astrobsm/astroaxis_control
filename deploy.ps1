@@ -128,6 +128,13 @@ $backendFiles = @(
     'backend/app/services/applications.py',
     'backend/alembic/versions/z5678901234y_territory_applications.py',
 
+    # Distributor ordering portal, phase 5. main.py registers portal.router in
+    # the PUBLIC block and router registration re-raises, so main.py without
+    # these two files takes the whole ERP down on the next restart.
+    'backend/app/api/portal.py',
+    'backend/app/services/portal.py',
+    'backend/alembic/versions/a6789012345z_distributor_portal.py',
+
     'backend/requirements.txt'
 )
 
@@ -417,6 +424,24 @@ New in this deploy:
     anyone else and nothing on screen said why.
   * Migration z5678901234y -- columns added to distributor_applications, which
     nothing was using; no existing data is touched.
+  * Distributor ordering portal, phase 5. Issue a distributor a shareable link
+    (dossier -> Ordering) and they order at /order/<token> with no login. They
+    see no prices -- only the total, once they have chosen everything -- and
+    what they place is an ORDINARY SALES ORDER, so it shows up in sales
+    reporting, receivables and despatch like any other. No second order book.
+
+    TREAT THE LINK AS A PASSWORD. Anyone holding it can order on that
+    distributor's account. It is shown ONCE on creation and cannot be
+    retrieved -- only its hash is stored, so nothing can recover it. It always
+    expires, it can be revoked immediately and permanently, and every use,
+    every miss and every order is logged against it.
+
+    BE AWARE: a basket total lets a determined person work out unit prices by
+    quoting one item at a time and taking the difference. That is inherent in
+    showing a total at all. What the design does prevent is the price list
+    being lifted, screenshotted or forwarded in one go.
+  * Migration a6789012345z -- two new tables plus one nullable column on
+    sales_orders. No existing data is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --

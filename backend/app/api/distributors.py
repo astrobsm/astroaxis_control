@@ -29,6 +29,7 @@ from app.api.auth import require_admin, require_authenticated_user
 from app.db import get_session
 from app.models import User
 from app.services import compliance as csvc
+from app.services import portal
 from app.services import distributors as svc
 
 router = APIRouter(prefix="/api/distributors", tags=["Distributors"])
@@ -1000,3 +1001,107 @@ async def compliance_summary(
 ):
     """Is this distributor fit to trade, and if not, exactly why."""
     return await csvc.compliance_summary(session, distributor_id)
+
+
+# ---------------------------------------------------------------------------
+# Ordering links -- phase 5
+#
+# Issuing and revoking the credentials the public portal accepts. Admin only,
+# and deliberately in this module rather than in app/api/portal.py: that router
+# is unauthenticated, and an admin route must never sit beside routes reachable
+# by anyone with a URL.
+# ---------------------------------------------------------------------------
+
+class OrderLinkIn(BaseModel):
+    label: str = Field(..., min_length=3, max_length=160)
+    recipient_name: Optional[str] = None
+    recipient_phone: Optional[str] = None
+    valid_days: int = Field(30, ge=1, le=365)
+
+
+class RevokeLinkIn(BaseModel):
+    reason: str = Field(..., min_length=3)
+
+
+@router.post("/{distributor_id}/order-links", status_code=201)
+async def issue_order_link(
+    distributor_id: UUID,
+    body: OrderLinkIn,
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Issue a shareable ordering link.
+
+    The token is in the response and NOWHERE ELSE. Only its hash is stored, so
+    there is no endpoint that can show it again -- copy it now or issue another.
+    """
+    base = str(request.base_url).rstrip("/")
+    result = await portal.issue_link(
+        session, distributor_id=distributor_id, label=body.label,
+        recipient_name=body.recipient_name,
+        recipient_phone=body.recipient_phone, valid_days=body.valid_days,
+        base_url=base, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/{distributor_id}/order-links")
+async def list_order_links(
+    distributor_id: UUID,
+    include_dead: bool = False,
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Links for this distributor. The tokens are not here and never will be."""
+    rows = await portal.list_links(
+        session, distributor_id=distributor_id, include_dead=include_dead)
+    return {"links": _rows(rows)}
+
+
+@router.post("/order-links/{link_id}/revoke")
+async def revoke_order_link(
+    link_id: UUID,
+    body: RevokeLinkIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Stop a link working. Immediate, permanent, and recorded."""
+    result = await portal.revoke_link(
+        session, link_id=link_id, reason=body.reason, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/order-links/{link_id}/activity")
+async def order_link_activity(
+    link_id: UUID,
+    limit: int = Query(100, ge=1, le=500),
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every use of this link, append-only.
+
+    What to look at if a link is thought to have leaked: where it was opened
+    from, and what was ordered with it.
+    """
+    rows = await portal.link_activity(session, link_id=link_id, limit=limit)
+    return {"activity": _rows(rows)}
+
+
+@router.get("/{distributor_id}/orders")
+async def distributor_orders(
+    distributor_id: UUID,
+    limit: int = Query(100, ge=1, le=500),
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Orders this distributor has placed.
+
+    Read straight from sales_orders. There is no distributor order table: a
+    distributor order IS a sales order, so it appears in sales reporting, AR and
+    dispatch exactly like every other one.
+    """
+    rows = await portal.distributor_orders(
+        session, distributor_id=distributor_id, limit=limit)
+    return {"orders": _rows(rows)}

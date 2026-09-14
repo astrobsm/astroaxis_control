@@ -411,3 +411,59 @@ are shown as three separate answers and never combined into one score.
 
 Tests: `backend/tests/test_territory_applications.py` (16), run against the real
 migration chain.
+
+### Phase 5 — the distributor ordering portal (`a6789012345z`)
+
+A distributor is issued a shareable link and orders at `/order/<token>` with no
+login. They see no prices; once they have chosen everything they see one total
+for the basket.
+
+**The order is an ordinary sales order.** `sales_orders` + `sales_order_lines`,
+priced from `product_pricing` exactly as the existing public ordering path
+prices them, with `sales_channel = 'DISTRIBUTOR'` and `distributor_id` set —
+columns that already existed from phase 1. There is no distributor order table,
+no staging queue and nothing to reconcile; the order appears in sales reporting,
+receivables and despatch like every other one. The wholesale minimum-quantity
+rules are imported from `public_orders.py` rather than reimplemented, because two
+copies of a commercial rule disagree the first time one is changed.
+
+**The token is a credential and is treated as one.** Only its SHA-256 is stored,
+so a dump of the table — a backup on a laptop, a support export, a leaked
+replica — hands out no working links. It is shown once, on creation, and the app
+genuinely cannot show it again. `expires_at` is NOT NULL with no "never" value:
+a permanent unauthenticated entry point outlives the relationship it was issued
+for and nobody remembers to revoke it. Revocation is immediate, permanent and
+recorded, and a database trigger refuses to un-revoke — reinstating one would
+make the audit trail lie about the window in which a leaked credential worked.
+Every use is written to an append-only table, including tokens matching nothing,
+because a run of those is what guessing at links looks like and it is invisible
+otherwise.
+
+**How prices are hidden, and what that is worth.** The catalogue query does not
+select the price columns at all. Selecting them and dropping them from the
+response would have been easier and is precisely what to avoid: a response
+filter is one refactor away from leaking the list, and what is never fetched
+cannot be returned by accident. The order is priced again from the database at
+submission, so a client that sends its own total changes nothing.
+
+Being straight about the limit: **a basket total reveals unit prices to anyone
+who wants them.** Quote one carton, then two, and the difference is the unit
+price. That is inherent in showing a total at all and no care in the
+implementation changes it. What the design does buy is real but narrower — the
+price list cannot be lifted wholesale, screenshotted or forwarded, and the
+distributor is not handed a per-item column to compare against a competitor's.
+If unit prices must be genuinely secret from the person ordering, they cannot be
+shown a total either, and that is a commercial decision rather than a technical
+one.
+
+**Credit is reported, not enforced at the portal.** The order is accepted and the
+credit position is attached for the staff who confirm it. A distributor told
+mid-basket that they are over a limit, by a screen that cannot say by how much
+or what to pay, is worse than useless — and the company confirms every order
+anyway, which is where a credit decision belongs. The lookup runs inside a
+SAVEPOINT: the first version caught its failure and returned "unchecked", which
+looked harmless and was not, because a failed statement poisons the whole
+transaction and the caller's later commit rolled back the order itself. The
+distributor was handed an order number for an order that did not exist.
+
+Tests: `backend/tests/test_portal.py` (19), run against the real migration chain.
