@@ -521,3 +521,51 @@ so inventory cannot be conjured by filling in a form.
 
 Tests: `backend/tests/test_batches.py` (22), run against the real migration
 chain, including the raw-INSERT bypass attempts.
+
+### Phase 7 -- downstream sales (`c8901234567b`)
+
+Decision 3 of this map, built. `distributor_marketers`, `distributor_outlets`,
+`distributor_sales`, `distributor_sale_lines`, `distributor_sale_evidence`.
+
+**No journal entry, and that is load-bearing rather than incidental.**
+`app/services/downstream.py` imports nothing from `app.services.ledger`, and a
+test asserts both that fact and that no GL rows appear when a sale is recorded.
+`sales_orders` records company to customer; a distributor selling to a pharmacy
+is a transaction the company is not a party to and already recognised revenue on
+when it shipped. `ACCOUNTING_POSTING_ENABLED` is true in production, so a stray
+call would silently double-count revenue in the live ledger.
+
+**Provenance is the point.** Almost everything here is self-reported. A sale
+arrives as REPORTED and counts toward nothing. VERIFIED requires evidence on the
+record *and* somebody other than the person who reported it -- enforced by the
+service and by a database trigger. DISPUTED is kept, never deleted, because
+deleting it would remove the evidence that a claim was ever made, which is
+exactly what a pattern of inflated reporting looks like.
+
+Every function that adds these numbers up returns the two totals separately, and
+there is deliberately **no helper that returns a combined figure**: the moment
+one exists, some screen calls it and "the distributor claims" has quietly become
+"the company knows". A test asserts that the combined number appears nowhere in
+the response. The UI follows the same rule -- two tiles, two colours, never one.
+
+Marketers are ranked on verified value rather than claimed, because ranking on
+self-reported figures rewards optimistic paperwork.
+
+**Stock, and what happens when the numbers disagree.** A sale reduces stock in
+the *distributor's* warehouse only, through `inventory.apply_stock_movement`, so
+the phase 6 batch attribution follows the goods to the outlet -- which is what
+lets a recall name the pharmacy that bought the batch. Where a distributor
+reports selling more than the company recorded shipping, the sale is still
+recorded and `stock_discrepancy` is set. Refusing the report would discard a fact
+about the world to protect a number; the mismatch is itself the finding. Stock is
+not driven negative to make it balance.
+
+The stock movement runs inside a SAVEPOINT. It is allowed to fail -- that is the
+discrepancy case -- and a failed statement poisons the whole transaction, which
+would silently roll back the sale being written. The portal's credit lookup was
+bitten by exactly this in phase 5.
+
+Marketers work for the distributor: no `users` row, no login, no access to
+anything. Naming someone here must never become a route to granting access.
+
+Tests: `backend/tests/test_downstream.py` (16).

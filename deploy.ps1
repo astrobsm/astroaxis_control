@@ -144,6 +144,11 @@ $backendFiles = @(
     'backend/app/api/batches.py',
     'backend/alembic/versions/b7890123456a_product_batches.py',
 
+    # Downstream sales, phase 7.
+    'backend/app/services/downstream.py',
+    'backend/app/api/downstream.py',
+    'backend/alembic/versions/c8901234567b_downstream_sales.py',
+
     'backend/requirements.txt'
 )
 
@@ -477,6 +482,29 @@ New in this deploy:
   * Migration b7890123456a -- two new tables, plus nullable batch_id on
     stock_movements and sales_order_lines. No existing row is changed, and no
     batch is invented for historical stock.
+  * Downstream sales, phase 7. What distributors sold onward, in the dossier's
+    new "Sell-through" tab, with marketers and outlets.
+
+    THIS POSTS NO JOURNAL ENTRY, and that is deliberate. A distributor selling
+    to a pharmacy is a transaction the company is not party to and already
+    recognised revenue on when it shipped to the distributor. Posting it would
+    double-count revenue in the live ledger.
+
+    VERIFIED AND CLAIMED ARE NEVER ADDED TOGETHER. Almost all of this is
+    self-reported. A sale arrives as REPORTED and counts toward nothing until
+    somebody OTHER than the person who reported it checks it against uploaded
+    evidence. Only the verified figure drives performance; the claimed figure
+    sits beside it labelled as unchecked. There is no combined total anywhere
+    in the API or the UI, on purpose.
+
+    Where a distributor reports selling more than we recorded shipping them,
+    the sale is still recorded and flagged as a stock discrepancy -- stock is
+    NOT driven negative to make it balance. Either the shipment record is
+    incomplete or the report is inflated, and both are worth knowing.
+
+    Batches follow the goods to the outlet, so a recall can now name the
+    pharmacy that bought an affected batch.
+  * Migration c8901234567b -- five new tables. No existing table is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --
