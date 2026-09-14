@@ -228,8 +228,30 @@ function BatchDetail({ batchId, onClose, onChanged }) {
           )}
           {data.status !== 'RECALLED' && (
             <Btn size="sm" variant="danger" disabled={busy}
-              onClick={() => act('RECALLED',
-                'Recall this batch. This cannot be undone. Why?')}>
+              onClick={async () => {
+                const reason = window.prompt(
+                  'Recall this batch. This cannot be undone.\n\n'
+                  + 'Why? (at least a sentence - somebody reading this in two '
+                  + 'years needs to understand it)');
+                if (!reason || reason.trim().length < 10) return;
+                setBusy(true);
+                try {
+                  // Goes through /api/recalls, not the plain status change: a
+                  // RECALLED batch with no recall record is a blocked batch
+                  // nobody is chasing.
+                  const r = await postJSON('/api/recalls',
+                    { batch_id: batchId, reason: reason.trim() });
+                  await load();
+                  onChanged && onChanged();
+                  window.alert(
+                    r.recall_reference + ' raised.\n\n'
+                    + r.at_risk_quantity + ' unit(s) at risk across '
+                    + r.still_held.length + ' location(s), with '
+                    + r.recipients_to_contact + ' recipient(s) to contact.\n\n'
+                    + 'Work the recall from Recalls & Complaints.');
+                } catch (e) { setErr(e.message); }
+                setBusy(false);
+              }}>
               Recall
             </Btn>
           )}

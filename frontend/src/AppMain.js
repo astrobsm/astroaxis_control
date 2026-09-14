@@ -15,6 +15,7 @@ import Distribution from './Distribution';
 import Batches from './Batches';
 import Attention from './Attention';
 import CommandCentre from './CommandCentre';
+import Recalls from './Recalls';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
@@ -3263,6 +3264,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
        ['distributors','Distributors & Territories','map'],
        ['batches','Batches & Recall','asset'],
        ['attention','Needs Attention','alert'],
+       ['recalls','Recalls & Complaints','shield'],
      ]],
      ['People', [
        ['staff','Staff','users'],['hrCustomerCare','HR / Customer Care','users'],
@@ -9263,6 +9265,11 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Distribution command centre: coverage, ranking, exports */}
  {activeModule === 'commandCentre' && (
  <CommandCentre />
+ )}
+
+ {/* Recalls and product complaints */}
+ {activeModule === 'recalls' && (
+ <Recalls />
  )}
 
  {/* Settings */}

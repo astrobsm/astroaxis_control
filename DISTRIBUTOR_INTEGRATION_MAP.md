@@ -720,3 +720,60 @@ the file has been forwarded. The batch export carries a `dispatchable` column, s
 a recalled batch is not just a row with a status somebody might skim past.
 
 Tests: `backend/tests/test_command_centre.py` (12).
+
+### Phase 11 -- recalls, returns and complaints (`f1234567890e`)
+
+**Returns are not rebuilt.** `returned_stock` and `app/api/returns.py` already
+record goods coming back and already restore stock through a movement. This
+phase adds two columns to that table -- `batch_id` and `recall_id` -- and builds
+nothing to replace it. A second returns path would mean two answers to "how much
+came back", and the recall reconciliation is exactly where those two answers
+would differ. A test asserts no second returns table exists.
+
+**A recall needs a process, not a flag.** Phase 6 could mark a batch RECALLED and
+produce the list of who holds it; that is the easy half. The work is contacting
+every one of those people, recording what they say, collecting what they still
+have, and being able to state afterwards how much was never found. Raising a
+recall through `/api/recalls` does the status change and opens that process in
+one act, because a RECALLED batch with no recall record is a blocked batch nobody
+is chasing.
+
+**Unaccounted is the figure this phase exists to protect.** A recall
+reconciliation that shows everything neatly recovered is almost always false:
+some product was used before anyone was contacted, some was thrown away by
+whoever had it, some went to an outlet nobody recorded. So the reconciliation
+reports four quantities against the amount at risk when the recall was raised --
+recovered, destroyed, still on a shelf we control -- and whatever is left is
+UNACCOUNTED, with its own name and its own card on the screen. `close_recall`
+refuses to close a recall carrying unaccounted units until somebody writes down
+what is believed to have become of them.
+
+`at_risk_quantity` is the one stored figure, because it is a point-in-time fact:
+stock keeps moving after a recall is raised and the denominator has to be what
+the recall started from. A trigger refuses to change it. Everything else is
+derived -- recovered from `returned_stock`, destroyed from `stock_movements`,
+still-held from the batch balance.
+
+**An unanswered phone is an attempt, not a notification.** `acknowledged` is
+recorded separately, and the outstanding-contacts list is built from who holds or
+received the batch rather than from the notification log -- otherwise somebody
+nobody has tried yet would not appear at all.
+
+**Adverse events.** A complaint about a medical product can create a duty to
+notify a regulator within a fixed period. **This application does not discharge
+that duty and cannot.** `potential_adverse_event` records that one may have
+arisen; `regulator_notified_on` and `regulator_reference` record what a PERSON
+did, outside this system. The warning is returned on every response that touches
+a flagged complaint, not shown once when the box is ticked -- a duty explained in
+a dialog three weeks ago has not been discharged by having been explained.
+
+No regulatory classification scheme is invented. Severity is the company's own
+word, on the same principle as the REGULATORY/COMPANY distinction in migration
+y4567890123x: the app does not know which framework applies and does not imply
+that it has applied one.
+
+A complaint's description is immutable. What the complainant said is the thing
+being investigated, and an investigation that rewrites the complaint as it goes
+is not an investigation.
+
+Tests: `backend/tests/test_recalls.py` (18).

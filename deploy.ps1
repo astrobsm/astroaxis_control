@@ -164,6 +164,11 @@ $backendFiles = @(
     'backend/app/services/command_centre.py',
     'backend/app/api/command_centre.py',
 
+    # Recalls, returns and complaints, phase 11.
+    'backend/app/services/recalls.py',
+    'backend/app/api/recalls.py',
+    'backend/alembic/versions/f1234567890e_recall_workflow.py',
+
     'backend/requirements.txt'
 )
 
@@ -602,6 +607,31 @@ New in this deploy:
     sales export has separate verified and claimed columns rather than one
     total -- a spreadsheet is where a claim becomes a fact, and nothing can put
     the distinction back once the file is sent on.
+  * Recalls, returns and complaints, phase 11. New sidebar entry
+    "Recalls & Complaints". Raising a recall now goes through a managed
+    process: it blocks despatch AND produces the list of who holds the goods
+    and who was already sent them.
+
+    THE FIGURE TO READ IS "NEVER FOUND". A recall reconciliation shows four
+    quantities -- at risk when raised, returned, destroyed, still on our
+    shelves -- and whatever is left over is UNACCOUNTED. That is the number
+    that matters, because those units are still out there. A recall carrying
+    unaccounted units CANNOT BE CLOSED until somebody writes down what is
+    believed to have happened to them.
+
+    Returns go through the EXISTING returns screen. Two columns were added to
+    returned_stock (batch and recall); no second returns path was built,
+    because two paths would mean two answers to "how much came back".
+
+    ADVERSE EVENTS: a complaint can be flagged as possible patient harm. THE
+    APP NOTIFIES NO REGULATOR AND CANNOT. The flag records that a reporting
+    duty may have arisen; the regulator columns record what a PERSON did about
+    it. The warning is repeated every time, not shown once.
+
+    A complaint's description cannot be edited after it is recorded -- what the
+    complainant said is the thing being investigated.
+  * Migration f1234567890e -- three new tables, two nullable columns on the
+    existing returned_stock. No existing data is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --
