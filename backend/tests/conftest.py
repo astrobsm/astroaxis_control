@@ -142,3 +142,97 @@ async def _dispose_app_engine():
     except Exception:
         return
     await db_mod.engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Reconciling tables the ORM tests share with the migration tests
+# ---------------------------------------------------------------------------
+
+def reconcile_orm_columns(sync_conn) -> list[str]:
+    """Add any ORM column missing from a table that already exists.
+
+    WHY THIS IS NEEDED
+    ------------------
+    `Base.metadata.create_all` creates tables that are absent and does NOTHING
+    to tables that are present -- including when the present table is the wrong
+    shape. It never adds a missing column.
+
+    The suite shares one database between two kinds of test. The migration
+    tests (test_distributors, test_wallet, test_settlement and friends) build
+    core tables like `products` and `users` by hand, each declaring only the
+    columns that module needs. The ORM tests (test_crud_apis, test_bom_cost,
+    test_wifi) then call create_all, find those tables already there, and are
+    handed a `products` with no `description` column.
+
+    The result was five failures that depended entirely on collection order and
+    passed in isolation -- the worst kind, because the tests look flaky rather
+    than wrong and the real fault is invisible in the failure message.
+
+    Rewriting every hand-built schema to match the ORM was tried and is the
+    wrong fix: those tables are deliberately minimal, some carry columns of
+    their own, and keeping a dozen copies in step by hand is exactly the
+    duplication that caused this. Reconciling once, here, fixes the class.
+
+    Every added column is NULLABLE regardless of what the ORM says, because the
+    table may already hold rows and this is only ever making a test database
+    usable -- never a statement about what production should look like. The
+    real schema is the migration chain.
+
+    Server defaults and indexes are reconciled too, and both matter. A
+    `created_at` added without its DEFAULT NOW() is silently NULL, which fails
+    later in response validation rather than at the insert. And create_all skips
+    a table's indexes along with the table, so the partial unique indexes on
+    `stock_levels` went missing -- turning an ON CONFLICT upsert into
+    "no unique or exclusion constraint matching the ON CONFLICT specification",
+    an error that says nothing about the real cause.
+    """
+    import sqlalchemy as sa
+    from sqlalchemy.schema import CreateIndex
+    from app.models import Base
+
+    inspector = sa.inspect(sync_conn)
+    existing_tables = set(inspector.get_table_names())
+    added: list[str] = []
+
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue  # create_all will make it, correctly and in full
+
+        present = {c["name"] for c in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in present:
+                continue
+            ddl = column.type.compile(dialect=sync_conn.dialect)
+            default = ""
+            if column.server_default is not None:
+                arg = column.server_default.arg
+                default = f" DEFAULT {getattr(arg, 'text', None) or arg}"
+            sync_conn.exec_driver_sql(
+                f'ALTER TABLE "{table.name}" '
+                f'ADD COLUMN IF NOT EXISTS "{column.name}" {ddl}{default}')
+            added.append(f"{table.name}.{column.name}")
+
+        existing_indexes = {i["name"] for i in inspector.get_indexes(table.name)}
+        existing_indexes |= {
+            c["name"] for c in inspector.get_unique_constraints(table.name)}
+        for index in table.indexes:
+            if index.name in existing_indexes:
+                continue
+            try:
+                sync_conn.execute(CreateIndex(index, if_not_exists=True))
+            except Exception:
+                # An index over a column this table does not have is not worth
+                # failing the run for; the column reconciliation above is what
+                # most tests actually need.
+                continue
+            added.append(f"{table.name}::{index.name}")
+
+    return added
+
+
+async def ensure_orm_schema(engine) -> None:
+    """create_all, then reconcile. Use this instead of create_all alone."""
+    from app.models import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(reconcile_orm_columns)

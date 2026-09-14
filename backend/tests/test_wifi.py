@@ -14,6 +14,8 @@ import uuid
 
 import pytest
 import pytest_asyncio
+
+from conftest import ensure_orm_schema
 from httpx import ASGITransport, AsyncClient
 
 # Ensure we import the local app package
@@ -34,8 +36,7 @@ app = main_mod.app
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_database():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_orm_schema(engine)
     yield
 
 

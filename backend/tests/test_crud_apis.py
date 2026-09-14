@@ -1,5 +1,7 @@
 import pytest
 import pytest_asyncio
+
+from conftest import ensure_orm_schema
 import sys
 import os
 import uuid
@@ -22,10 +24,18 @@ Base = models_mod.Base
 app = main_mod.app
 
 
+# These tests create rows and do not delete them, so a fixed SKU makes the whole
+# module pass exactly once per database and fail on every later run with a 400
+# that looks like a broken endpoint rather than a stale row. The tag makes each
+# run's identifiers its own; the duplicate-SKU assertion below still reuses the
+# SAME tag, because that check is about the API rejecting a repeat, not about
+# the literal string.
+RUN_TAG = uuid.uuid4().hex[:8].upper()
+
+
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_database():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_orm_schema(engine)
     yield
 
 
@@ -57,14 +67,13 @@ async def create_test_user_headers(role: str = "admin") -> dict:
 async def test_products_crud():
     """Test complete CRUD operations for products"""
     # Ensure DB is ready
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_orm_schema(engine)
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test',
                            headers=await create_test_user_headers()) as client:
         # Test CREATE product
         product_data = {
-            "sku": "TEST-PROD-001",
+            "sku": f"TEST-PROD-{RUN_TAG}",
             "name": "Test Product",
             "description": "A test product for API testing",
             "unit": "piece"
@@ -75,7 +84,7 @@ async def test_products_crud():
         result = response.json()
         assert result['success'] == True
         product_id = result['data']['id']
-        assert result['data']['sku'] == 'TEST-PROD-001'
+        assert result['data']['sku'] == f'TEST-PROD-{RUN_TAG}'
         
         # Test READ product
         response = await client.get(f'/api/products/{product_id}')
@@ -100,7 +109,7 @@ async def test_products_crud():
         assert result['data']['name'] == 'Updated Test Product'
         
         # Test duplicate SKU prevention
-        duplicate_data = {"sku": "TEST-PROD-001", "name": "Duplicate"}
+        duplicate_data = {"sku": f"TEST-PROD-{RUN_TAG}", "name": "Duplicate"}
         response = await client.post('/api/products/', json=duplicate_data)
         assert response.status_code == 400
 
@@ -111,7 +120,7 @@ async def test_raw_materials_crud():
                            headers=await create_test_user_headers()) as client:
         # Test CREATE raw material
         material_data = {
-            "sku": "TEST-RM-001",
+            "sku": f"TEST-RM-{RUN_TAG}",
             "name": "Test Raw Material",
             "unit_cost": "1.50"
         }
@@ -143,7 +152,7 @@ async def test_warehouses_crud():
 
         # Test CREATE warehouse
         warehouse_data = {
-            "code": "TEST-WH",
+            "code": f"TEST-WH-{RUN_TAG}",
             "name": "Test Warehouse",
             "location": "Test Location"
         }

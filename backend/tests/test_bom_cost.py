@@ -20,6 +20,7 @@ from app import db as db_mod                                    # noqa: E402
 from app import main as main_mod                                # noqa: E402
 from app import models as models_mod                            # noqa: E402
 from app.api import auth as auth_mod                            # noqa: E402
+from conftest import ensure_orm_schema                          # noqa: E402
 
 engine = db_mod.engine
 Base = models_mod.Base
@@ -53,8 +54,7 @@ async def _auth_headers(role="admin"):
 @pytest.mark.asyncio
 async def test_bom_cost_endpoint():
     # ensure db tables exist
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await ensure_orm_schema(engine)
     
     # Check if we have existing BOM data, otherwise seed it.
     #
