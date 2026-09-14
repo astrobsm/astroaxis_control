@@ -448,6 +448,46 @@ async def test_recalled_stock_can_still_come_back_in(db):
 
 
 @pytest.mark.asyncio
+async def test_recalled_stock_can_be_written_off(db):
+    """A recall ENDS in disposal, so the disposal route must stay open.
+
+    Blocking every outbound movement looked safe and was a dead end: the goods
+    could not be sold (right) and could not be written off either, so recalled
+    stock could never leave the system. Only despatch is blocked -- DAMAGE and
+    ADJUST_OUT are how a recall is completed.
+    """
+    admin = await _admin(db)
+    pid, bid, wid = await _batch(db, admin, receive=100)
+    await svc.set_status(db, batch_id=bid, status="RECALLED",
+                         reason="Contamination confirmed by the laboratory",
+                         actor=admin)
+    await db.commit()
+
+    # Selling is refused.
+    with pytest.raises(HTTPException):
+        await inv.apply_stock_movement(
+            db, warehouse_id=wid, movement_type="OUT", quantity=10,
+            product_id=pid, batch_id=bid, created_by=admin.id)
+    await db.rollback()
+
+    # Destroying it is not.
+    await inv.apply_stock_movement(
+        db, warehouse_id=wid, movement_type="DAMAGE", quantity=100,
+        product_id=pid, batch_id=bid, created_by=admin.id,
+        reference="Recall destruction, witnessed")
+    await db.commit()
+    assert await inv.batch_balance(db, batch_id=bid) == Decimal("0")
+
+    # But not more than was there.
+    with pytest.raises(HTTPException) as exc:
+        await inv.apply_stock_movement(
+            db, warehouse_id=wid, movement_type="DAMAGE", quantity=1,
+            product_id=pid, batch_id=bid, created_by=admin.id)
+    await db.rollback()
+    assert "holds 0" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_a_quarantined_batch_is_held_until_released(db):
     admin = await _admin(db)
     pid, bid, wid = await _batch(db, admin, receive=60)

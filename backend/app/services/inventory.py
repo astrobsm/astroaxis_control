@@ -54,6 +54,12 @@ MOVEMENT_DIRECTION: dict[str, int] = {
 INBOUND = {k for k, v in MOVEMENT_DIRECTION.items() if v > 0}
 OUTBOUND = {k for k, v in MOVEMENT_DIRECTION.items() if v < 0}
 
+# Movements a quarantined, recalled, withdrawn or expired batch may NOT make.
+# Deliberately narrower than OUTBOUND: DAMAGE and ADJUST_OUT stay available
+# because writing the goods off is how a recall is completed. Keep this in step
+# with the batch_dispatch_guard trigger in migration b7890123456a.
+BLOCKED_FOR_BAD_BATCH = {"OUT", "TRANSFER_OUT", "PRODUCTION_OUT"}
+
 
 def _as_decimal(value) -> Decimal:
     if isinstance(value, Decimal):
@@ -163,7 +169,13 @@ async def _check_batch(
                     f"product. Stock cannot be attributed to a batch of "
                     f"something else."))
 
-    if direction < 0:
+    # Only DESPATCH is blocked -- selling it, shipping it onward, consuming it
+    # in production. DAMAGE and ADJUST_OUT are deliberately allowed, because
+    # writing off or destroying the goods is HOW a recall is completed. Blocking
+    # every outbound movement made recalled stock impossible to dispose of: it
+    # could not be sold (right), and it could not be written off either (a dead
+    # end). This list matches the database trigger in b7890123456a exactly.
+    if movement_type in BLOCKED_FOR_BAD_BATCH:
         blocked = {
             "RECALLED": (f"Batch {batch['batch_number']} has been RECALLED and "
                          f"cannot be despatched. Goods on hand must be "
@@ -181,18 +193,20 @@ async def _check_batch(
             raise HTTPException(
                 status_code=409,
                 detail=(f"Batch {batch['batch_number']} expired on "
-                        f"{batch['expiry_date']} and cannot be despatched."))
+                        f"{batch['expiry_date']} and cannot be despatched. "
+                        f"Write it off instead."))
 
-        if not allow_negative:
-            held = await batch_balance(
-                session, batch_id=batch_id, warehouse_id=warehouse_id)
-            if qty > held:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"Batch {batch['batch_number']} holds {held} in "
-                            f"this warehouse; {qty} was requested. Issuing "
-                            f"more of a batch than arrived would make its "
-                            f"trace unusable."))
+    # Applies to every outbound movement, including a write-off: you cannot
+    # destroy more of a batch than arrived any more than you can sell it.
+    if direction < 0 and not allow_negative:
+        held = await batch_balance(
+            session, batch_id=batch_id, warehouse_id=warehouse_id)
+        if qty > held:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Batch {batch['batch_number']} holds {held} in this "
+                        f"warehouse; {qty} was requested. Issuing more of a "
+                        f"batch than arrived would make its trace unusable."))
 
 
 async def apply_stock_movement(

@@ -621,3 +621,60 @@ sales month outvote an expired licence. A test asserts no key called overall,
 score, total, rating or grade exists in the response.
 
 Tests: `backend/tests/test_performance.py` (16).
+
+### Phase 9 -- the attention list, and jobs that cannot run twice (`e0123456789d`)
+
+**There is no notifications table.** The obvious build -- something happens, a
+row is written, a user reads it -- is the wrong one here, and the reason is worth
+recording because it will look like an omission otherwise. A stored notification
+is a copy of a fact that lives elsewhere, and it starts rotting the moment it is
+written: the corrective action gets closed, the licence gets renewed, the batch
+gets released, and the notification still says otherwise. Users learn within a
+fortnight that the list lies and stop reading it, which is worse than never
+having built it.
+
+So the list is derived. `app/services/inbox.py` computes it live from the tables
+that already hold the truth -- recalled stock still in the field, critical or
+overdue corrective actions, expiring documents and batches, applications waiting
+on a decision, unverified sales, open reviews, lapsing ordering links, and
+active distributors with no agreement in force. Nothing is stale because nothing
+is stored, and there is no mark-as-read because there is nothing to mark.
+
+**What IS stored is not a copy.** `attention_acknowledgements` records whether a
+person has seen an item and asked not to be shown it for a while -- a fact about
+the person, not the item. `snoozed_until` is NOT NULL and capped at 90 days:
+there is no dismiss-forever, because an item that is still true has to come back.
+Snoozes are per person, so one manager hiding a row does not hide it from
+everyone. CRITICAL items cannot be snoozed at all, and severity is recomputed
+every time, so an item snoozed while minor reappears the moment it becomes
+critical.
+
+**Nothing is sent anywhere, and the module says so.** `app/api/notifications.py`
+exists, but subscriptions live in a JSON file on the container filesystem that is
+replaced on every deploy, they are keyed by browser endpoint with a standing TODO
+for user association, and the only send path broadcasts to every subscriber.
+Sending one distributor's performance to whoever happens to be subscribed is
+worse than sending nothing. Shipping a "notification sent" record for a message
+nobody received would have been worse still.
+
+**Jobs are idempotent by database constraint.** `scheduled_job_runs` carries
+UNIQUE (job_name, run_key), and `run_job` claims the key by INSERTing it BEFORE
+doing any work. Checking for an existing run and then inserting leaves a window
+two concurrent workers both walk through -- which is exactly what a
+double-registered cron or a retry loop creates. A test asserts the claim happens
+before the work, and that the unique index exists.
+
+The review sweep reports which distributors have earned a performance review and
+does not open them. Opening one has consequences for somebody's livelihood, and a
+cron job is the wrong thing to be taking that decision.
+
+**A phase 6 dead end this phase exposed.** A test tried to destroy recalled stock
+and could not: `_check_batch` blocked every outbound movement, including DAMAGE.
+Recalled goods could not be sold (right) and could not be written off either, so
+they could never leave the system. Only despatch -- OUT, TRANSFER_OUT,
+PRODUCTION_OUT -- is blocked now, matching the database trigger exactly. DAMAGE
+and ADJUST_OUT stay available, because destroying the goods is how a recall is
+completed.
+
+Tests: `backend/tests/test_inbox.py` (17), plus a new disposal test in
+`test_batches.py`.

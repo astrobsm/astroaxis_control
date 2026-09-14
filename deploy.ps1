@@ -154,6 +154,12 @@ $backendFiles = @(
     'backend/app/api/performance.py',
     'backend/alembic/versions/d9012345678c_performance.py',
 
+    # Attention list and jobs, phase 9.
+    'backend/app/services/inbox.py',
+    'backend/app/services/jobs.py',
+    'backend/app/api/inbox.py',
+    'backend/alembic/versions/e0123456789d_inbox_jobs.py',
+
     'backend/requirements.txt'
 )
 
@@ -538,6 +544,38 @@ New in this deploy:
     miss a target that was never set. A review can conclude TARGET_RESET --
     sometimes the honest finding is that the target was wrong.
   * Migration d9012345678c -- two new tables. No existing table is touched.
+  * Attention list and scheduled jobs, phase 9. New sidebar entry
+    "Needs Attention" under Distribution Network.
+
+    THERE IS NO NOTIFICATIONS TABLE, deliberately. Every row is computed live
+    from the data that holds the truth, so an item disappears the moment the
+    problem is fixed and nothing can go stale. There is no mark-as-read,
+    because there is nothing stored to mark.
+
+    NOTHING IS SENT ANYWHERE, and that is worth knowing before anyone relies
+    on this. The app's push notification store lives in a file replaced on
+    every deploy, is not tied to user accounts, and the only send path
+    broadcasts to every subscriber -- so an alert about one distributor's
+    performance would reach whoever happened to be listening, or nobody. The
+    list is surfaced in the app instead.
+
+    Critical items -- recalled stock still in the field, critical corrective
+    actions -- cannot be snoozed. Everything else can, but snoozes always
+    expire and are per person: one manager hiding a row does not hide it from
+    the rest.
+
+    Jobs are idempotent by DATABASE CONSTRAINT, not by convention: a job runs
+    once per period, so a double-registered cron or a retry cannot repeat the
+    work. Press Run twice and the second press returns what the first found.
+    The review sweep REPORTS which distributors have earned a performance
+    review but does not open them -- that is a decision a person takes.
+
+  * ALSO FIXES A PHASE 6 DEAD END: a recalled batch could not be written off.
+    Every outbound movement was blocked, which was right for selling and wrong
+    for disposal -- recalled stock could never leave the system. DAMAGE and
+    ADJUST_OUT are now permitted, because destroying the goods is how a recall
+    is completed. Selling, transferring and consuming remain blocked.
+  * Migration e0123456789d -- two new tables. No existing table is touched.
 
 ONLY Lagos (20) and the FCT area councils (6) of Nigeria's 774 LGAs are seeded.
 Import the rest from an authoritative source via /api/geography/lgas/import --
