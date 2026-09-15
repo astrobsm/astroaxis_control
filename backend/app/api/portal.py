@@ -180,17 +180,17 @@ async def open_registration(
     about the company or who it trades with.
     """
     link = await reg.resolve(session, token=token, count_view=True)
-    states = (await session.execute(
-        text("""SELECT s.id, s.code, s.name FROM states s
-                  JOIN countries c ON c.id = s.country_id
-                 WHERE c.iso2 = 'NG' ORDER BY s.name"""))).mappings().all()
+    states = await reg.states_with_availability(session)
     await session.commit()
     return {
         "campaign": link["campaign"],
-        "states": [dict(s) | {"id": str(s["id"])} for s in states],
+        "states": states,
         "note": ("Applying does not create an account and does not let you "
                  "order. Somebody at Bonnesante Medicals reviews every "
                  "application."),
+        "coverage_note": ("Areas already covered by a distributor, or by an "
+                          "application we are reviewing, are shown but cannot "
+                          "be selected."),
     }
 
 
@@ -200,12 +200,15 @@ async def registration_lgas(
     state_id: UUID,
     session: AsyncSession = Depends(get_session),
 ):
-    """The LGAs of one state, for the form's second dropdown."""
+    """The LGAs of one state, each marked available or already covered.
+
+    Taken areas are returned rather than hidden, so the applicant can see that
+    the area exists and is spoken for. WHY it is taken is never said -- naming
+    the distributor who holds it would map the company's network for anyone
+    holding a forwarded link.
+    """
     await reg.resolve(session, token=token)
-    rows = (await session.execute(
-        text("""SELECT id, name FROM lgas WHERE state_id = :s AND is_active
-                 ORDER BY name"""), {"s": str(state_id)})).mappings().all()
-    return {"lgas": [dict(r) | {"id": str(r["id"])} for r in rows]}
+    return {"lgas": await reg.lgas_with_availability(session, state_id=state_id)}
 
 
 @router.post("/register/{token}/check-customer")

@@ -988,3 +988,54 @@ is up is a test that stops running.
 
 Tests: `backend/tests/test_invoice_notice.py` (8), plus three in
 `test_registration.py` for the recoverable link. Full suite 588.
+
+### Phase 14c -- the registration form knows what ground is taken (no migration)
+
+**One definition of "taken", used three times.** `_TAKEN_LGAS` in
+`services/registration.py` is the only answer to "is this area spoken for", and
+the public dropdown, the check that runs at submit, and the reviewer's view all
+read it. Three places computing this separately is how a form offers an area the
+submit handler then refuses.
+
+An LGA is taken when it is held exclusively through a live territory assignment
+-- the meaning `territory_exclusivity_guard` already enforces -- or it is the
+home LGA of a distributor that has not been rejected or terminated, or it is
+claimed by an application still in the queue.
+
+**Why a pending application counts, and why that is safe.** Without it, two
+applicants pick the same free area from the same forwarded link and the clash is
+only found at approval, after both were told their application was received. The
+risk runs the other way too: somebody holding a public link could claim areas
+with junk applications and lock out a state. Four things bound it -- the
+per-address submission cap, the per-link submission cap, revocation, and the
+fact that REJECTING an application frees its area immediately. That last is what
+makes it self-healing: the cure for a bogus claim is the rejection that was
+going to happen anyway, and a test asserts it.
+
+**A state closes only when every area in it is taken.** A state is a container,
+not a grant; closing Enugu because one LGA in it is held would hand one
+distributor a state-wide exclusivity nobody agreed to. States carry
+`available_lgas` / `total_lgas` so the form can say "21 of 27 areas open".
+
+**Taken areas are shown, not hidden.** Greyed and unselectable, with the reason.
+An area that simply vanishes reads as broken software -- or worse, the applicant
+assumes their own area is missing, picks the neighbouring one, and the address
+on the application is now wrong.
+
+**The reason is never who.** Every taken area answers "Already covered", the
+same words for all three causes, because a reason that varies says which kind of
+holder is there. "Covered by X Pharmacy, Aba North" repeated across 774 LGAs is
+the distributor network, exported by anyone holding a forwarded link -- the same
+mistake as a customer-name type-ahead, in a different field. A test asserts no
+applicant name or number appears in the public payload.
+
+**The dropdown is a courtesy; the server is the rule.** `assert_lga_is_free`
+runs inside `submit`, because a disabled `<option>` stops nobody who sends the
+request by hand.
+
+**The logo** is on the form and on the confirmation screen -- the page somebody
+screenshots and sends back to whoever told them to apply. Served from the site
+root, so it needs no session, and hidden on error rather than leaving a broken
+image at the top of a form the applicant is being asked to trust.
+
+Tests: 8 more in `test_registration.py` (28 in the file). Full suite 596.

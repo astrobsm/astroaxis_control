@@ -793,3 +793,243 @@ async def test_a_link_issued_before_the_token_was_kept_says_so(db):
     # The fingerprint survives, so the row can still be told apart when it is
     # time to revoke it.
     assert old["token_hint"]
+
+
+# ---------------------------------------------------------------------------
+# Ground that is already spoken for
+# ---------------------------------------------------------------------------
+
+async def _geography(db, *, lga_names=("Alpha", "Beta", "Gamma")):
+    """A state of our own, so these tests do not depend on the seeded map."""
+    suffix = uuid.uuid4().hex[:6].upper()
+    country = (await db.execute(
+        text("SELECT id FROM countries WHERE iso2 = 'NG'"))).scalar()
+    state_id = uuid.uuid4()
+    await db.execute(
+        text("""INSERT INTO states (id, country_id, code, name)
+                VALUES (:i, :c, :code, :n)"""),
+        {"i": str(state_id), "c": str(country), "code": suffix[:4],
+         "n": f"Teststate {suffix}"})
+    lgas = {}
+    for name in lga_names:
+        lga_id = uuid.uuid4()
+        await db.execute(
+            text("""INSERT INTO lgas (id, state_id, name)
+                    VALUES (:i, :s, :n)"""),
+            {"i": str(lga_id), "s": str(state_id), "n": f"{name} {suffix}"})
+        lgas[name] = lga_id
+    await db.commit()
+    return state_id, lgas
+
+
+async def _registration_id(db, reference):
+    return (await db.execute(
+        text("""SELECT id FROM distributor_registrations
+                 WHERE registration_reference = :r"""),
+        {"r": reference})).scalar()
+
+
+@pytest.mark.asyncio
+async def test_an_area_under_application_is_shown_but_cannot_be_chosen(db):
+    """Shown, not hidden. An area that vanishes reads as broken software.
+
+    Worse, the applicant assumes their own area is missing and picks the
+    neighbouring one, and now the address on the application is wrong.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    await svc.submit(db, token=token,
+                     payload=_payload(state_id=str(state_id),
+                                      lga_id=str(lgas["Alpha"])))
+    await db.commit()
+
+    listed = await svc.lgas_with_availability(db, state_id=state_id)
+    by_id = {l["id"]: l for l in listed}
+
+    assert len(listed) == 3, "a taken area must still be listed"
+    assert by_id[str(lgas["Alpha"])]["available"] is False
+    assert by_id[str(lgas["Beta"])]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_dropdown_is_a_courtesy_and_the_server_is_the_rule(db):
+    """A disabled option stops nobody who sends the request by hand."""
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    await svc.submit(db, token=token,
+                     payload=_payload(state_id=str(state_id),
+                                      lga_id=str(lgas["Alpha"])))
+    await db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.submit(db, token=token,
+                         payload=_payload(legal_name="Second Applicant Ltd",
+                                          state_id=str(state_id),
+                                          lga_id=str(lgas["Alpha"])))
+    assert exc.value.status_code == 409
+    assert "already covered" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rejecting_an_application_frees_the_area_again(db):
+    """What makes claiming-by-application safe on a link anyone can forward.
+
+    Somebody could otherwise lock out a state with junk applications. The cure
+    is the rejection that was going to happen anyway.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(state_id=str(state_id), lga_id=str(lgas["Alpha"])))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    listed = {l["id"]: l for l in
+              await svc.lgas_with_availability(db, state_id=state_id)}
+    assert listed[str(lgas["Alpha"])]["available"] is False
+
+    await svc.review(db, registration_id=registration_id, approve=False,
+                     note="Not a fit at this time.", actor=admin)
+    await db.commit()
+
+    listed = {l["id"]: l for l in
+              await svc.lgas_with_availability(db, state_id=state_id)}
+    assert listed[str(lgas["Alpha"])]["available"] is True, (
+        "rejecting an application must release the area it claimed")
+
+
+@pytest.mark.asyncio
+async def test_an_approved_application_keeps_holding_its_area(db):
+    """Approval creates the distributor, and the area stays taken through it."""
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    # Its own name and number: approving runs the duplicate check, and the
+    # default payload collides with a distributor another test created.
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name=f"Holder {uuid.uuid4().hex[:6]} Ltd",
+                         phone=f"+23480{uuid.uuid4().int % 10**8:08d}",
+                         state_id=str(state_id), lga_id=str(lgas["Alpha"])))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    await svc.review(db, registration_id=registration_id, approve=True,
+                     note="Approved after visit.", actor=admin)
+    await db.commit()
+
+    listed = {l["id"]: l for l in
+              await svc.lgas_with_availability(db, state_id=state_id)}
+    assert listed[str(lgas["Alpha"])]["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_terminated_distributor_releases_its_area(db):
+    """Otherwise ground is held for ever by somebody no longer trading."""
+    state_id, lgas = await _geography(db)
+    await db.execute(
+        text("""INSERT INTO distributors
+                    (id, distributor_code, legal_name, entity_type, status,
+                     lga_id, state_id)
+                VALUES (gen_random_uuid(), :c, 'Former Holder Ltd', 'COMPANY',
+                        'TERMINATED', :l, :s)"""),
+        {"c": f"D{uuid.uuid4().hex[:8].upper()}", "l": str(lgas["Alpha"]),
+         "s": str(state_id)})
+    await db.commit()
+
+    listed = {l["id"]: l for l in
+              await svc.lgas_with_availability(db, state_id=state_id)}
+    assert listed[str(lgas["Alpha"])]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_state_closes_only_when_every_area_in_it_is_taken(db):
+    """A state is a container, not a grant.
+
+    Closing a whole state because one LGA in it is held would hand one
+    distributor a state-wide exclusivity nobody agreed to.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db, lga_names=("Alpha", "Beta"))
+
+    await svc.submit(db, token=token,
+                     payload=_payload(state_id=str(state_id),
+                                      lga_id=str(lgas["Alpha"])))
+    await db.commit()
+
+    mine = [s for s in await svc.states_with_availability(db)
+            if s["id"] == str(state_id)][0]
+    assert mine["available"] is True, "one taken area must not close a state"
+    assert mine["available_lgas"] == 1
+    assert mine["total_lgas"] == 2
+
+    await svc.submit(db, token=token,
+                     payload=_payload(legal_name="Second Applicant Ltd",
+                                      state_id=str(state_id),
+                                      lga_id=str(lgas["Beta"])))
+    await db.commit()
+
+    mine = [s for s in await svc.states_with_availability(db)
+            if s["id"] == str(state_id)][0]
+    assert mine["available"] is False
+    assert mine["available_lgas"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_public_is_never_told_who_holds_an_area(db):
+    """The reason would map the distributor network for anyone with the link.
+
+    This is the same mistake as a customer-name type-ahead, in a different
+    field: "covered by X Pharmacy, Aba North" repeated across 774 LGAs is the
+    whole network, exported by a stranger.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Very Distinctive Holder Ltd",
+                         phone="+2348090001234",
+                         state_id=str(state_id), lga_id=str(lgas["Alpha"])))
+    await db.commit()
+
+    listed = await svc.lgas_with_availability(db, state_id=state_id)
+    blob = repr(listed)
+    assert "Very Distinctive Holder" not in blob
+    assert "+2348090001234" not in blob
+
+    taken = [l for l in listed if not l["available"]]
+    assert {l["note"] for l in taken} == {"Already covered"}, (
+        "every taken area must answer identically, or the difference itself "
+        "says which kind of holder is there")
+
+
+@pytest.mark.asyncio
+async def test_a_reviewer_can_see_the_application_that_claimed_the_area(db):
+    """Excluding its own claim, or the reviewer sees it blocked by itself."""
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    state_id, lgas = await _geography(db)
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(state_id=str(state_id), lga_id=str(lgas["Alpha"])))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    listed = {l["id"]: l for l in await svc.lgas_with_availability(
+        db, state_id=state_id, exclude_registration_id=registration_id)}
+    assert listed[str(lgas["Alpha"])]["available"] is True

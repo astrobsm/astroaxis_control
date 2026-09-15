@@ -133,6 +133,8 @@ export default function DistributorRegistrationPage({ token }) {
     claims_existing_customer: false,
   });
 
+  const takenHere = lgas.filter((l) => !l.available).length;
+
   const set = (key) => (e) => {
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     setForm((f) => ({ ...f, [key]: value }));
@@ -253,7 +255,12 @@ export default function DistributorRegistrationPage({ token }) {
   if (done) {
     return (
       <div style={wrap}>
-        <div style={{ ...card, marginTop: 40 }}>
+        <div style={{ textAlign: 'center', paddingTop: 28 }}>
+          <img src="/company-logo.png?v=20260118" alt="Bonnesante Medicals"
+            onError={(e) => { e.target.style.display = 'none'; }}
+            style={{ height: 64, width: 'auto', objectFit: 'contain' }} />
+        </div>
+        <div style={{ ...card, marginTop: 16 }}>
           <Notice tone="success" title="Application received">
             {done.message}
           </Notice>
@@ -273,12 +280,25 @@ export default function DistributorRegistrationPage({ token }) {
 
   return (
     <div style={wrap}>
-      <div style={{ padding: '18px 0 10px' }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: BRAND }}>
-          Bonnesante Medicals
-        </div>
-        <div style={{ fontSize: 14, color: MUTED, marginTop: 3 }}>
-          Distributor application{opened.campaign ? ` — ${opened.campaign}` : ''}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '18px 0 10px',
+      }}>
+        {/* Served from the site root, so it needs no session. onError hides it
+            rather than leaving a broken-image icon at the top of the form the
+            applicant is being asked to trust. */}
+        <img src="/company-logo.png?v=20260118" alt="Bonnesante Medicals"
+          onError={(e) => { e.target.style.display = 'none'; }}
+          style={{
+            height: 58, width: 'auto', maxWidth: 120, objectFit: 'contain',
+            flexShrink: 0,
+          }} />
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: BRAND }}>
+            Bonnesante Medicals
+          </div>
+          <div style={{ fontSize: 14, color: MUTED, marginTop: 3 }}>
+            Distributor application{opened.campaign ? ` — ${opened.campaign}` : ''}
+          </div>
         </div>
       </div>
 
@@ -466,7 +486,14 @@ export default function DistributorRegistrationPage({ token }) {
                   onChange={pickState}>
                   <option value="">Choose a state…</option>
                   {(opened.states || []).map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
+                    <option key={s.id} value={s.id} disabled={!s.available}>
+                      {s.name}
+                      {s.available
+                        ? (s.available_lgas < s.total_lgas
+                          ? ` — ${s.available_lgas} of ${s.total_lgas} areas open`
+                          : '')
+                        : ' — fully covered'}
+                    </option>
                   ))}
                 </select>
               </Field>
@@ -479,12 +506,29 @@ export default function DistributorRegistrationPage({ token }) {
                     {form.state_id ? 'Choose an LGA…' : 'Choose a state first'}
                   </option>
                   {lgas.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
+                    <option key={l.id} value={l.id} disabled={!l.available}>
+                      {l.name}{l.available ? '' : ` — ${l.note}`}
+                    </option>
                   ))}
                 </select>
               </Field>
             </div>
           </div>
+
+          {opened.coverage_note && (
+            <div style={{
+              fontSize: 12.5, color: MUTED, lineHeight: 1.6,
+              marginTop: -4, marginBottom: 14,
+            }}>
+              {opened.coverage_note}{' '}
+              {takenHere > 0 && (
+                <strong>
+                  {takenHere} area{takenHere === 1 ? ' is' : 's are'} already
+                  covered in this state.
+                </strong>
+              )}
+            </div>
+          )}
 
           <Field id="town" title="Town or city">
             <input id="town" style={input} value={form.town}

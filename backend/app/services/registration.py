@@ -264,6 +264,155 @@ async def resolve(
     return dict(row)
 
 
+# ---------------------------------------------------------------------------
+# Which ground is already spoken for
+# ---------------------------------------------------------------------------
+#
+# ONE definition of "taken", used by the public dropdown, by the check that runs
+# when an application is submitted, and by the reviewer's screen. Three places
+# computing this separately is how a form offers an LGA that the submit handler
+# then refuses.
+#
+# An LGA is taken when ANY of these is true:
+#
+#   1. it is held exclusively through a live territory assignment -- the meaning
+#      the database already enforces with `territory_exclusivity_guard`, and the
+#      only one that carries a contractual promise;
+#   2. it is the home LGA of a distributor that has not been rejected or
+#      terminated -- somebody is already established there;
+#   3. it is claimed by an application still in the queue.
+#
+# WHY A PENDING APPLICATION COUNTS, AND WHY THAT IS SAFE
+# ------------------------------------------------------
+# Without (3) two applicants can both pick the same free LGA from the same
+# shared link, and the conflict is only discovered at approval, after both have
+# been told their application was received.
+#
+# The risk is the other way: anyone holding a public link could claim LGAs with
+# junk applications and lock out a state. Four things bound it -- submissions
+# are capped per address per hour, a link can carry a submission cap, a link can
+# be revoked outright, and REJECTING an application frees its LGA immediately.
+# That last one is what makes this self-healing: the cure for a bogus claim is
+# the rejection that was going to happen anyway.
+#
+# WHAT THE PUBLIC IS TOLD
+# -----------------------
+# That an LGA is covered, and nothing else. Never by whom. The reason an LGA is
+# unavailable would otherwise map the company's distributor network for anyone
+# holding a forwarded link, which is the same mistake as the customer-name
+# dropdown this module already refuses to build.
+
+_TAKEN_LGAS = """
+    SELECT tl.lga_id AS lga_id
+      FROM territory_lgas tl
+      JOIN territories t ON t.id = tl.territory_id AND t.is_exclusive
+      JOIN territory_assignments ta ON ta.territory_id = t.id
+     WHERE ta.assigned_to IS NULL
+       AND ta.status = 'ACTIVE'
+       AND ta.is_exclusive
+    UNION
+    SELECT d.lga_id
+      FROM distributors d
+     WHERE d.lga_id IS NOT NULL
+       AND d.status NOT IN ('REJECTED', 'TERMINATED')
+    UNION
+    SELECT r.lga_id
+      FROM distributor_registrations r
+     WHERE r.lga_id IS NOT NULL
+       AND r.status IN ('PENDING', 'REVIEWING')
+       -- :exclude_registration lets a reviewer look at an application without
+       -- its own claim counting against it. Applied HERE rather than as a
+       -- filter on the result, because it has to change whether the area reads
+       -- as available, not merely whether the row comes back.
+       AND (CAST(:exclude_registration AS uuid) IS NULL
+            OR r.id <> CAST(:exclude_registration AS uuid))
+"""
+
+
+async def lgas_with_availability(
+    session: AsyncSession, *, state_id: UUID,
+    exclude_registration_id: Optional[UUID] = None,
+) -> list[dict]:
+    """Every LGA in a state, each marked available or not.
+
+    Taken LGAs are RETURNED rather than filtered out, and the form shows them
+    greyed with the reason. An LGA that simply vanishes from the list reads as
+    missing data -- the applicant assumes the system is broken, or worse picks
+    the neighbouring LGA and gives a wrong address.
+
+    `exclude_registration_id` lets a reviewer look at an application without
+    that application's own claim counting against it.
+    """
+    rows = (await session.execute(
+        text(f"""
+            SELECT l.id, l.name,
+                   (taken.lga_id IS NULL) AS available
+              FROM lgas l
+              LEFT JOIN ({_TAKEN_LGAS}) taken ON taken.lga_id = l.id
+             WHERE l.state_id = :s AND l.is_active
+             ORDER BY l.name
+        """),
+        {"s": str(state_id),
+         "exclude_registration": (str(exclude_registration_id)
+                                  if exclude_registration_id else None)},
+    )).mappings().all()
+
+    return [{"id": str(r["id"]), "name": r["name"],
+             "available": bool(r["available"]),
+             # Said the same way for every reason. Which of the three applies
+             # would say who is there.
+             "note": None if r["available"] else "Already covered"}
+            for r in rows]
+
+
+async def states_with_availability(session: AsyncSession) -> list[dict]:
+    """The states, each with how much of it is still open.
+
+    A state is only closed when every one of its LGAs is taken. A state is a
+    container, not a grant -- closing Enugu because one LGA in it is held would
+    turn one distributor into a whole-state exclusivity nobody agreed to.
+    """
+    rows = (await session.execute(
+        text(f"""
+            SELECT s.id, s.code, s.name,
+                   COUNT(l.id) AS total_lgas,
+                   COUNT(l.id) FILTER (WHERE taken.lga_id IS NULL)
+                       AS available_lgas
+              FROM states s
+              JOIN countries c ON c.id = s.country_id AND c.iso2 = 'NG'
+              LEFT JOIN lgas l ON l.state_id = s.id AND l.is_active
+              LEFT JOIN ({_TAKEN_LGAS}) taken ON taken.lga_id = l.id
+             GROUP BY s.id, s.code, s.name
+             ORDER BY s.name
+        """), {"exclude_registration": None})).mappings().all()
+
+    return [{"id": str(r["id"]), "code": r["code"], "name": r["name"],
+             "total_lgas": r["total_lgas"],
+             "available_lgas": r["available_lgas"],
+             "available": r["available_lgas"] > 0}
+            for r in rows]
+
+
+async def assert_lga_is_free(
+    session: AsyncSession, *, lga_id: UUID,
+) -> None:
+    """Refuse a taken LGA at submit time.
+
+    The dropdown is a courtesy; this is the enforcement. A form field can be
+    edited, and a request can be sent without ever loading the form.
+    """
+    taken = (await session.execute(
+        text(f"SELECT 1 FROM ({_TAKEN_LGAS}) taken WHERE taken.lga_id = :l"),
+        {"l": str(lga_id), "exclude_registration": None})).first()
+    if taken is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=("That local government area is already covered by an "
+                    "existing distributor or an application we are reviewing. "
+                    "Please choose another, or contact Bonnesante Medicals on "
+                    "+234 707 679 3866 to discuss it."))
+
+
 async def confirm_existing_customer(
     session: AsyncSession, *, token: str, phone: str,
 ) -> dict:
@@ -359,6 +508,11 @@ async def submit(
     entity = (payload.get("entity_type") or "COMPANY").upper()
     if entity not in ("COMPANY", "INDIVIDUAL", "PARTNERSHIP", "COOPERATIVE"):
         entity = "COMPANY"
+
+    # The ground has to be free. Checked here rather than trusted from the
+    # form, because a request can be sent without ever loading the form.
+    if payload.get("lga_id"):
+        await assert_lga_is_free(session, lga_id=payload["lga_id"])
 
     claimed = payload.get("claimed_customer_id")
     if claimed:
