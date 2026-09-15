@@ -15,6 +15,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import KeepTogether
+from reportlab.lib.utils import ImageReader
 import os
 
 from app.db import get_session
@@ -799,133 +801,80 @@ async def generate_invoice_pdf(
         if not order:
             raise HTTPException(status_code=404, detail="Sales order not found")
         
-        # Create PDF in memory
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
-        story = []
+        # One page where it fits; see _render_fitted_pdf.
         styles = getSampleStyleSheet()
-        
-        # Add Company Logo - try multiple locations
-        logo_paths = [
-            '/app/company-logo.png',
-            '/app/frontend/build/company-logo.png',
-            os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png')
-        ]
-        logo_path = None
-        for path in logo_paths:
-            if os.path.exists(path):
-                logo_path = path
-                break
-        if logo_path:
-            logo = Image(logo_path, width=1.5*inch, height=1.5*inch)
-            story.append(logo)
-            story.append(Spacer(1, 0.2*inch))
-        
-        # Company Header with Full Details
-        story.append(Paragraph("AstroBSM", styles['Title']))
-        story.append(Paragraph("Bonnesante Medicals", styles['Normal']))
-        story.append(Spacer(1, 0.2*inch))
-        
-        # Company Address
-        company_address = """
-        NO 6B PEACE AVENUE/17A ISUOFIA STREET<br/>
-        FEDERAL HOUSING ESTATE TRANS EKULU<br/>
-        ENUGU, NIGERIA<br/>
-        Phone: +234 707 679 3866, +234 901 283 5413<br/>
-        Email: astrobsm@gmail.com
-        """
-        story.append(Paragraph(company_address, styles['Normal']))
-        story.append(Spacer(1, 0.3*inch))
-        
-        # Invoice Header
-        story.append(Paragraph(f"INVOICE #{order.order_number}", styles['Heading1']))
-        story.append(Spacer(1, 0.3*inch))
-        
-        # Order Details
-        order_info = [
-            ['Invoice Date:', (order.order_date or datetime.now(timezone.utc)).strftime('%B %d, %Y')],
-            ['Customer:', order.customer.name if order.customer else 'Unknown Customer'],
-            ['Customer Email:', order.customer.email if order.customer and order.customer.email else 'N/A'],
-            ['Customer Phone:', order.customer.phone if order.customer and order.customer.phone else 'N/A'],
-            ['Customer Address:', order.customer.address if order.customer and order.customer.address else 'N/A'],
-            ['Order Status:', order.status.title()],
-            ['Order Number:', order.order_number]
-        ]
-        
-        order_table = Table(order_info, colWidths=[2*inch, 4*inch])
-        order_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ]))
-        story.append(order_table)
-        story.append(Spacer(1, 0.5*inch))
-        
-        # Items Table
-        items_data = [['Item', 'Quantity', 'Unit Price', 'Total']]
-        
-        for line in order.lines:
-            product_name = line.product.name if line.product else f"Product {line.product_id}"
-            items_data.append([
-                product_name,
-                str(line.quantity),
-                f"₦{float(line.unit_price):,.2f}",
-                f"₦{float(line.quantity * line.unit_price):,.2f}"
-            ])
-        
-        # Add totals
-        items_data.append(['', '', 'Subtotal:', f"₦{float(order.total_amount or 0):,.2f}"])
-        items_data.append(['', '', 'Tax:', '₦0.00'])
-        items_data.append(['', '', 'Total:', f"₦{float(order.total_amount or 0):,.2f}"])
-        
-        items_table = Table(items_data, colWidths=[3*inch, 1*inch, 1.5*inch, 1.5*inch])
-        items_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTNAME', (0, -3), (-1, -1), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -4), 1, colors.black),
-            ('LINEBELOW', (0, -3), (-1, -3), 2, colors.black),
-        ]))
-        story.append(items_table)
 
         statement = await invoice_statement(session, order_id=order_id)
-        story.extend(_statement_pdf_elements(statement, styles))
 
-        # The accounts and the policy, as one block. They were two separate
-        # sections; a customer who reads the account details and stops reading
-        # is exactly the customer who then hands the cash to whoever brought
-        # the invoice.
-        story.extend(_payment_notice_pdf_elements(styles))
-        
-        # Footer
-        footer_text = """
-        <b>Thank you for your business!</b><br/>
-        <br/>
-        <i>This is a computer-generated invoice from AstroBSM - Bonnesante Medicals.<br/>
-        For inquiries, contact us at astrobsm@gmail.com or call +234 707 679 3866, +234 901 283 5413<br/>
-        Visit our office at NO 6B PEACE AVENUE/17A ISUOFIA STREET, FEDERAL HOUSING ESTATE TRANS EKULU, ENUGU.</i>
-        """
-        story.append(Paragraph(footer_text, styles['Normal']))
-        
-        # Build PDF
-        doc.build(story)
-        buffer.seek(0)
-        
+        def build_story(scale):
+            """A fresh story at the given scale. See _render_fitted_pdf."""
+            def size(base):
+                return round(base * scale, 1)
+
+            story = _invoice_header_elements(order, styles, scale)
+            story.extend(_bill_to_elements(order, styles, scale))
+
+            items_data = [['Item', 'Qty', 'Unit Price', 'Total']]
+            for line in order.lines:
+                product_name = (line.product.name if line.product
+                                else f"Product {line.product_id}")
+                items_data.append([
+                    Paragraph(f'<font size="{size(8.5)}">{product_name}</font>',
+                              styles['Normal']),
+                    f"{line.quantity:g}",
+                    _naira(line.unit_price),
+                    _naira(line.quantity * line.unit_price),
+                ])
+            items_data.append(['', '', 'TOTAL:',
+                               _naira(order.total_amount)])
+
+            items_table = Table(
+                items_data,
+                colWidths=[3.5 * inch, 0.8 * inch, 1.3 * inch, 1.3 * inch],
+                repeatRows=1)
+            items_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), size(8.5)),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0B1F4A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), size(10)),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fee2e2')),
+                ('GRID', (0, 0), (-1, -2), 0.5, colors.HexColor('#cbd5e1')),
+                ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#991b1b')),
+                ('TOPPADDING', (0, 0), (-1, -1), 3 * scale),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3 * scale),
+            ]))
+            story.append(items_table)
+
+            story.extend(_statement_pdf_elements(statement, styles, scale))
+            # The accounts and the policy, as one block. They were two separate
+            # sections; a customer who reads the account details and stops
+            # reading is exactly the customer who then hands the cash to
+            # whoever brought the invoice.
+            story.extend(_payment_notice_pdf_elements(styles, scale))
+            story.append(Paragraph(
+                f'<para align="center"><font size="{size(7.5)}" '
+                f'color="#64748B">Thank you for your business. '
+                f'Computer-generated invoice -- no signature required.'
+                f'</font></para>', styles['Normal']))
+            return story
+
+        buffer = _render_fitted_pdf(build_story)
+
         # Name file after customer + date
         cust_name = (order.customer.name if order.customer else 'Unknown').replace(' ', '_')
         inv_date = (order.order_date or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
         safe_filename = f"Invoice-{cust_name}-{inv_date}.pdf"
         return StreamingResponse(
-            io.BytesIO(buffer.read()),
+            buffer,
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'}
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
 
@@ -1205,12 +1154,12 @@ async def generate_receipt(
                 line.product.name,
                 str(line.quantity),
                 line.unit or 'units',
-                f'₦{float(line.unit_price):,.2f}',
-                f'₦{float(line.line_total):,.2f}'
+                _naira(line.unit_price),
+                _naira(line.line_total)
             ])
         
         # Add total row
-        table_data.append(['', '', '', 'TOTAL:', f'₦{float(order.total_amount):,.2f}'])
+        table_data.append(['', '', '', 'TOTAL:', _naira(order.total_amount)])
         
         table = Table(table_data, colWidths=[3*inch, 1*inch, 0.8*inch, 1.2*inch, 1.2*inch])
         table.setStyle(TableStyle([
@@ -1282,108 +1231,74 @@ async def generate_invoice(
         if not order:
             raise HTTPException(status_code=404, detail="Sales order not found")
         
-        # Create PDF in memory
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
-        
-        # Container for PDF elements
-        elements = []
+        # One page where it fits; see _render_fitted_pdf.
         styles = getSampleStyleSheet()
-        
-        # Add company logo - try multiple locations
-        logo_paths = [
-            '/app/company-logo.png',
-            '/app/frontend/build/company-logo.png'
-        ]
-        logo_path = None
-        for path in logo_paths:
-            if os.path.exists(path):
-                logo_path = path
-                break
-        if logo_path:
-            img = Image(logo_path, width=1.5*inch, height=1.5*inch)
-            elements.append(img)
-            elements.append(Spacer(1, 12))
-        
-        # Title
-        title = Paragraph('<b>INVOICE</b>', styles['Title'])
-        elements.append(title)
-        elements.append(Spacer(1, 12))
-        
-        # Company and customer details
-        company_info = f"""
-        <b>BONNESANTE MEDICALS</b><br/>
-        Phone: +234 702 575 5406, +234 707 679 3866<br/>
-        Email: astrobsm@gmail.com
-        """
-        elements.append(Paragraph(company_info, styles['Normal']))
-        elements.append(Spacer(1, 12))
-        
-        # Invoice details
-        due_date = order.required_date.strftime('%Y-%m-%d') if order.required_date else 'Upon Receipt'
-        payment_status_display = 'PAID' if order.payment_status == 'paid' else 'UNPAID'
-        payment_status_color = 'green' if order.payment_status == 'paid' else 'red'
-        
-        invoice_info = f"""
-        <b>Invoice No:</b> {order.order_number}<br/>
-        <b>Date:</b> {order.order_date.strftime('%Y-%m-%d')}<br/>
-        <b>Due Date:</b> {due_date}<br/>
-        <b>Customer:</b> {order.customer.name}<br/>
-        <b>Payment Status:</b> <font color="{payment_status_color}">{payment_status_display}</font>
-        """
-        elements.append(Paragraph(invoice_info, styles['Normal']))
-        elements.append(Spacer(1, 20))
-        
-        # Order lines table
-        table_data = [['Product', 'Quantity', 'Unit', 'Unit Price', 'Total']]
-        for line in order.lines:
-            table_data.append([
-                line.product.name,
-                str(line.quantity),
-                line.unit or 'units',
-                f'₦{float(line.unit_price):,.2f}',
-                f'₦{float(line.line_total):,.2f}'
-            ])
-        
-        # Add total row
-        table_data.append(['', '', '', 'TOTAL DUE:', f'₦{float(order.total_amount):,.2f}'])
-        
-        table = Table(table_data, colWidths=[3*inch, 1*inch, 0.8*inch, 1.2*inch, 1.2*inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -2), colors.beige),
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fee2e2')),
-            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-        ]))
-        elements.append(table)
 
         # Everything this customer already owed, and the single figure to pay.
         # Fetched here rather than passed in so every route that produces this
         # PDF gets it -- there is no code path that prints the invoice without
         # the balance the customer is actually being asked for.
         statement = await invoice_statement(session, order_id=order_id)
-        elements.extend(_statement_pdf_elements(statement, styles))
 
-        # Accounts and policy in one block -- see _payment_notice_pdf_elements.
-        elements.append(Paragraph(
-            '<b>Payment Terms:</b> payment is due upon receipt.',
-            styles['Normal']))
-        elements.extend(_payment_notice_pdf_elements(styles))
-        
-        # Footer
-        footer = Paragraph('<i>This is a computer-generated invoice.</i>', styles['Normal'])
-        elements.append(footer)
-        
-        # Build PDF
-        doc.build(elements)
-        buffer.seek(0)
-        
+        def build_story(scale):
+            """A fresh story at the given scale. See _render_fitted_pdf."""
+            def size(base):
+                return round(base * scale, 1)
+
+            elements = _invoice_header_elements(order, styles, scale)
+            elements.extend(_bill_to_elements(order, styles, scale))
+
+            table_data = [['Product', 'Qty', 'Unit', 'Unit Price', 'Total']]
+            for line in order.lines:
+                table_data.append([
+                    Paragraph(f'<font size="{size(8.5)}">'
+                              f'{line.product.name}</font>', styles['Normal']),
+                    f'{line.quantity:g}',
+                    line.unit or 'units',
+                    _naira(line.unit_price),
+                    _naira(line.line_total),
+                ])
+            table_data.append(['', '', '', 'TOTAL DUE:',
+                               _naira(order.total_amount)])
+
+            table = Table(
+                table_data,
+                colWidths=[2.9 * inch, 0.7 * inch, 0.8 * inch, 1.25 * inch,
+                           1.25 * inch],
+                repeatRows=1)
+            table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), size(8.5)),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0B1F4A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fee2e2')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), size(10)),
+                ('GRID', (0, 0), (-1, -2), 0.5, colors.HexColor('#cbd5e1')),
+                ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#991b1b')),
+                ('TOPPADDING', (0, 0), (-1, -1), 3 * scale),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3 * scale),
+            ]))
+            elements.append(table)
+
+            elements.extend(_statement_pdf_elements(statement, styles, scale))
+            elements.append(Paragraph(
+                f'<font size="{size(8.5)}"><b>Payment terms:</b> '
+                f'due upon receipt.</font>', styles['Normal']))
+            # Accounts and policy in one block -- see
+            # _payment_notice_pdf_elements.
+            elements.extend(_payment_notice_pdf_elements(styles, scale))
+            elements.append(Paragraph(
+                f'<para align="center"><font size="{size(7.5)}" '
+                f'color="#64748B">Computer-generated invoice -- no signature '
+                f'required.</font></para>', styles['Normal']))
+            return elements
+
+        buffer = _render_fitted_pdf(build_story)
+
         # Name file after customer + date
         cust_name = (order.customer.name if order.customer else 'Unknown').replace(' ', '_')
         inv_date = (order.order_date or datetime.now(timezone.utc)).strftime('%Y-%m-%d')
@@ -1393,7 +1308,7 @@ async def generate_invoice(
             media_type='application/pdf',
             headers={'Content-Disposition': f'attachment; filename="{safe_filename}"'}
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1413,8 +1328,210 @@ async def generate_invoice(
 # folding prior debt into the invoice total would corrupt revenue, the ledger
 # and MAPD's allocation.
 
+# ReportLab's built-in Helvetica is a Latin-1 font and has no glyph for
+# the naira sign, so every ₦ on a PDF invoice printed as a filled black
+# box -- on every invoice this system has produced. The fix is the ISO
+# code rather than an embedded Unicode font: it always renders, it is what
+# a bank statement shows, and it cannot fail on a machine where a font
+# file happens to be missing. The HTML formats keep the symbol, because a
+# browser has the glyph.
+NAIRA_PDF = 'NGN '
+
+
 def _naira(value) -> str:
-    return f'₦{float(value or 0):,.2f}'
+    return f'{NAIRA_PDF}{float(value or 0):,.2f}'
+
+
+# ---------------------------------------------------------------------------
+# Invoice layout: one page where it will fit, and a header that earns its space
+# ---------------------------------------------------------------------------
+#
+# WHAT WAS WRONG
+# --------------
+# Both A4 invoices opened with a 1.5-inch square logo on a line of its own,
+# then a title, then the address block, then the invoice details -- each on its
+# own row, each followed by a half-inch spacer. That is roughly a third of the
+# page spent before the first product line, which is why a three-line invoice
+# ran to two pages. It also stretched a square logo to a fixed 1.5x1.5 box,
+# distorting anything not square.
+#
+# THE HEADER NOW
+# --------------
+# Two columns. The company sits on the left, the logo top-right with the
+# invoice number, date and status beneath it, right-aligned, so the eye lands
+# on WHO this is from and WHICH invoice it is in one pass. The logo is sized to
+# a height and keeps its own aspect ratio, so it sits on the same visual line as
+# the company name rather than towering over it.
+#
+# FITTING ONE PAGE
+# ----------------
+# `_render_fitted_pdf` builds the document, asks ReportLab how many pages it
+# used, and if it spilled, rebuilds a little tighter -- type and padding scaled
+# down in steps. If a scale fits, that is what is returned.
+#
+# If NOTHING fits -- a forty-line order genuinely cannot go on one page -- the
+# FULL-SIZE version is returned, not the most compressed one. Once a second page
+# is unavoidable, shrinking the type buys nothing and costs the reader their
+# eyesight. That is the whole of "one page where possible, two only when not".
+#
+# The story is built by a callable rather than passed in, because flowables
+# carry layout state after a build and cannot be laid out twice.
+
+# The floor is 0.76: at 8.5pt base type that is a shade under 6.5pt, which
+# is the smallest an invoice should ever be asked to be read at. Content
+# that will not fit at 0.76 takes a second page at FULL size instead.
+FIT_SCALES = (1.0, 0.94, 0.88, 0.82, 0.76)
+
+LOGO_PATHS = (
+    '/app/company-logo.png',
+    '/app/frontend/build/company-logo.png',
+    os.path.join(os.path.dirname(__file__), '..', '..', 'company-logo.png'),
+    os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                 'frontend', 'public', 'company-logo.png'),
+)
+
+COMPANY_NAME = "BONNESANTE MEDICALS"
+COMPANY_ADDRESS = ("NO 6B PEACE AVENUE / 17A ISUOFIA STREET, "
+                   "FEDERAL HOUSING ESTATE, TRANS EKULU, ENUGU")
+COMPANY_CONTACT = ("Tel: +234 707 679 3866, +234 901 283 5413, "
+                   "+234 702 575 5406<br/>Email: astrobsm@gmail.com")
+
+
+def _logo_path():
+    for path in LOGO_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _logo_flowable(height):
+    """The logo at a given HEIGHT, keeping its own proportions.
+
+    The old code forced it into a fixed square, which distorts any logo that
+    is not one. Returns None when the file is not on this machine -- an invoice
+    without a logo is a working invoice, and raising here would mean no invoice
+    at all.
+    """
+    path = _logo_path()
+    if not path:
+        return None
+    try:
+        reader = ImageReader(path)
+        width_px, height_px = reader.getSize()
+        aspect = (width_px / height_px) if height_px else 1.0
+    except Exception:
+        aspect = 1.0
+    return Image(path, width=height * aspect, height=height)
+
+
+def _invoice_header_elements(order, styles, scale=1.0, *, title='INVOICE'):
+    """Company on the left, logo and invoice identity top-right.
+
+    One table rather than a stack of paragraphs, so the two blocks share the
+    same vertical space instead of following one another down the page.
+    """
+    def size(base):
+        return round(base * scale, 1)
+
+    left = Paragraph(
+        f'<b><font size="{size(15)}" color="#0B1F4A">{COMPANY_NAME}</font></b>'
+        f'<br/><font size="{size(7.8)}">{COMPANY_ADDRESS}</font>'
+        f'<br/><font size="{size(7.8)}">{COMPANY_CONTACT}</font>',
+        styles['Normal'])
+
+    due_date = (order.required_date.strftime('%d %b %Y')
+                if order.required_date else 'Upon receipt')
+    order_date = (order.order_date or datetime.now(timezone.utc))
+    paid = getattr(order, 'payment_status', None) == 'paid'
+
+    meta = Paragraph(
+        f'<para align="right">'
+        f'<b><font size="{size(16)}" color="#0B1F4A">{title}</font></b><br/>'
+        f'<font size="{size(8.5)}"><b>No:</b> {order.order_number}</font><br/>'
+        f'<font size="{size(8.5)}"><b>Date:</b> '
+        f'{order_date.strftime("%d %b %Y")}</font><br/>'
+        f'<font size="{size(8.5)}"><b>Due:</b> {due_date}</font><br/>'
+        f'<font size="{size(8.5)}" color="{"#166534" if paid else "#991b1b"}">'
+        f'<b>{"PAID" if paid else "UNPAID"}</b></font>'
+        f'</para>',
+        styles['Normal'])
+
+    logo = _logo_flowable(0.62 * inch * scale)
+    right = ([[logo], [meta]] if logo is not None else [[meta]])
+    right_block = Table(right, colWidths=[2.5 * inch])
+    right_block.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+    ]))
+
+    header = Table([[left, right_block]], colWidths=[4.2 * inch, 2.7 * inch])
+    header.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LINEBELOW', (0, 0), (-1, -1), 1.2, colors.HexColor('#0B1F4A')),
+    ]))
+    return [header, Spacer(1, 8 * scale)]
+
+
+def _bill_to_elements(order, styles, scale=1.0):
+    """Who the invoice is for, in one line per fact rather than a table."""
+    customer = getattr(order, 'customer', None)
+
+    def field(value, fallback=''):
+        return value if value else fallback
+
+    details = []
+    if customer is not None:
+        for label, value in (("Phone", getattr(customer, 'phone', None)),
+                             ("Email", getattr(customer, 'email', None)),
+                             ("Address", getattr(customer, 'address', None))):
+            if value:
+                details.append(f'{label}: {value}')
+
+    size = round(8.5 * scale, 1)
+    body = (f'<font size="{round(7.5 * scale, 1)}" color="#64748B">'
+            f'<b>INVOICE TO</b></font><br/>'
+            f'<b><font size="{round(11 * scale, 1)}">'
+            f'{field(getattr(customer, "name", None), "Customer")}</font></b>')
+    if details:
+        body += (f'<br/><font size="{size}">'
+                 + ' &nbsp;|&nbsp; '.join(details) + '</font>')
+
+    return [Paragraph(body, styles['Normal']), Spacer(1, 8 * scale)]
+
+
+def _render_fitted_pdf(build_story, *, pagesize=A4):
+    """Build the document on one page if it will fit, else at full size.
+
+    Returns a BytesIO positioned at the start. `build_story` is called with a
+    scale factor and must return a FRESH list of flowables each time: a
+    flowable carries layout state once built and cannot be laid out twice.
+    """
+    first_attempt = None
+    for scale in FIT_SCALES:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, pagesize=pagesize,
+            leftMargin=0.55 * inch, rightMargin=0.55 * inch,
+            topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+            title='Invoice', author=COMPANY_NAME)
+        doc.build(build_story(scale))
+        if first_attempt is None:
+            first_attempt = buffer
+        if doc.page <= 1:
+            buffer.seek(0)
+            return buffer
+
+    # Nothing fitted. Give back the readable one rather than the smallest --
+    # once a second page is unavoidable, shrinking the type helps nobody.
+    first_attempt.seek(0)
+    return first_attempt
 
 
 # ---------------------------------------------------------------------------
@@ -1472,48 +1589,61 @@ PAYMENT_NOTICE_EVIDENCE = (
 )
 
 
-def _payment_notice_pdf_elements(styles) -> list:
-    """The payment block as ReportLab flowables: accounts and policy together."""
+def _payment_notice_pdf_elements(styles, scale=1.0) -> list:
+    """The payment block as ReportLab flowables: accounts and policy together.
+
+    `scale` shrinks with the rest of the invoice when it is being fitted onto
+    one page. It is bounded by FIT_SCALES, so the block cannot be squeezed to
+    the point of being unreadable -- past that point the invoice takes a second
+    page instead.
+    """
+    def size(base):
+        return round(base * scale, 1)
+
     accounts = "<br/><br/>".join(
-        f'<b><font size="11">{bank}</font></b><br/>'
-        f'<b><font size="14">{number}</font></b>'
-        f'<font size="9">&nbsp;&nbsp;{name}</font>'
+        f'<b><font size="{size(11)}">{bank}</font></b><br/>'
+        f'<b><font size="{size(14)}">{number}</font></b>'
+        f'<font size="{size(9)}">&nbsp;&nbsp;{name}</font>'
         for bank, number, name in COMPANY_ACCOUNTS)
 
     # The first line -- that nobody is authorised to collect payment -- is the
     # one the whole block exists for, so it is set bold and the rest is not.
     # Bolding everything is the same as bolding nothing.
     policy = "<br/><br/>".join(
-        (f'<b><font size="9.5">{line}</font></b>' if i == 0
-         else f'<font size="9.5">{line}</font>')
+        (f'<b><font size="{size(9.5)}">{line}</font></b>' if i == 0
+         else f'<font size="{size(9.5)}">{line}</font>')
         for i, line in enumerate(PAYMENT_NOTICE_LINES))
 
     rows = [
-        [Paragraph(f'<b><font size="12" color="#ffffff">'
+        [Paragraph(f'<b><font size="{size(12)}" color="#ffffff">'
                    f'{PAYMENT_NOTICE_TITLE}</font></b>', styles['Normal'])],
-        [Paragraph(f'<b><font size="10">{PAYMENT_NOTICE_LEAD}</font></b>',
+        [Paragraph(f'<b><font size="{size(10)}">{PAYMENT_NOTICE_LEAD}</font></b>',
                    styles['Normal'])],
         [Paragraph(accounts, styles['Normal'])],
         [Paragraph(policy, styles['Normal'])],
-        [Paragraph(f'<b><font size="9" color="#166534">'
+        [Paragraph(f'<b><font size="{size(9)}" color="#166534">'
                    f'{PAYMENT_NOTICE_EVIDENCE}</font></b>', styles['Normal'])],
     ]
-    block = Table(rows, colWidths=[6.1 * inch])
+    block = Table(rows, colWidths=[6.9 * inch])
     block.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#991b1b')),
         ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#fff7f7')),
         ('BACKGROUND', (0, 2), (0, 2), colors.HexColor('#ffffff')),
-        ('TOPPADDING', (0, 2), (0, 2), 9),
-        ('BOTTOMPADDING', (0, 2), (0, 2), 9),
+        ('TOPPADDING', (0, 2), (0, 2), 8 * scale),
+        ('BOTTOMPADDING', (0, 2), (0, 2), 8 * scale),
         ('BOX', (0, 0), (-1, -1), 2, colors.HexColor('#991b1b')),
         ('BOX', (0, 2), (0, 2), 1, colors.HexColor('#991b1b')),
         ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 10),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ('TOPPADDING', (0, 0), (-1, -1), 7),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING', (0, 0), (-1, -1), 9 * scale),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 9 * scale),
+        ('TOPPADDING', (0, 0), (-1, -1), 6 * scale),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6 * scale),
     ]))
-    return [Spacer(1, 16), block, Spacer(1, 12)]
+    # KeepTogether, because the accounts landing on page one and the policy on
+    # page two is precisely the split this block exists to prevent: the
+    # customer reads where to pay, never reads that nobody may collect it, and
+    # hands the cash over. Better the whole block moves to the next page.
+    return [Spacer(1, 12 * scale), KeepTogether(block), Spacer(1, 9 * scale)]
 
 
 def _payment_notice_thermal_html() -> str:
@@ -1548,19 +1678,19 @@ def _payment_notice_thermal_html() -> str:
 </div>"""
 
 
-def _statement_pdf_elements(stmt: dict, styles) -> list:
+def _statement_pdf_elements(stmt: dict, styles, scale=1.0) -> list:
     """ReportLab flowables for the previous-balance section. Empty if nothing owed."""
     if stmt["previous_outstanding"] <= 0:
         return []
 
-    elements = [Spacer(1, 16)]
+    elements = [Spacer(1, 12 * scale)]
     heading = Paragraph(
         f'<b>PREVIOUS OUTSTANDING BALANCE</b> '
         f'<font size="8" color="#666666">'
         f'(as at {stmt["as_of"]}, excludes this invoice)</font>',
         styles['Heading3'])
     elements.append(heading)
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 4 * scale))
 
     rows = [['Ref', 'Date', 'Description', 'Invoiced', 'Paid', 'Balance']]
     for it in stmt["previous_items"]:
@@ -1587,21 +1717,21 @@ def _statement_pdf_elements(stmt: dict, styles) -> list:
     rows.append(['', '', '', '', 'PREVIOUS BALANCE:',
                  _naira(stmt["previous_outstanding"])])
 
-    table = Table(rows, colWidths=[0.95*inch, 1.05*inch, 1.9*inch,
-                                   0.95*inch, 0.85*inch, 0.95*inch])
+    table = Table(rows, colWidths=[1.05*inch, 1.15*inch, 2.4*inch,
+                                   1.05*inch, 0.95*inch, 1.05*inch])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#92400e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+        ('FONTSIZE', (0, 0), (-1, -1), round(7.5 * scale, 1)),
         ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BACKGROUND', (0, 1), (-1, -2), colors.HexColor('#fffbeb')),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fde68a')),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#a16207')),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5 * scale),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5 * scale),
     ]))
     elements.append(table)
 
@@ -1611,7 +1741,7 @@ def _statement_pdf_elements(stmt: dict, styles) -> list:
         labels = {'current': 'Current', 'days_1_30': '1-30 days',
                   'days_31_60': '31-60 days', 'days_61_90': '61-90 days',
                   'days_over_90': 'Over 90 days'}
-        elements.append(Spacer(1, 5))
+        elements.append(Spacer(1, 4 * scale))
         elements.append(Paragraph(
             '<font size="8"><b>Age of balance:</b> '
             + ' &nbsp;|&nbsp; '.join(
@@ -1619,29 +1749,29 @@ def _statement_pdf_elements(stmt: dict, styles) -> list:
             + '</font>', styles['Normal']))
 
     # The single figure to settle.
-    elements.append(Spacer(1, 10))
+    elements.append(Spacer(1, 6 * scale))
     payable = Table(
         [['THIS INVOICE', _naira(stmt["invoice_due"])],
          ['PREVIOUS BALANCE', _naira(stmt["previous_outstanding"])],
          ['TOTAL AMOUNT PAYABLE', _naira(stmt["total_payable"])]],
-        colWidths=[4.2*inch, 1.6*inch])
+        colWidths=[5.2*inch, 1.7*inch])
     payable.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTSIZE', (0, 0), (-1, -1), round(9 * scale, 1)),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
         ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, -1), (-1, -1), 11.5),
+        ('FONTSIZE', (0, -1), (-1, -1), round(11.5 * scale, 1)),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#fee2e2')),
         ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#991b1b')),
         ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor('#991b1b')),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 3 * scale),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3 * scale),
     ]))
-    elements.append(payable)
+    elements.append(KeepTogether(payable))
 
     if stmt.get("credit_limit_exceeded"):
-        elements.append(Spacer(1, 6))
+        elements.append(Spacer(1, 4 * scale))
         elements.append(Paragraph(
             f'<font size="8" color="#991b1b"><b>Note:</b> total payable '
             f'exceeds the agreed credit limit of '

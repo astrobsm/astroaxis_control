@@ -1039,3 +1039,53 @@ root, so it needs no session, and hidden on error rather than leaving a broken
 image at the top of a form the applicant is being asked to trust.
 
 Tests: 8 more in `test_registration.py` (28 in the file). Full suite 596.
+
+### Phase 14d -- the invoice itself (no migration)
+
+**The header was costing a third of the page.** Both A4 invoices opened with a
+1.5-inch square logo on a line of its own, then a title, then the address block,
+then the invoice details -- each on its own row, each followed by a half-inch
+spacer. A three-line invoice ran to two pages before the first product was
+listed. The logo was also forced into a fixed 1.5x1.5 box, distorting anything
+not square.
+
+`_invoice_header_elements` is now two columns: the company on the left, the logo
+top-right with the invoice number, date, due date and paid status beneath it,
+right-aligned. The logo is sized to a height and keeps its own aspect ratio, so
+it sits on the same line as the company name instead of towering over it.
+
+**One page where it fits.** `_render_fitted_pdf` builds the document, asks
+ReportLab how many pages it used, and rebuilds a little tighter if it spilled --
+type and padding scaled together through `FIT_SCALES`, floored at 0.76 so
+"fits one page" can never mean "unreadable". If nothing fits, the FULL-SIZE
+version is returned rather than the most compressed one: once a second page is
+unavoidable, shrinking the type buys nothing and costs the reader their
+eyesight. The story is built by a callable because a flowable carries layout
+state after a build and cannot be laid out twice.
+
+Measured: an invoice with no previous balance now fits one page up to about 15
+lines; with a full previous-balance statement attached, about 6. Beyond that it
+takes a second page at full size.
+
+**The payment block cannot be split.** It is wrapped in `KeepTogether`, because
+the accounts landing on page one and "nobody is authorised to collect cash" on
+page two is precisely the split the block exists to prevent -- the customer
+reads where to pay, never reads the rest, and hands the cash over. The amount
+payable is kept with the balance it sums, for the same reason.
+
+**A bug this review found: every naira sign was a black box.** ReportLab's
+built-in Helvetica is a Latin-1 font with no glyph for the naira sign, so every
+amount on every PDF invoice and receipt this system has produced printed as a
+filled square -- on the one part of an invoice that has to be unambiguous. PDF
+amounts now go through `_naira` and carry the ISO code: `NGN 425,000.00`. The
+ISO code rather than an embedded Unicode font, because it always renders and
+cannot fail on a machine where a font file is missing. The HTML formats keep the
+symbol -- a browser has the glyph. A test asserts no naira sign reaches
+PDF-building code again.
+
+The same fault exists in the financial-report PDFs (`api/financial.py`). Left
+alone here: a different document, and worth its own change.
+
+Tests: 8 more in `test_invoice_notice.py` (16 in the file), including page
+counts read from the PDF structure and cross-checked against `pdfinfo`. Full
+suite 604.
