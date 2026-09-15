@@ -182,6 +182,7 @@ MIGRATIONS = [
     "e0123456789d_inbox_jobs.py",
     "f1234567890e_recall_workflow.py",
     "h3456789012g_registration_links.py",
+    "i4567890123h_registration_link_recoverable.py",
 ]
 
 
@@ -725,3 +726,70 @@ async def test_a_forged_customer_id_on_the_form_is_discarded(db):
         text("""SELECT claimed_customer_id FROM distributor_registrations
                  ORDER BY submitted_at DESC LIMIT 1"""))).scalar()
     assert claimed is None
+
+
+@pytest.mark.asyncio
+async def test_the_link_can_be_copied_again_because_it_is_meant_to_be_public(db):
+    """A registration link is printed on flyers, so hiding it bought nothing.
+
+    It was first stored as a hash only, copied from the ordering link. The
+    first one issued in production was shown once, the page was reloaded, and
+    it was gone -- unrecoverable, for a link whose entire purpose is to be
+    published. See i4567890123h for why this is the right trade here and the
+    wrong one for an ordering link.
+    """
+    admin = await _user(db)
+    issued, token = await _link(db, admin, label="Trade fair, Aba, March")
+
+    links = await svc.list_links(db, base_url="https://erp.example.test")
+    mine = [l for l in links if l["id"] == issued["id"]]
+    assert len(mine) == 1
+    assert mine[0]["url"] == f"https://erp.example.test/register/{token}"
+    assert mine[0]["recoverable"] is True
+
+    # And the copy that comes back still opens the form.
+    opened = await svc.resolve(db, token=mine[0]["url"].rsplit("/", 1)[-1])
+    assert opened["id"] == uuid.UUID(issued["id"])
+
+
+@pytest.mark.asyncio
+async def test_lookup_still_goes_through_the_hash(db):
+    """The plain token is for display. Matching a request is still by hash.
+
+    Two columns that could disagree is how a revoked link keeps working, so
+    there is one resolver and it reads token_sha256.
+    """
+    admin = await _user(db)
+    issued, token = await _link(db, admin, label="Hash path check")
+
+    # Corrupt the DISPLAY copy only. Resolution must be unaffected.
+    await db.execute(
+        text("UPDATE distributor_registration_links SET token = 'rubbish' "
+             "WHERE id = :i"), {"i": issued["id"]})
+    await db.commit()
+
+    opened = await svc.resolve(db, token=token)
+    assert opened["id"] == uuid.UUID(issued["id"])
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.resolve(db, token="rubbish-but-long-enough-to-pass-length")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_link_issued_before_the_token_was_kept_says_so(db):
+    """Old rows have no token and nothing can derive one. Say that, plainly."""
+    admin = await _user(db)
+    issued, _ = await _link(db, admin, label="Issued before the change")
+    await db.execute(
+        text("UPDATE distributor_registration_links SET token = NULL "
+             "WHERE id = :i"), {"i": issued["id"]})
+    await db.commit()
+
+    links = await svc.list_links(db, base_url="https://erp.example.test")
+    old = [l for l in links if l["id"] == issued["id"]][0]
+    assert old["url"] is None
+    assert old["recoverable"] is False
+    # The fingerprint survives, so the row can still be told apart when it is
+    # time to revoke it.
+    assert old["token_hint"]

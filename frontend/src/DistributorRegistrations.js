@@ -138,7 +138,7 @@ function NewLink({ onDone, onError }) {
     return (
       <Card pad={2.5} style={{ marginBottom: space(2) }}>
         <SectionTitle>Link ready to share</SectionTitle>
-        <Banner tone="warning" title="Shown once">{issued.warning}</Banner>
+        <Banner tone="info" title="Ready to share">{issued.warning}</Banner>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: space(1.5) }}>
           <input readOnly value={issued.url} onFocus={(e) => e.target.select()}
             style={{ ...input, flex: '1 1 320px', fontFamily: 'monospace', fontSize: 12.5 }} />
@@ -151,7 +151,8 @@ function NewLink({ onDone, onError }) {
         </div>
         <div style={{ fontSize: 12, color: color.textMuted, marginTop: space(1.5), lineHeight: 1.6 }}>
           Expires {when(issued.expires_at)}. Send it by WhatsApp, print it as a QR
-          code, put it on a flyer — it is meant to be passed around.
+          code, put it on a flyer — it is meant to be passed around. You can copy
+          it again from the list below at any time.
         </div>
       </Card>
     );
@@ -443,6 +444,7 @@ export function RegistrationDesk({ onChanged }) {
   const [err, setErr] = useState('');
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(null);
   const isAdmin = role() === 'admin';
 
   const load = useCallback(async () => {
@@ -462,6 +464,19 @@ export function RegistrationDesk({ onChanged }) {
   useEffect(() => { load(); }, [load]);
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(''), 6000); };
+
+  const copyLink = async (link) => {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(link.id);
+      setTimeout(() => setCopied(null), 2500);
+    } catch {
+      // Clipboard is blocked in some browsers over plain HTTP, and on an
+      // insecure origin it throws rather than failing quietly. Show the URL so
+      // it can still be selected by hand.
+      window.prompt('Copy this link:', link.url);
+    }
+  };
 
   const revoke = async (link) => {
     const reason = window.prompt(`Stop "${link.label}" accepting applications — why?`);
@@ -511,7 +526,7 @@ export function RegistrationDesk({ onChanged }) {
           cols={[
             { key: 'label', label: 'Label', wrap: true },
             { key: 'campaign', label: 'Campaign', wrap: true },
-            { key: 'token_hint', label: 'Ends' },
+            { key: 'url', label: 'Link', wrap: true },
             { key: 'view_count', label: 'Opened', align: 'right' },
             { key: 'submission_count', label: 'Applications', align: 'right' },
             { key: 'expires_at', label: 'Expires' },
@@ -521,8 +536,29 @@ export function RegistrationDesk({ onChanged }) {
           rows={links}
           empty="No registration links. Create one to start collecting applications."
           render={(row, c) => {
-            if (c.key === 'token_hint') {
-              return <code style={{ fontSize: 11.5, color: color.textMuted }}>…{row.token_hint}</code>;
+            if (c.key === 'url') {
+              // A link issued before the token was kept cannot be shown --
+              // there was never anything stored but a fingerprint of it.
+              if (!row.url) {
+                return (
+                  <span style={{ fontSize: 12, color: color.textMuted }}>
+                    Not recoverable (…{row.token_hint}) — revoke and issue a new one
+                  </span>
+                );
+              }
+              return (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input readOnly value={row.url}
+                    onFocus={(e) => e.target.select()}
+                    style={{
+                      ...input, width: 260, fontFamily: 'monospace',
+                      fontSize: 11.5, padding: '5px 8px',
+                    }} />
+                  <Btn size="sm" variant="secondary" onClick={() => copyLink(row)}>
+                    {copied === row.id ? 'Copied' : 'Copy'}
+                  </Btn>
+                </div>
+              );
             }
             if (c.key === 'expires_at') {
               return row.is_live
@@ -543,8 +579,9 @@ export function RegistrationDesk({ onChanged }) {
           }}
         />
         <div style={{ fontSize: 12, color: color.textMuted, marginTop: space(1.5), lineHeight: 1.6 }}>
-          Only a fingerprint of each link is stored, so an issued link cannot be
-          shown again. If one has gone astray, revoke it and issue another.
+          A registration link is meant to be published, so it stays here to be
+          copied whenever you need it. If one has gone astray or has served its
+          purpose, revoke it — that stops it accepting applications immediately.
         </div>
       </Card>
 

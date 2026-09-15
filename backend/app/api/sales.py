@@ -896,28 +896,11 @@ async def generate_invoice_pdf(
         statement = await invoice_statement(session, order_id=order_id)
         story.extend(_statement_pdf_elements(statement, styles))
 
-        story.append(Spacer(1, 0.5*inch))
-
-        # Payment Information Section
-        payment_info = """
-        <b>PAYMENT INFORMATION</b><br/>
-        <br/>
-        <b>Account Details:</b><br/>
-        <br/>
-        <b>Moniepoint Microfinance Bank</b><br/>
-        Account Name: Bonnesante Medicals<br/>
-        Account Number: 8259518195<br/>
-        <br/>
-        <b>Access Bank Nigeria</b><br/>
-        Account Name: Bonnesante Medicals<br/>
-        Account Number: 1379643548<br/>
-        <br/>
-        Please reference invoice number in payment description.<br/>
-        <br/>
-        <b><font color="green">After making payment, kindly send evidence of payment via WhatsApp to: +234 702 575 5406</font></b>
-        """
-        story.append(Paragraph(payment_info, styles['Normal']))
-        story.append(Spacer(1, 0.3*inch))
+        # The accounts and the policy, as one block. They were two separate
+        # sections; a customer who reads the account details and stops reading
+        # is exactly the customer who then hands the cash to whoever brought
+        # the invoice.
+        story.extend(_payment_notice_pdf_elements(styles))
         
         # Footer
         footer_text = """
@@ -1387,25 +1370,11 @@ async def generate_invoice(
         statement = await invoice_statement(session, order_id=order_id)
         elements.extend(_statement_pdf_elements(statement, styles))
 
-        elements.append(Spacer(1, 30))
-
-        # Payment terms
-        payment_terms = """
-        <b>Payment Terms:</b><br/>
-        Payment is due upon receipt. Please make payment to:<br/>
-        <br/>
-        <b>Bank: ACCESS BANK NIG PLC</b><br/>
-        Account No: 1379643548<br/>
-        Account Name: BONNESANTE MEDICALS<br/>
-        <br/>
-        <b>Bank: MONIEPOINT MICROFINANCE BANK</b><br/>
-        Account No: 8259518195<br/>
-        Account Name: BONNESANTE MEDICALS<br/>
-        <br/>
-        <b><font color="green">After making payment, kindly send evidence of payment via WhatsApp to: +234 702 575 5406</font></b>
-        """
-        elements.append(Paragraph(payment_terms, styles['Normal']))
-        elements.append(Spacer(1, 20))
+        # Accounts and policy in one block -- see _payment_notice_pdf_elements.
+        elements.append(Paragraph(
+            '<b>Payment Terms:</b> payment is due upon receipt.',
+            styles['Normal']))
+        elements.extend(_payment_notice_pdf_elements(styles))
         
         # Footer
         footer = Paragraph('<i>This is a computer-generated invoice.</i>', styles['Normal'])
@@ -1446,6 +1415,137 @@ async def generate_invoice(
 
 def _naira(value) -> str:
     return f'₦{float(value or 0):,.2f}'
+
+
+# ---------------------------------------------------------------------------
+# Payment instructions, rendered identically on every invoice format
+# ---------------------------------------------------------------------------
+#
+# Cash handed to a marketer is money the company may never see, and the
+# customer who handed it over believes in good faith that they have paid. Both
+# halves of that hurt: the loss, and a customer who will argue -- honestly --
+# that the invoice is settled.
+#
+# So the bank details and the instruction not to pay anyone in person are ONE
+# block, not two. Splitting them is how a customer reads "pay to Access Bank",
+# stops reading, and hands the cash to whoever brought the invoice. The block
+# is bordered and placed where somebody about to pay is already looking.
+#
+# THE TONE IS DELIBERATE. The customer has done nothing wrong and the staff are
+# not accused of anything; the notice explains the company's payment policy,
+# says plainly what the company can and cannot credit, and gives a number to
+# call. A notice that reads as an accusation gets resented and ignored, and it
+# would also be unfair to the many staff who have never touched a customer's
+# cash.
+#
+# Written once and used by all three invoice formats, for the same reason
+# `_statement_pdf_elements` is: a notice that appears on the A4 invoice but not
+# on the thermal print is a notice that can be printed around.
+
+COMPANY_ACCOUNTS = (
+    ("ACCESS BANK NIG PLC", "1379643548", "BONNESANTE MEDICALS"),
+    ("MONIEPOINT MFB", "8259518195", "BONNESANTE MEDICALS"),
+)
+
+PAYMENT_NOTICE_TITLE = "PAYMENT INTO COMPANY BANK ACCOUNTS ONLY"
+
+PAYMENT_NOTICE_LEAD = (
+    "Kindly make all payments directly into the Bonnesante Medicals bank "
+    "accounts shown below. Please quote your invoice number."
+)
+
+PAYMENT_NOTICE_LINES = (
+    "For your protection, no marketer, sales representative, driver or member "
+    "of staff is authorised to receive cash or any payment on behalf of "
+    "Bonnesante Medicals.",
+    "A payment made in cash or into a personal account cannot be credited to "
+    "your account. This invoice would remain unpaid, and any such payment is "
+    "made at the payer's own risk.",
+    "If any member of our staff offers to collect cash from you, please report "
+    "it to us on +234 707 679 3866. We will treat your report in confidence, "
+    "and we are grateful for it.",
+)
+
+PAYMENT_NOTICE_EVIDENCE = (
+    "After payment, kindly send your evidence of payment via WhatsApp to "
+    "+234 702 575 5406."
+)
+
+
+def _payment_notice_pdf_elements(styles) -> list:
+    """The payment block as ReportLab flowables: accounts and policy together."""
+    accounts = "<br/><br/>".join(
+        f'<b><font size="11">{bank}</font></b><br/>'
+        f'<b><font size="14">{number}</font></b>'
+        f'<font size="9">&nbsp;&nbsp;{name}</font>'
+        for bank, number, name in COMPANY_ACCOUNTS)
+
+    # The first line -- that nobody is authorised to collect payment -- is the
+    # one the whole block exists for, so it is set bold and the rest is not.
+    # Bolding everything is the same as bolding nothing.
+    policy = "<br/><br/>".join(
+        (f'<b><font size="9.5">{line}</font></b>' if i == 0
+         else f'<font size="9.5">{line}</font>')
+        for i, line in enumerate(PAYMENT_NOTICE_LINES))
+
+    rows = [
+        [Paragraph(f'<b><font size="12" color="#ffffff">'
+                   f'{PAYMENT_NOTICE_TITLE}</font></b>', styles['Normal'])],
+        [Paragraph(f'<b><font size="10">{PAYMENT_NOTICE_LEAD}</font></b>',
+                   styles['Normal'])],
+        [Paragraph(accounts, styles['Normal'])],
+        [Paragraph(policy, styles['Normal'])],
+        [Paragraph(f'<b><font size="9" color="#166534">'
+                   f'{PAYMENT_NOTICE_EVIDENCE}</font></b>', styles['Normal'])],
+    ]
+    block = Table(rows, colWidths=[6.1 * inch])
+    block.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#991b1b')),
+        ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#fff7f7')),
+        ('BACKGROUND', (0, 2), (0, 2), colors.HexColor('#ffffff')),
+        ('TOPPADDING', (0, 2), (0, 2), 9),
+        ('BOTTOMPADDING', (0, 2), (0, 2), 9),
+        ('BOX', (0, 0), (-1, -1), 2, colors.HexColor('#991b1b')),
+        ('BOX', (0, 2), (0, 2), 1, colors.HexColor('#991b1b')),
+        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 7),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+    ]))
+    return [Spacer(1, 16), block, Spacer(1, 12)]
+
+
+def _payment_notice_thermal_html() -> str:
+    """The same block for the 80mm thermal print.
+
+    Thermal paper is monochrome, so the weight has to come from the border,
+    capitals and type size rather than from the colour the PDF uses.
+    """
+    accounts = "".join(
+        f'<div style="margin:3px 0; padding:3px; border-bottom:1px dotted #000;">'
+        f'<strong style="font-size:11px;">{bank}</strong><br>'
+        f'<strong style="font-size:15px; letter-spacing:1px;">{number}</strong>'
+        f'<br><span style="font-size:10px;">{name}</span></div>'
+        for bank, number, name in COMPANY_ACCOUNTS)
+
+    policy = "".join(
+        f'<li style="margin-bottom:3px;'
+        f'{" font-weight:bold;" if i == 0 else ""}">{line}</li>'
+        for i, line in enumerate(PAYMENT_NOTICE_LINES))
+
+    return f"""
+<div style="border:3px solid #000; padding:6px; margin-top:8px; font-size:10px;
+            line-height:1.4;">
+    <div style="text-align:center; font-weight:bold; font-size:12px;
+                border-bottom:2px solid #000; padding-bottom:3px;
+                margin-bottom:4px;">{PAYMENT_NOTICE_TITLE}</div>
+    <div style="font-weight:bold; font-size:11px;">{PAYMENT_NOTICE_LEAD}</div>
+    {accounts}
+    <ul style="margin:4px 0 0; padding-left:13px;">{policy}</ul>
+    <div style="font-weight:bold; margin-top:4px;">
+        {PAYMENT_NOTICE_EVIDENCE}</div>
+</div>"""
 
 
 def _statement_pdf_elements(stmt: dict, styles) -> list:
@@ -1750,17 +1850,8 @@ async def thermal_invoice(order_id: UUID, session: AsyncSession = Depends(get_se
 <div class="total-row">TOTAL DUE: &#8358;{float(order.total_amount):,.2f}</div>
 {statement_html}
 <div class="separator"></div>
-<div class="payment-info">
-    <strong>Payment Terms:</strong><br>
-    Payment is due upon receipt. Pay to:<br><br>
-    <strong>ACCESS BANK NIG PLC</strong><br>
-    Acct: 1379643548<br>
-    Name: BONNESANTE MEDICALS<br><br>
-    <strong>MONIEPOINT MFB</strong><br>
-    Acct: 8259518195<br>
-    Name: BONNESANTE MEDICALS
-</div>
-<div class="whatsapp">After payment, send evidence via WhatsApp: +234 702 575 5406</div>
+<div class="payment-info"><strong>Payment Terms:</strong> due upon receipt.</div>
+{_payment_notice_thermal_html()}
 <div class="footer">AstroBSM - Bonnesante Medicals<br>Computer-generated invoice</div>
 <script>window.onload=function(){{window.print();}}</script>
 </body></html>"""

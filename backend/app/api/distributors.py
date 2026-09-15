@@ -269,11 +269,21 @@ async def issue_registration_link(
 
 @router.get("/registration-links")
 async def list_registration_links(
+    request: Request,
     include_dead: bool = False,
     user: User = Depends(require_distribution_access),
     session: AsyncSession = Depends(get_session),
 ):
-    rows = await reg.list_links(session, include_dead=include_dead)
+    """The links, each with the URL to share.
+
+    The URL is returned every time rather than only at the moment of issue. A
+    registration link is meant to be published, so a link that can only be
+    copied once is a link that gets lost -- which is exactly what happened to
+    the first one issued in production.
+    """
+    rows = await reg.list_links(
+        session, include_dead=include_dead,
+        base_url=str(request.base_url).rstrip("/"))
     return {"links": _rows(rows)}
 
 

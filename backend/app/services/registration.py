@@ -127,11 +127,12 @@ async def issue_link(
     await session.execute(
         text("""
             INSERT INTO distributor_registration_links
-                (id, token_sha256, token_hint, label, campaign, expires_at,
-                 max_submissions, created_by)
-            VALUES (:id, :h, :hint, :label, :camp, :exp, :max, :by)
+                (id, token_sha256, token, token_hint, label, campaign,
+                 expires_at, max_submissions, created_by)
+            VALUES (:id, :h, :tok, :hint, :label, :camp, :exp, :max, :by)
         """),
-        {"id": str(link_id), "h": _hash(token), "hint": token[-6:],
+        {"id": str(link_id), "h": _hash(token), "tok": token,
+         "hint": token[-6:],
          "label": label.strip(), "camp": campaign, "exp": expires_at,
          "max": max_submissions, "by": str(actor.id) if actor else None},
     )
@@ -146,11 +147,10 @@ async def issue_link(
         "id": str(link_id), "label": label.strip(),
         "expires_at": expires_at.isoformat(), "token_hint": token[-6:],
         "url": f"{base}/register/{token}" if base else f"/register/{token}",
-        "warning": ("Shown once; only a fingerprint is stored, so it cannot be "
-                    "recovered. This link is meant to be shared widely -- it "
-                    "lets anyone APPLY, and nothing more. Every application "
-                    "still has to be reviewed and approved before it becomes a "
-                    "distributor."),
+        "warning": ("This link is meant to be shared widely -- it lets anyone "
+                    "APPLY, and nothing more. Every application still has to "
+                    "be reviewed and approved before it becomes a distributor. "
+                    "You can copy it again from the list at any time."),
     }
 
 
@@ -183,14 +183,22 @@ async def revoke_link(
 
 
 async def list_links(
-    session: AsyncSession, *, include_dead: bool = False,
+    session: AsyncSession, *, include_dead: bool = False, base_url: str = "",
 ) -> list[dict]:
+    """The links, each with the URL to share.
+
+    The URL is returned rather than only a fingerprint because a registration
+    link is meant to be published -- see i4567890123h. A link issued before
+    that migration has no stored token and cannot be reconstructed, so `url` is
+    None and the screen says to reissue rather than showing an empty box.
+    """
     clause = ("" if include_dead
               else "WHERE l.revoked_at IS NULL AND l.expires_at > NOW()")
     rows = (await session.execute(
-        text(f"""SELECT l.id, l.label, l.campaign, l.token_hint, l.expires_at,
-                        l.revoked_at, l.revoke_reason, l.view_count,
-                        l.submission_count, l.max_submissions, l.last_used_at,
+        text(f"""SELECT l.id, l.label, l.campaign, l.token, l.token_hint,
+                        l.expires_at, l.revoked_at, l.revoke_reason,
+                        l.view_count, l.submission_count, l.max_submissions,
+                        l.last_used_at,
                         (l.revoked_at IS NULL AND l.expires_at > NOW())
                             AS is_live,
                         u.full_name AS issued_by
@@ -198,7 +206,16 @@ async def list_links(
                    LEFT JOIN users u ON u.id = l.created_by
                    {clause}
                   ORDER BY l.created_at DESC"""))).mappings().all()
-    return [dict(r) | {"id": str(r["id"])} for r in rows]
+
+    base = (base_url or "").rstrip("/")
+    out = []
+    for row in rows:
+        link = dict(row) | {"id": str(row["id"])}
+        token = link.pop("token", None)
+        link["url"] = (f"{base}/register/{token}" if token else None)
+        link["recoverable"] = token is not None
+        out.append(link)
+    return out
 
 
 # ---------------------------------------------------------------------------

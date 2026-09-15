@@ -181,6 +181,7 @@ $backendFiles = @(
     'backend/app/services/inbox.py',
     'backend/alembic/versions/g2345678901f_all_lgas.py',
     'backend/alembic/versions/h3456789012g_registration_links.py',
+    'backend/alembic/versions/i4567890123h_registration_link_recoverable.py',
 
     'backend/requirements.txt'
 )

@@ -927,3 +927,64 @@ the version that shipped, and nothing against the current one.
 
 Tests: `backend/tests/test_registration.py` (17), plus the shadowing test in
 `test_hardening.py`. Full suite 577.
+
+### Phase 14 -- the registration link is readable again (`i4567890123h`)
+
+**A decision reversed one migration later, and why.** `h3456789012g` stored only
+a SHA-256 of the registration token, copied from the ordering link. That is
+right for an ordering link and wrong for this one. An ordering link is a
+credential: it places orders on one distributor's account, it goes to one
+person, and hashing it means a stolen database yields no working link -- worth
+the cost of it being unrepeatable. A registration link grants nothing; it is
+meant to be printed on a flyer and forwarded through WhatsApp groups. A secret
+published on a flyer is not a secret, so the hash bought nothing and cost the
+one thing the feature exists for: the first link issued in production was shown
+once, the page was reloaded, and it was gone.
+
+The token is now stored in plain text for registration links only, and the list
+returns the URL every time so it can be copied whenever needed. Ordering links
+are untouched and stay hash-only. `token_sha256` remains NOT NULL and remains
+the only thing a request is matched against -- the plain token is for display,
+so there is still one resolver and no chance of two columns disagreeing. A test
+corrupts the display copy and proves resolution is unaffected. Links issued
+before the migration have `token = NULL`, cannot be reconstructed, and the
+screen says so on the row rather than showing an empty box.
+
+### Phase 14b -- payment instructions on every invoice (no migration)
+
+**The problem is not a software problem, and the software can still help.**
+Customers were paying cash to marketers and the money was not always reaching
+the company. Both halves hurt: the loss, and a customer who believes in good
+faith that the invoice is settled.
+
+**The accounts and the policy are ONE block.** They used to be two sections --
+account details, then a separate thank-you -- which is how a customer reads
+"Access Bank 1379643548", stops reading, and hands the cash to whoever brought
+the invoice. `_payment_notice_pdf_elements` and `_payment_notice_thermal_html`
+render a single bordered block: the accounts set large and bold, the statement
+that no marketer, sales representative, driver or staff member is authorised to
+receive payment set bold above the rest, what happens to a payment made
+otherwise, and a number to call to report any member of staff who offers to
+collect cash -- in confidence.
+
+**The tone is deliberate and tested.** The customer has done nothing wrong and
+most staff have never touched a customer's cash. `test_the_notice_is_courteous`
+asserts the courtesies are present and that the accusing words are not. A notice
+that reads as an accusation is resented and ignored, and would be unfair to the
+staff it describes.
+
+**One copy of each account number.** They were typed separately into all three
+invoice formats. A bank change would have been applied to two of the three, and
+the third would have gone on collecting payments into a closed account. They now
+live only in `COMPANY_ACCOUNTS`, and a test fails if a number is written down
+twice.
+
+**The tests that keep it on all three formats.** `test_invoice_notice.py` reads
+the source of `sales.py` and asserts each invoice function calls a renderer, and
+-- the other way round -- that no function whose name says it produces an
+invoice is missing from the list. A fourth format cannot ship without the
+notice. It needs no database, deliberately: a test that only runs when Postgres
+is up is a test that stops running.
+
+Tests: `backend/tests/test_invoice_notice.py` (8), plus three in
+`test_registration.py` for the recoverable link. Full suite 588.
