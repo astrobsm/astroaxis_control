@@ -11,7 +11,7 @@
 // rather than keeping a second set of books beside them.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { authedFetch } from './utils/api';
+import { authedFetch, isAdmin } from './utils/api';
 import { color, font, naira, radius, space } from './ui/theme';
 import {
   Banner, Btn, Card, Chip, DataTable, ErrorBox, Icon, KpiCard, SectionTitle,
@@ -369,6 +369,123 @@ function NewTerritory({ states, onClose, onDone }) {
 }
 
 // ---------------------------------------------------------------------------
+// Assigning a territory from the territory list
+// ---------------------------------------------------------------------------
+//
+// The same grant as the one in a distributor's dossier, approached from the
+// other end: there the question is "what ground does this distributor get",
+// here it is "who gets this ground". Both call the same endpoint, and the
+// database enforces exclusivity per LGA underneath either of them.
+//
+// Only APPROVED and ACTIVE distributors are offered. A draft or suspended one
+// is refused by the server, and listing it here would be offering a button
+// that cannot work.
+
+function AssignTerritory({ territory, distributors, onClose, onDone }) {
+  const [distributorId, setDistributorId] = useState('');
+  const [reason, setReason] = useState('');
+  const [from, setFrom] = useState('');
+  const [conflicts, setConflicts] = useState([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const eligible = (distributors || []).filter(
+    (d) => ['APPROVED', 'ACTIVE'].includes(d.status));
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await getJSON(
+          `/api/geography/territories/${territory.id}/conflicts`);
+        setConflicts(r.conflicts || []);
+      } catch { setConflicts([]); }
+    })();
+  }, [territory.id]);
+
+  const blocking = conflicts.filter((c) => c.blocking);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await postJSON(`/api/geography/territories/${territory.id}/assign`,
+        { distributor_id: distributorId, reason: reason.trim(),
+          assigned_from: from || null });
+      onDone(`${territory.code} assigned`);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title={`Assign ${territory.code} — ${territory.name}`} onClose={onClose}>
+      {err && <div style={{ marginBottom: space(2) }}><ErrorBox msg={err} /></div>}
+
+      {territory.holder && (
+        <Banner tone="warning" title="Already held">
+          {territory.holder} holds this territory. For an exclusive territory
+          the grant will be refused until that assignment is ended, from the
+          distributor's own record.
+        </Banner>
+      )}
+
+      {blocking.length > 0 && (
+        <Banner tone="danger" title="This ground is promised elsewhere">
+          {blocking.map((c, i) => (
+            <div key={i} style={{ marginTop: 3 }}>{c.message || c.detail}</div>
+          ))}
+        </Banner>
+      )}
+
+      <label style={{ display: 'block', marginBottom: space(1.5) }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: color.textSecondary,
+          marginBottom: 5 }}>Distributor</div>
+        <select style={inputStyle} value={distributorId}
+          onChange={(e) => setDistributorId(e.target.value)}>
+          <option value="">Choose…</option>
+          {eligible.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.distributor_code} — {d.legal_name}
+            </option>
+          ))}
+        </select>
+        {eligible.length === 0 && (
+          <div style={{ fontSize: 11.5, color: color.textMuted, marginTop: 4,
+            lineHeight: 1.5 }}>
+            No distributor is approved or active yet. A territory can only be
+            held by one that has been through the lifecycle.
+          </div>
+        )}
+      </label>
+
+      <label style={{ display: 'block', marginBottom: space(1.5) }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: color.textSecondary,
+          marginBottom: 5 }}>Start from</div>
+        <input type="date" style={inputStyle} value={from}
+          onChange={(e) => setFrom(e.target.value)} />
+        <div style={{ fontSize: 11.5, color: color.textMuted, marginTop: 4 }}>
+          Blank means today.
+        </div>
+      </label>
+
+      <label style={{ display: 'block', marginBottom: space(2) }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: color.textSecondary,
+          marginBottom: 5 }}>Why</div>
+        <textarea style={{ ...inputStyle, minHeight: 70, resize: 'vertical' }}
+          value={reason} onChange={(e) => setReason(e.target.value)} />
+      </label>
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <Btn size="sm" variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn size="sm" variant="accent"
+          disabled={busy || !distributorId || reason.trim().length < 3
+            || blocking.length > 0}
+          onClick={submit}>{busy ? 'Assigning…' : 'Assign territory'}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // Distributor dossier
 // ---------------------------------------------------------------------------
 
@@ -587,6 +704,7 @@ function Dossier({ distributorId, territories, onClose, onChanged }) {
 
 export default function Distribution() {
   const [tab, setTab] = useState('overview');
+  const admin = isAdmin();
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [toast, setToast] = useState('');
@@ -713,10 +831,21 @@ export default function Distribution() {
               { key: 'monthly_target', label: 'Target', align: 'right' },
               { key: 'holder', label: 'Held by', wrap: true },
               { key: 'status', label: 'Status' },
+              { key: 'act', label: '', align: 'right' },
             ]}
             rows={territories}
             empty="No territories yet. Create one to begin."
             render={(r, c) => {
+              if (c.key === 'act') {
+                // Ending an assignment lives on the distributor's own record,
+                // where the history of what they held is already shown.
+                return admin && !r.holder ? (
+                  <Btn size="sm" variant="secondary"
+                    onClick={() => setModal({ kind: 'assign', territory: r })}>
+                    Assign
+                  </Btn>
+                ) : null;
+              }
               if (c.key === 'monthly_target') return money(r.monthly_target || 0);
               if (c.key === 'status') return <Chip tone={tone(r.status)}>{r.status}</Chip>;
               if (c.key === 'holder') {
@@ -825,6 +954,11 @@ export default function Distribution() {
       )}
       {modal && modal.kind === 'territory' && (
         <NewTerritory states={states} onClose={() => setModal(null)}
+          onDone={async (msg) => { setModal(null); flash(msg); await load(); }} />
+      )}
+      {modal && modal.kind === 'assign' && (
+        <AssignTerritory territory={modal.territory} distributors={distributors}
+          onClose={() => setModal(null)}
           onDone={async (msg) => { setModal(null); flash(msg); await load(); }} />
       )}
       {modal && modal.kind === 'dossier' && (

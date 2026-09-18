@@ -16,7 +16,7 @@
 // people to distrust every other button on the page.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { authedFetch } from './utils/api';
+import { authedFetch, isAdmin } from './utils/api';
 import { color, naira, radius, space } from './ui/theme';
 import {
   Banner, Btn, Card, Chip, DataTable, ErrorBox, SectionTitle, SkeletonCards,
@@ -419,8 +419,11 @@ export function ApplicationQueue({ onChanged }) {
 export function TerritoryHoldings({ distributorId, territories, onChanged }) {
   const [held, setHeld] = useState(null);
   const [applying, setApplying] = useState(null);
+  const [assigning, setAssigning] = useState(null);
   const [err, setErr] = useState('');
   const [conflicts, setConflicts] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const admin = isAdmin();
 
   const load = useCallback(async () => {
     try {
@@ -442,6 +445,41 @@ export function TerritoryHoldings({ distributorId, territories, onChanged }) {
         + `?distributor_id=${distributorId}`);
       setConflicts(r.conflicts || []);
     } catch { setConflicts(null); }
+  };
+
+  // Assigning is not applying. An application is a request that somebody else
+  // weighs; this GRANTS the ground there and then, which is why it is admin
+  // only, why it insists on a reason, and why a blocking conflict disables the
+  // button rather than merely warning -- the database refuses that grant, and
+  // a button that always fails teaches people to distrust every other button.
+  const assign = async () => {
+    setBusy(true);
+    try {
+      await postJSON(
+        `/api/geography/territories/${assigning.territory_id}/assign`,
+        { distributor_id: distributorId,
+          reason: assigning.reason.trim(),
+          assigned_from: assigning.assigned_from || null });
+      setAssigning(null); setConflicts(null); setErr('');
+      await load();
+      onChanged && onChanged();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  // Without this an exclusive territory can never be moved: the grant is
+  // refused while the old one stands, and there would be no way to end it.
+  const endHolding = async (row) => {
+    const reason = window.prompt(
+      `End ${row.territory_code} for this distributor — why?`);
+    if (!reason || reason.trim().length < 3) return;
+    try {
+      await postJSON(`/api/geography/assignments/${row.id}/end`,
+        { reason: reason.trim() });
+      setErr('');
+      await load();
+      onChanged && onChanged();
+    } catch (e) { setErr(e.message); }
   };
 
   const apply = async () => {
@@ -466,14 +504,87 @@ export function TerritoryHoldings({ distributorId, territories, onChanged }) {
       {err && <div style={{ marginBottom: space(2) }}><ErrorBox msg={err} /></div>}
 
       <Card pad={2.5} style={{ marginBottom: space(2) }}>
-        <SectionTitle right={!applying && (
-          <Btn size="sm" variant="secondary"
-            onClick={() => setApplying({ territory_id: '', statement: '' })}>
-            Apply for a territory
-          </Btn>
+        <SectionTitle right={!applying && !assigning && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn size="sm" variant="secondary"
+              onClick={() => { setApplying({ territory_id: '', statement: '' });
+                setConflicts(null); }}>
+              Apply for a territory
+            </Btn>
+            {admin && (
+              <Btn size="sm" variant="accent"
+                onClick={() => { setAssigning({ territory_id: '', reason: '',
+                  assigned_from: '' }); setConflicts(null); }}>
+                Assign a territory
+              </Btn>
+            )}
+          </div>
         )}>Territory held now</SectionTitle>
 
-        {applying ? (
+        {assigning ? (
+          <div>
+            <Banner tone="warning" title="This grants the ground immediately">
+              Assigning is not an application. The territory is held by this
+              distributor from the start date, and for an exclusive territory
+              nobody else can be granted the same LGAs until it is ended.
+            </Banner>
+
+            <Field label="Territory">
+              <select style={input} value={assigning.territory_id}
+                onChange={(e) => {
+                  setAssigning({ ...assigning, territory_id: e.target.value });
+                  previewConflicts(e.target.value);
+                }}>
+                <option value="">Choose…</option>
+                {(territories || []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.code} — {t.name}{t.holder ? ` (held by ${t.holder})` : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <ConflictList conflicts={hard} blocking />
+            <ConflictList conflicts={advisory} blocking={false} />
+
+            <Field label="Start from"
+              hint="Leave blank for today. Sales before this date stay with whoever made them.">
+              <input type="date" style={input} value={assigning.assigned_from}
+                onChange={(e) => setAssigning({ ...assigning,
+                  assigned_from: e.target.value })} />
+            </Field>
+
+            <Field label="Why this distributor holds this ground"
+              hint="Recorded against the assignment and kept for as long as the record exists.">
+              <textarea style={{ ...input, minHeight: 70, resize: 'vertical' }}
+                value={assigning.reason}
+                onChange={(e) => setAssigning({ ...assigning,
+                  reason: e.target.value })} />
+            </Field>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <Btn size="sm" variant="ghost"
+                onClick={() => { setAssigning(null); setConflicts(null); }}>
+                Cancel
+              </Btn>
+              <Btn size="sm" variant="accent"
+                disabled={busy || !assigning.territory_id
+                  || assigning.reason.trim().length < 3 || hard.length > 0}
+                onClick={assign}>
+                {busy ? 'Assigning…' : 'Assign territory'}
+              </Btn>
+            </div>
+
+            {hard.length > 0 && (
+              <div style={{ fontSize: 11.5, color: color.textMuted, marginTop: 8,
+                lineHeight: 1.6 }}>
+                This ground is already promised elsewhere, so the grant would be
+                refused. End the existing assignment first, or narrow one
+                territory's coverage.
+              </div>
+            )}
+          </div>
+        ) : applying ? (
           <div>
             <Field label="Territory">
               <select style={input} value={applying.territory_id}
@@ -521,10 +632,18 @@ export function TerritoryHoldings({ distributorId, territories, onChanged }) {
               { key: 'lga_count', label: 'LGAs', align: 'right' },
               { key: 'is_exclusive', label: 'Basis' },
               { key: 'assigned_from', label: 'Since' },
+              { key: 'act', label: '', align: 'right' },
             ]}
             rows={held.current}
             empty="No territory held."
             render={(r, c) => {
+              if (c.key === 'act') {
+                return admin ? (
+                  <Btn size="sm" variant="ghost" onClick={() => endHolding(r)}>
+                    End
+                  </Btn>
+                ) : null;
+              }
               if (c.key === 'is_exclusive') {
                 return (
                   <Chip tone={r.is_exclusive ? 'info' : 'neutral'}>

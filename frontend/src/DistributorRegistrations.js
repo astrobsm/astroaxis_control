@@ -27,7 +27,7 @@
 // decision, because that is the consequence the reviewer is agreeing to.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { authedFetch } from './utils/api';
+import { authedFetch, isAdmin } from './utils/api';
 import { color, naira, radius, space } from './ui/theme';
 import {
   Banner, Btn, Card, Chip, DataTable, ErrorBox, SectionTitle, SkeletonCards,
@@ -63,12 +63,6 @@ const TONES = {
 const tone = (s) => TONES[String(s || '').toUpperCase()] || 'neutral';
 
 const when = (v) => (v ? String(v).slice(0, 10) : '—');
-
-function role() {
-  try {
-    return (JSON.parse(localStorage.getItem('user') || '{}').role || '').toLowerCase();
-  } catch { return ''; }
-}
 
 function Field({ label, hint, children }) {
   return (
@@ -469,7 +463,7 @@ export function RegistrationDesk({ onChanged }) {
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(null);
-  const isAdmin = role() === 'admin';
+  const admin = isAdmin();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -537,7 +531,7 @@ export function RegistrationDesk({ onChanged }) {
         distributor only when somebody here approves it.
       </Banner>
 
-      {isAdmin && <NewLink onDone={load} onError={setErr} />}
+      {admin && <NewLink onDone={load} onError={setErr} />}
 
       <Card pad={2.5} style={{ marginBottom: space(2) }}>
         <SectionTitle right={
@@ -595,7 +589,7 @@ export function RegistrationDesk({ onChanged }) {
                 : row.submission_count;
             }
             if (c.key === 'act') {
-              return isAdmin && row.is_live
+              return admin && row.is_live
                 ? <Btn size="sm" variant="ghost" onClick={() => revoke(row)}>Revoke</Btn>
                 : null;
             }

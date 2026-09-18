@@ -1124,3 +1124,46 @@ ever disagree the screen offers a button the server refuses.
 
 Tests: 4 more in `test_registration.py` (32 in the file), the first of which
 reproduces the production case exactly. Full suite 608.
+
+### Phase 14f -- an admin can actually assign a territory (no migration)
+
+**Nothing was missing from the backend.** `POST /api/geography/territories/{id}/assign`
+and `.../assignments/{id}/end` have existed since phase 1, both behind
+`require_admin`, both with their guards: the territory must be assignable, the
+distributor must be APPROVED or ACTIVE, an exclusive territory already held is
+refused, and the LGA-level trigger refuses a grant that would promise the same
+ground twice. The permissions walk confirms both routes classify as ADMIN.
+
+What was missing was any way to reach them. The only path the screens offered
+was the APPLICATION workflow -- the distributor applies, somebody reviews, the
+approval creates the assignment. That is the right route when a distributor is
+asking. It is the wrong one when the company has simply decided.
+
+**Both directions, because admins think in both.** From a distributor's dossier:
+"what ground does this one get". From the territory list: "who gets this
+ground". Both call the same endpoint, and the database enforces exclusivity
+underneath either.
+
+**Assigning is not applying, and the screen says so.** An application is a
+request that can be submitted even when it conflicts -- it is a request, not a
+grant. An assignment IS the grant, so a blocking conflict DISABLES the button
+rather than warning beside it. The database would refuse that grant, and a
+button that always fails teaches people to distrust every other button on the
+page. Only APPROVED and ACTIVE distributors are offered, for the same reason.
+
+**Ending comes with it.** Without it an exclusive territory could never be
+moved: the new grant is refused while the old one stands, and there would be no
+way to end the old one -- a dead end of exactly the kind this module has already
+produced twice. Ending lives on the distributor's own record, next to the
+history of what they have held, and the assignment is ended rather than deleted
+so past sales stay attached to whoever made them.
+
+**One definition of who is signed in.** `currentRole` / `isAdmin` now live in
+`utils/api.js` rather than being redefined per screen, and they are documented
+as being for showing and hiding only -- every one of these actions is enforced
+again by `require_admin`, because a hidden button is a courtesy, not a
+permission.
+
+No new tests: the rules were already covered (a DRAFT distributor refused, an
+exclusive territory refused twice over, history preserved across a reassignment,
+ground freed when an assignment ends). Full suite 608.

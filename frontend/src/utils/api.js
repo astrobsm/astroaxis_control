@@ -121,4 +121,25 @@ export async function openAuthed(url, { filename } = {}) {
   return objectUrl;
 }
 
+/**
+ * The signed-in user's role, lower-cased, or '' when nothing is stored.
+ *
+ * For SHOWING and HIDING only. Every one of these actions is enforced again on
+ * the server by require_admin -- a hidden button is a courtesy, not a
+ * permission, and anybody can call the endpoint directly.
+ */
+export function currentRole() {
+  try {
+    const raw = localStorage.getItem('user') || localStorage.getItem('currentUser');
+    return (JSON.parse(raw || '{}').role || '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** Convenience for the admin-only actions. See currentRole for the caveat. */
+export function isAdmin() {
+  return currentRole() === 'admin';
+}
+
 export default authedFetch;
