@@ -783,6 +783,47 @@ async def review(
                     new_value={"reference": row["registration_reference"]})
         return {"id": str(registration_id), "status": "REJECTED"}
 
+    # THE DUPLICATE QUESTION IS ANSWERED HERE, NOT INSIDE create_distributor.
+    #
+    # create_distributor refuses when a strong candidate exists, which is right
+    # when somebody is typing a new distributor into the register from nothing.
+    # It is wrong here, and it produced a dead end in production: the only
+    # candidate was the CUSTOMER the applicant already is, so the reviewer
+    # chose to link that customer -- the correct answer -- and approval was
+    # then refused because the linked customer was itself the match. The only
+    # way through was to tick "this is a different business", which was false.
+    #
+    # So this decides, with the one piece of information create_distributor
+    # does not have: which candidate the reviewer has just identified the
+    # applicant AS. Linking a customer resolves that customer. Anything else --
+    # another customer, or an existing DISTRIBUTOR, which would mean creating a
+    # second record for a company already in the register -- still has to be
+    # acknowledged explicitly.
+    candidates = await dsvc.find_possible_duplicates(
+        session, legal_name=row["legal_name"], phone=row["phone"] or "",
+        email=row["email"] or "", cac_number=row["cac_number"] or "",
+        tin=row["tin"] or "")
+    unresolved = [
+        c for c in candidates
+        if c["strength"] >= 80
+        and not (link_customer_id is not None
+                 and c["kind"] == "customer"
+                 and c["id"] == str(link_customer_id))
+    ]
+    if unresolved and not acknowledge_duplicates:
+        linkable = [c for c in unresolved if c["kind"] == "customer"]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "This applicant matches records already in the system. "
+                    + ("Link the account below if it is the same business, or "
+                       "confirm it is a different one, before approving."
+                       if linkable else
+                       "Confirm it is a different business before approving.")),
+                "candidates": unresolved,
+            })
+
     created = await dsvc.create_distributor(
         session, legal_name=row["legal_name"],
         entity_type=row["entity_type"], trading_name=row["trading_name"],
@@ -793,7 +834,8 @@ async def review(
         business_type=row["business_type"],
         employee_count=row["employee_count"],
         marketer_count=row["marketer_count"], actor=actor,
-        acknowledge_duplicates=acknowledge_duplicates)
+        # Decided above, where the reviewer's linking choice is known.
+        acknowledge_duplicates=True)
     distributor_id = UUID(created["id"])
 
     history = None

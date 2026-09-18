@@ -1089,3 +1089,38 @@ alone here: a different document, and worth its own change.
 Tests: 8 more in `test_invoice_notice.py` (16 in the file), including page
 counts read from the PDF structure and cross-checked against `pdfinfo`. Full
 suite 604.
+
+### Phase 14e -- the approval dead end (no migration)
+
+**What happened.** REG-202609-D2995E could not be approved. The applicant had
+given the phone number and email of an existing customer account -- the ordinary
+case, because the contact person already buys from the company. The reviewer
+did the right thing and chose to link that customer. Approval returned 409,
+because `create_distributor` re-ran the duplicate check and found the very
+customer being linked.
+
+The only way through the screen was to tick "this is a different business",
+which was untrue. **A workflow whose only exit is a false statement is a bug,
+not a safeguard** -- the same shape as the phase 6 dead end where recalled stock
+could not be written off.
+
+**Where the decision belongs.** `create_distributor` refusing on a strong match
+is right when somebody is typing a new distributor into the register from
+nothing. It is wrong during a review, because the reviewer has information
+create_distributor does not: which candidate they have just identified the
+applicant AS. `review()` now makes that call itself -- linking a customer
+resolves THAT customer, and anything else still has to be acknowledged
+explicitly. An existing DISTRIBUTOR match is never waved through by linking a
+customer: that would mean a second record for a company already in the register,
+with two codes, two dossiers and territory conflicts surfacing much later.
+
+**The screen had the same fault from the other side.** The acknowledgement
+checkbox disappeared as soon as a customer was selected -- exactly when a second
+candidate might still be unresolved -- and a refused decision replaced the whole
+review with an error box, losing the note the reviewer had typed. The approve
+button is now disabled with the reason stated, rather than offered and refused,
+and the frontend computes "unresolved" the same way the server does; if the two
+ever disagree the screen offers a button the server refuses.
+
+Tests: 4 more in `test_registration.py` (32 in the file), the first of which
+reproduces the production case exactly. Full suite 608.

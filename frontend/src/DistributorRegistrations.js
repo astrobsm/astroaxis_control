@@ -219,7 +219,11 @@ function Review({ registrationId, onClose, onDecided }) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (err) return <ErrorBox msg={err} />;
+  // Only a failure to LOAD replaces the screen. A refused decision leaves the
+  // application on screen with the error above it -- wiping the form and the
+  // note they had typed, on the one screen where the next step is to choose
+  // differently, is how a reviewer gets stuck.
+  if (err && !packet) return <ErrorBox msg={err} />;
   if (!packet) return <SkeletonCards n={2} />;
 
   const r = packet.registration;
@@ -227,6 +231,11 @@ function Review({ registrationId, onClose, onDecided }) {
   const customers = candidates.filter((c) => c.kind === 'customer');
   const distributorHits = candidates.filter((c) => c.kind === 'distributor');
   const chosen = customers.find((c) => c.id === linkCustomer);
+  // Linking a customer answers the duplicate question for THAT customer and no
+  // other. Mirrors services/registration.py, which decides the same way -- if
+  // these two ever disagree the screen offers a button the server refuses.
+  const unresolved = candidates.filter(
+    (c) => c.strength >= 80 && !(chosen && c.kind === 'customer' && c.id === chosen.id));
   const settled = ['APPROVED', 'REJECTED', 'DUPLICATE'].includes(r.status);
 
   const decide = async (approve) => {
@@ -258,6 +267,8 @@ function Review({ registrationId, onClose, onDecided }) {
           <Btn size="sm" variant="ghost" onClick={onClose}>Back to queue</Btn>
         </div>
       </div>
+
+      {err && <div style={{ marginBottom: space(2) }}><ErrorBox msg={err} /></div>}
 
       <Banner tone="warning" title="Unverified">{packet.note}</Banner>
 
@@ -398,7 +409,7 @@ function Review({ registrationId, onClose, onDecided }) {
               value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
 
-          {(distributorHits.length > 0 || chosen === undefined) && candidates.length > 0 && (
+          {unresolved.length > 0 && (
             <label style={{
               display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: space(1.5),
               fontSize: 13, lineHeight: 1.6, cursor: 'pointer',
@@ -406,14 +417,27 @@ function Review({ registrationId, onClose, onDecided }) {
               <input type="checkbox" checked={acknowledge} style={{ marginTop: 3 }}
                 onChange={(e) => setAcknowledge(e.target.checked)} />
               <span>
-                I have seen the possible matches above and this is a different
-                business.
+                I have seen {unresolved.length === 1 ? 'the match' : 'the matches'}
+                {' '}above ({unresolved.map((c) => c.name).join(', ')}) and this
+                is a different business.
               </span>
             </label>
           )}
 
+          {unresolved.length > 0 && !acknowledge && (
+            <div style={{
+              fontSize: 12.5, color: color.textSecondary, marginBottom: space(1.5),
+              lineHeight: 1.6,
+            }}>
+              Approving is blocked until either the matching account above is
+              linked, or you confirm this is a different business.
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Btn size="sm" variant="accent" disabled={busy || note.trim().length < 3}
+            <Btn size="sm" variant="accent"
+              disabled={busy || note.trim().length < 3
+                || (unresolved.length > 0 && !acknowledge)}
               onClick={() => decide(true)}>
               {busy ? 'Working…' : chosen ? `Approve and link ${chosen.name}` : 'Approve'}
             </Btn>

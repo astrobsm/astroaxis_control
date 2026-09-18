@@ -1033,3 +1033,148 @@ async def test_a_reviewer_can_see_the_application_that_claimed_the_area(db):
     listed = {l["id"]: l for l in await svc.lgas_with_availability(
         db, state_id=state_id, exclude_registration_id=registration_id)}
     assert listed[str(lgas["Alpha"])]["available"] is True
+
+
+# ---------------------------------------------------------------------------
+# Approving somebody who is already a customer
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_linking_the_matching_customer_is_enough_to_approve(db):
+    """The dead end this hit in production, on REG-202609-D2995E.
+
+    The applicant gave the phone number and email of an existing customer
+    account -- the ordinary case, because the contact person already buys from
+    the company. The reviewer did the right thing and chose to link that
+    customer, and approval was refused: create_distributor re-ran the duplicate
+    check and found the very customer being linked.
+
+    The only way through the screen was to tick "this is a different business",
+    which was untrue. A workflow whose only exit is a false statement is a bug,
+    not a safeguard.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    shared_phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    customer_id = await _existing_customer(
+        db, name="Ozioko Fabian U", phone=shared_phone, orders=2)
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Tripleluminance Resources Nig. Ltd",
+                         phone=shared_phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    decided = await svc.review(
+        db, registration_id=registration_id, approve=True,
+        note="Same business as the existing account; verified by phone.",
+        link_customer_id=customer_id, actor=admin)
+    await db.commit()
+
+    assert decided["status"] == "APPROVED"
+    assert decided["history"]["orders_attributed"] == 2, (
+        "linking must still bring the customer's existing orders across")
+
+
+@pytest.mark.asyncio
+async def test_a_match_the_reviewer_has_not_linked_still_blocks(db):
+    """Linking one account answers for that account and no other.
+
+    The fix must not turn the duplicate check off; it must narrow it to what
+    the reviewer has actually decided.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    shared_phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    await _existing_customer(db, name="Some Existing Buyer",
+                             phone=shared_phone, orders=1)
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Unrelated Applicant Ltd",
+                         phone=shared_phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.review(db, registration_id=registration_id, approve=True,
+                         note="Approving without deciding who this is.",
+                         actor=admin)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["candidates"], (
+        "a refusal must name what it matched, or the reviewer cannot act on it")
+
+
+@pytest.mark.asyncio
+async def test_a_reviewer_can_still_say_it_is_a_different_business(db):
+    """Two businesses genuinely can share a phone number -- a shared line, a
+    landlord's number, a family business. The reviewer has to be able to say so.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    shared_phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    await _existing_customer(db, name="Neighbour Enterprises",
+                             phone=shared_phone, orders=1)
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Genuinely Different Ltd",
+                         phone=shared_phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    decided = await svc.review(
+        db, registration_id=registration_id, approve=True,
+        note="Shared line in the same building; visited both. Different owners.",
+        acknowledge_duplicates=True, actor=admin)
+    await db.commit()
+
+    assert decided["status"] == "APPROVED"
+    assert decided["history"] is None, "nothing should have been attributed"
+
+
+@pytest.mark.asyncio
+async def test_an_existing_distributor_is_never_waved_through_by_a_link(db):
+    """Linking a CUSTOMER cannot answer for a matching DISTRIBUTOR.
+
+    That would mean a second distributor record for a company already in the
+    register -- two codes, two dossiers, and territory conflicts that only
+    surface much later.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    shared_phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    customer_id = await _existing_customer(
+        db, name="Same Group Trading", phone=shared_phone, orders=1)
+    # APPROVED rather than ACTIVE: ck_dist_active_provisioned requires an
+    # ACTIVE distributor to have its customer and warehouse, and this fixture
+    # only needs a row that the duplicate matcher will find.
+    await db.execute(
+        text("""INSERT INTO distributors
+                    (id, distributor_code, legal_name, entity_type, status,
+                     phone)
+                VALUES (gen_random_uuid(), :c, 'Already A Distributor Ltd',
+                        'COMPANY', 'APPROVED', :p)"""),
+        {"c": f"D{uuid.uuid4().hex[:8].upper()}", "p": shared_phone})
+    await db.commit()
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Same Group Trading", phone=shared_phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.review(db, registration_id=registration_id, approve=True,
+                         note="Linking the customer and hoping for the best.",
+                         link_customer_id=customer_id, actor=admin)
+    assert exc.value.status_code == 409
+    kinds = {c["kind"] for c in exc.value.detail["candidates"]}
+    assert "distributor" in kinds
+    assert "customer" not in kinds, (
+        "the linked customer is resolved; only the distributor should remain")
