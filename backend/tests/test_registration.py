@@ -1178,3 +1178,137 @@ async def test_an_existing_distributor_is_never_waved_through_by_a_link(db):
     assert "distributor" in kinds
     assert "customer" not in kinds, (
         "the linked customer is resolved; only the distributor should remain")
+
+
+# ---------------------------------------------------------------------------
+# How much history comes across
+# ---------------------------------------------------------------------------
+
+async def _customer_with_dated_orders(db, *, name, phone, ages_in_days):
+    """A customer whose orders sit at chosen ages, to test the window edge."""
+    cid = uuid.uuid4()
+    await db.execute(
+        text("""INSERT INTO customers (id, customer_code, name, phone)
+                VALUES (:i, :c, :n, :p)"""),
+        {"i": str(cid), "c": f"C{uuid.uuid4().hex[:8].upper()}", "n": name,
+         "p": phone})
+    wid = uuid.uuid4()
+    await db.execute(
+        text("INSERT INTO warehouses (id, code, name) VALUES (:i, :c, 'W')"),
+        {"i": str(wid), "c": f"W{uuid.uuid4().hex[:8].upper()}"})
+    for age in ages_in_days:
+        await db.execute(
+            text("""INSERT INTO sales_orders
+                        (id, order_number, customer_id, warehouse_id, status,
+                         total_amount, order_date)
+                    VALUES (gen_random_uuid(), :num, :c, :w, 'delivered',
+                            100000, NOW() - (:age || ' days')::interval)"""),
+            {"num": f"SO-{uuid.uuid4().hex[:8].upper()}", "c": str(cid),
+             "w": str(wid), "age": str(age)})
+    await db.commit()
+    return cid
+
+
+@pytest.mark.asyncio
+async def test_only_the_last_year_of_trading_comes_across(db):
+    """Asked for explicitly: a year, not everything.
+
+    A dossier is read to answer "what is this relationship doing now". Orders
+    from four years ago -- different prices, different staff, possibly a
+    different owner -- do not answer that, and they drag every average in the
+    dossier towards a business that no longer exists.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    # Two inside the year, two outside, one a day either side of the edge.
+    customer_id = await _customer_with_dated_orders(
+        db, name="Long Standing Buyer", phone=phone,
+        ages_in_days=[10, 200, 364, 366, 900])
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Long Standing Buyer Ltd", phone=phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    decided = await svc.review(
+        db, registration_id=registration_id, approve=True,
+        note="Known customer; promoting to distributor.",
+        link_customer_id=customer_id, actor=admin)
+    await db.commit()
+
+    history = decided["history"]
+    assert history["orders_attributed"] == 3, "10, 200 and 364 days old"
+    assert history["older_left_with_customer"] == 2, "366 and 900 days old"
+    assert history["window_days"] == svc.ATTRIBUTION_WINDOW_DAYS
+
+
+@pytest.mark.asyncio
+async def test_the_older_orders_are_left_exactly_as_they_were(db):
+    """Out of the window means untouched, not hidden and not moved.
+
+    The customer's own transaction view still shows the lot; it is only the
+    distributor dossier that starts a year ago.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    customer_id = await _customer_with_dated_orders(
+        db, name="Old Account", phone=phone, ages_in_days=[30, 800])
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Old Account Ltd", phone=phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+    await svc.review(db, registration_id=registration_id, approve=True,
+                     note="Linking.", link_customer_id=customer_id, actor=admin)
+    await db.commit()
+
+    rows = (await db.execute(
+        text("""SELECT distributor_id, distributor_attributed_at, customer_id,
+                       EXTRACT(DAY FROM NOW() - order_date)::int AS age
+                  FROM sales_orders WHERE customer_id = :c ORDER BY age"""),
+        {"c": str(customer_id)})).mappings().all()
+
+    recent, old = rows[0], rows[1]
+    assert recent["distributor_id"] is not None
+    assert recent["distributor_attributed_at"] is not None
+    assert old["distributor_id"] is None, "an old order must not be attributed"
+    assert old["distributor_attributed_at"] is None
+    assert old["customer_id"] == customer_id, "and it still belongs to them"
+
+
+@pytest.mark.asyncio
+async def test_the_reviewer_is_shown_what_will_actually_move(db):
+    """The screen must not promise more than approval delivers.
+
+    It used to quote the customer's whole history next to the link option,
+    while attribution now stops at a year -- so the reviewer would have agreed
+    to one number and seen another.
+    """
+    admin = await _user(db)
+    _, token = await _link(db, admin)
+    phone = f"+23480{uuid.uuid4().int % 10**8:08d}"
+    await _customer_with_dated_orders(
+        db, name="Mixed Age Buyer", phone=phone,
+        ages_in_days=[5, 100, 700, 1000])
+
+    result = await svc.submit(
+        db, token=token,
+        payload=_payload(legal_name="Mixed Age Buyer Ltd", phone=phone))
+    await db.commit()
+    registration_id = await _registration_id(
+        db, result["registration_reference"])
+
+    packet = await svc.review_packet(db, registration_id=registration_id)
+    match = [c for c in packet["candidates"]
+             if c["kind"] == "customer" and c["name"] == "Mixed Age Buyer"][0]
+
+    assert match["history"]["orders"] == 4, "everything they have ever bought"
+    assert match["history"]["orders_in_window"] == 2, "what would be attributed"
+    assert match["history"]["window_days"] == svc.ATTRIBUTION_WINDOW_DAYS
+    assert match["history"]["value_in_window"] != match["history"]["value"]

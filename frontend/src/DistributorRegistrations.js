@@ -244,7 +244,12 @@ function Review({ registrationId, onClose, onDecided }) {
         });
       onDecided(approve
         ? `${r.registration_reference} approved as ${body.distributor.distributor_code}`
-          + (body.history ? `; ${body.history.orders_attributed} existing orders attributed`
+          + (body.history
+            ? `; ${body.history.orders_attributed} order(s) from the last `
+              + `${Math.round((body.history.window_days || 365) / 30)} months attributed`
+              + (body.history.older_left_with_customer
+                ? `, ${body.history.older_left_with_customer} older left with the customer`
+                : '')
             : '')
         : `${r.registration_reference} rejected`);
     } catch (e) { setErr(e.message); }
@@ -331,9 +336,10 @@ function Review({ registrationId, onClose, onDecided }) {
           <SectionTitle>Is this an existing customer?</SectionTitle>
           <div style={{ fontSize: 13, color: color.textSecondary, lineHeight: 1.65, marginBottom: space(1.5) }}>
             Linking attaches the account they already have instead of creating a
-            second one, and the orders already recorded against it become visible
-            under the new distributor. Nothing is copied and no figure changes —
-            those orders were always theirs.
+            second one, and their trading over the last twelve months becomes
+            visible under the new distributor. Nothing is copied and no figure
+            changes — those orders were always theirs, and anything older stays
+            on the customer record untouched.
           </div>
 
           {customers.length === 0 ? (
@@ -362,16 +368,29 @@ function Review({ registrationId, onClose, onDecided }) {
                     )}
                     {c.history && (
                       <div style={{ fontSize: 12.5, color: color.textSecondary, marginTop: 4 }}>
-                        {c.history.orders === 0
-                          ? 'No orders on record — nothing would be attributed.'
-                          : <>
-                            <strong>{c.history.orders}</strong> order
-                            {c.history.orders === 1 ? '' : 's'} worth{' '}
-                            <strong>{naira(c.history.value)}</strong>
-                            {c.history.first_order
-                              ? `, ${c.history.first_order} to ${c.history.last_order}`
-                              : ''} would be attributed.
-                          </>}
+                        {c.history.orders === 0 ? (
+                          'No orders on record — nothing would be attributed.'
+                        ) : (
+                          <>
+                            {/* What would actually move, not what exists. The
+                                two differ, because attribution is bounded to a
+                                year, and quoting the total here would promise
+                                more than approval delivers. */}
+                            <strong>{c.history.orders_in_window}</strong> order
+                            {c.history.orders_in_window === 1 ? '' : 's'} worth{' '}
+                            <strong>{naira(c.history.value_in_window)}</strong>
+                            {' '}would be attributed (last{' '}
+                            {Math.round((c.history.window_days || 365) / 30)} months).
+                            {c.history.orders > c.history.orders_in_window && (
+                              <div style={{ marginTop: 2 }}>
+                                {c.history.orders} orders in total since{' '}
+                                {c.history.first_order}; the older{' '}
+                                {c.history.orders - c.history.orders_in_window} stay
+                                with the customer, unchanged.
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

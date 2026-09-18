@@ -7,7 +7,7 @@ from sqlalchemy import func, text
 from typing import Optional
 from uuid import UUID
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import io
 
 from reportlab.lib.pagesizes import A4
@@ -481,23 +481,45 @@ async def list_sales_orders(
     limit: int = Query(20, ge=1, le=1000),
     status: Optional[str] = Query(None),
     customer_id: Optional[UUID] = Query(None),
+    date_from: Optional[date] = Query(
+        None, description="Earliest order date to include (inclusive)."),
+    date_to: Optional[date] = Query(
+        None, description="Latest order date to include (inclusive)."),
     session: AsyncSession = Depends(get_session)
 ):
-    """List sales orders with pagination and filters"""
-    query = select(SalesOrder).options(selectinload(SalesOrder.lines))
-    
-    if status:
-        query = query.where(SalesOrder.status == status)
-    
-    if customer_id:
-        query = query.where(SalesOrder.customer_id == customer_id)
-    
-    # Get total count
-    count_query = select(func.count(SalesOrder.id))
-    if status:
-        count_query = count_query.where(SalesOrder.status == status)
-    if customer_id:
-        count_query = count_query.where(SalesOrder.customer_id == customer_id)
+    """List sales orders with pagination and filters.
+
+    `date_from` / `date_to` bound the period, inclusive at both ends, so a
+    customer's transactions can be read for a chosen window instead of "the
+    most recent hundred, whenever they were" -- which is what the screen showed
+    before, and which silently truncates the history of an active customer.
+
+    The period is measured on `order_date`, falling back to `created_at` for
+    rows where it was never set. An order belongs to the day it was placed, not
+    to the day somebody happened to type it in.
+    """
+    dated = func.coalesce(SalesOrder.order_date, SalesOrder.created_at)
+
+    def _filtered(q):
+        if status:
+            q = q.where(SalesOrder.status == status)
+        if customer_id:
+            q = q.where(SalesOrder.customer_id == customer_id)
+        if date_from:
+            q = q.where(dated >= datetime.combine(date_from, time.min))
+        if date_to:
+            # The column is a timestamp, so the closing day is bounded by the
+            # start of the NEXT day. Comparing against the bare date would drop
+            # everything ordered after midnight on the day the user asked for.
+            q = q.where(dated < datetime.combine(date_to, time.min)
+                        + timedelta(days=1))
+        return q
+
+    query = _filtered(select(SalesOrder).options(selectinload(SalesOrder.lines)))
+
+    # The count carries the SAME filters. When it did not, the screen reported a
+    # total it was not showing and paging walked off the end of the result.
+    count_query = _filtered(select(func.count(SalesOrder.id)))
     
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()

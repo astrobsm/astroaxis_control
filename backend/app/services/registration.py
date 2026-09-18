@@ -73,6 +73,18 @@ LOOKUP_CAP_PER_HOUR = 30
 # Submissions per address per hour, so one script cannot flood the review queue.
 SUBMIT_CAP_PER_HOUR = 5
 
+# How far back a newly approved distributor's own trading history is brought
+# across when they turn out to be an existing customer.
+#
+# One year, not everything. A distributor's dossier is read to answer "what is
+# this relationship doing" -- orders from four years ago, placed under different
+# prices, different staff and possibly a different owner, do not answer that,
+# and dragging them in makes every average in the dossier describe a business
+# that no longer exists. Older orders are NOT hidden or altered: they stay
+# exactly where they are, against the customer, and the customer's own
+# transaction view still shows the lot.
+ATTRIBUTION_WINDOW_DAYS = 365
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -656,13 +668,26 @@ async def review_packet(session: AsyncSession, *, registration_id: UUID) -> dict
     for candidate in candidates:
         if candidate["kind"] != "customer":
             continue
+        # Two figures, not one: everything this customer has ever bought, and
+        # the part of it that linking would actually bring across. Showing only
+        # the total would promise the reviewer more than the approval delivers,
+        # since attribution is bounded to ATTRIBUTION_WINDOW_DAYS.
         summary = (await session.execute(
             text("""SELECT COUNT(*) AS orders,
                            COALESCE(SUM(total_amount), 0) AS value,
                            MIN(order_date) AS first_order,
-                           MAX(order_date) AS last_order
+                           MAX(order_date) AS last_order,
+                           COUNT(*) FILTER (
+                               WHERE COALESCE(order_date, created_at)
+                                     >= NOW() - CAST(:days || ' days' AS interval)
+                           ) AS orders_in_window,
+                           COALESCE(SUM(total_amount) FILTER (
+                               WHERE COALESCE(order_date, created_at)
+                                     >= NOW() - CAST(:days || ' days' AS interval)
+                           ), 0) AS value_in_window
                       FROM sales_orders WHERE customer_id = CAST(:c AS uuid)"""),
-            {"c": candidate["id"]})).mappings().first()
+            {"c": candidate["id"],
+             "days": str(ATTRIBUTION_WINDOW_DAYS)})).mappings().first()
         candidate["history"] = {
             "orders": summary["orders"],
             "value": str(Decimal(str(summary["value"] or 0))),
@@ -670,6 +695,9 @@ async def review_packet(session: AsyncSession, *, registration_id: UUID) -> dict
                             if summary["first_order"] else None),
             "last_order": (summary["last_order"].isoformat()
                            if summary["last_order"] else None),
+            "window_days": ATTRIBUTION_WINDOW_DAYS,
+            "orders_in_window": summary["orders_in_window"],
+            "value_in_window": str(Decimal(str(summary["value_in_window"] or 0))),
         }
 
     out = dict(row)
@@ -691,14 +719,18 @@ async def review_packet(session: AsyncSession, *, registration_id: UUID) -> dict
 
 async def attribute_history(
     session: AsyncSession, *, distributor_id: UUID, customer_id: UUID,
-    actor=None,
+    window_days: int = ATTRIBUTION_WINDOW_DAYS, actor=None,
 ) -> dict:
-    """Attribute a customer's existing orders to the distributor they became.
+    """Attribute a customer's recent orders to the distributor they became.
 
     NOT an import. The orders are already in `sales_orders` and already belong
     to this customer; this makes them visible in the distributor's dossier by
     setting `distributor_id`. Copying them would double-count revenue and give
     two answers to "what did they buy".
+
+    Bounded to the last `window_days` -- see ATTRIBUTION_WINDOW_DAYS for why a
+    year rather than everything. Orders older than the window are untouched and
+    still belong to the customer; nothing is deleted or hidden by this.
 
     `sales_channel` is left alone on purpose. Those were direct sales when they
     happened, and rewriting them as distributor sales would move every figure
@@ -708,9 +740,22 @@ async def attribute_history(
         text("""UPDATE sales_orders
                    SET distributor_id = :d, distributor_attributed_at = NOW()
                  WHERE customer_id = :c
-                   AND distributor_id IS NULL"""),
-        {"d": str(distributor_id), "c": str(customer_id)})
+                   AND distributor_id IS NULL
+                   AND COALESCE(order_date, created_at)
+                       >= NOW() - CAST(:days || ' days' AS interval)"""),
+        {"d": str(distributor_id), "c": str(customer_id),
+         "days": str(int(window_days))})
     attributed = result.rowcount or 0
+
+    # What was deliberately left behind, so the reviewer is told rather than
+    # left to wonder why the dossier shows fewer orders than the customer has.
+    older = (await session.execute(
+        text("""SELECT COUNT(*) FROM sales_orders
+                 WHERE customer_id = :c
+                   AND distributor_id IS NULL
+                   AND COALESCE(order_date, created_at)
+                       < NOW() - CAST(:days || ' days' AS interval)"""),
+        {"c": str(customer_id), "days": str(int(window_days))})).scalar() or 0
 
     summary = (await session.execute(
         text("""SELECT COUNT(*) AS orders,
@@ -724,11 +769,15 @@ async def attribute_history(
                 distributor_id=distributor_id, actor=actor,
                 new_value={"customer_id": str(customer_id),
                            "orders_attributed": attributed,
+                           "window_days": int(window_days),
+                           "older_left_with_customer": older,
                            "total_orders_now": summary["orders"]})
 
     return {
         "orders_attributed": attributed,
         "orders_total": summary["orders"],
+        "window_days": int(window_days),
+        "older_left_with_customer": older,
         "value": str(Decimal(str(summary["value"] or 0))),
         "trading_since": (summary["first_order"].isoformat()
                           if summary["first_order"] else None),
@@ -736,7 +785,9 @@ async def attribute_history(
                  "customer; linking made them visible under the distributor. "
                  "Nothing was copied and no revenue was recounted. They keep "
                  "sales_channel = DIRECT because that is what they were when "
-                 "they happened."),
+                 "they happened."
+                 + (f" {older} older order(s) stay with the customer and are "
+                    f"unchanged." if older else "")),
     }
 
 

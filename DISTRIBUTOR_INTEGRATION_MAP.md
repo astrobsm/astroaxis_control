@@ -1167,3 +1167,44 @@ permission.
 No new tests: the rules were already covered (a DRAFT distributor refused, an
 exclusive territory refused twice over, history preserved across a reassignment,
 ground freed when an assignment ends). Full suite 608.
+
+### Phase 14g -- a period on the transaction view, and a year of history (no migration)
+
+**The transaction view was showing an arbitrary slice.** It fetched the most
+recent 100 orders, whenever they were. For a quiet customer that looks like the
+whole history; for an active one it is a silent truncation, and the totals above
+the table -- orders, value, unpaid, partial -- are then totals of a slice nobody
+chose. `/api/sales/orders` now takes `date_from` / `date_to`, inclusive at both
+ends, and the screen offers 30 days, 3, 6 and 12 months, all time, or a custom
+range. The headings say "in period" because that is what they are.
+
+Two details worth the test they each have. The closing day is bounded by the
+start of the NEXT day, because `order_date` is a timestamp -- comparing it to a
+bare date would drop everything ordered after midnight on the day the user asked
+for. And the COUNT carries the same filters as the query; when it did not, the
+screen would report a total it was not showing and paging would walk off the end.
+
+**A year of history, not all of it.** `ATTRIBUTION_WINDOW_DAYS = 365`. A dossier
+is read to answer "what is this relationship doing now". Orders from four years
+ago -- different prices, different staff, possibly a different owner -- do not
+answer that, and they pull every average in the dossier towards a business that
+no longer exists. Older orders are untouched: they keep their customer, they are
+not hidden, and the customer's own transaction view still shows the lot.
+
+**The screen must not promise more than approval delivers.** The candidate list
+used to quote the customer's entire history beside the link option. It now
+quotes what would actually be attributed, and says separately how many older
+orders stay with the customer -- because agreeing to one number and seeing
+another is how a reviewer stops trusting the screen.
+
+Tests: 3 more in `test_registration.py` (38), and `test_order_period.py` (5).
+Full suite 616.
+
+### Phase 14h -- SOP PDFs could not be downloaded (no migration)
+
+Both SOP download links were plain `<a href>` to a guarded API. A browser
+following an anchor sends no Authorization header, so the tab showed
+`{"detail":"Not authenticated"}` instead of the document. They now go through
+`openAuthed`, which fetches with the token and hands the blob to the browser --
+the same helper the thermal prints already used. The execution-record PDF had
+the identical fault and is fixed with it.

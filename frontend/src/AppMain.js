@@ -287,6 +287,12 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  const [custEditing, setCustEditing] = useState(null);
  const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', address: '', credit_limit: '0' });
  const [custViewOrders, setCustViewOrders] = useState(null);
+ // The period the transaction view is showing. Default to a year rather
+ // than 'everything': the old view fetched the most recent 100 orders
+ // whenever they were, which silently truncated an active customer.
+ const [custPeriod, setCustPeriod] = useState('365');
+ const [custFrom, setCustFrom] = useState('');
+ const [custTo, setCustTo] = useState('');
  const [custOrders, setCustOrders] = useState([]);
  const [custLoadingOrders, setCustLoadingOrders] = useState(false);
  const [logManifestForm, setLogManifestForm] = useState({
@@ -1382,6 +1388,37 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  try { await openAuthed(`/api/logistics/manifests/${manifestId}/thermal-print`); }
  catch (e) { notify(e.message, 'error'); }
  }
+
+ // One place that turns the chosen period into a request, used by the button
+ // that opens the modal and by every change of period inside it. Two copies of
+ // this is how the heading says one thing and the table shows another.
+ const custPeriodRange = (period, from, to) => {
+   if (period === 'all') return {};
+   if (period === 'custom') {
+     return { ...(from ? { date_from: from } : {}), ...(to ? { date_to: to } : {}) };
+   }
+   const start = new Date();
+   start.setDate(start.getDate() - Number(period));
+   return { date_from: start.toISOString().slice(0, 10) };
+ };
+
+ const loadCustomerTransactions = async (customer, period, from, to) => {
+   setCustLoadingOrders(true);
+   try {
+     const range = custPeriodRange(period, from, to);
+     const qs = new URLSearchParams({ customer_id: customer.id, limit: '1000', ...range });
+     const res = await authedFetch(`/api/sales/orders?${qs.toString()}`);
+     const d = await res.json();
+     setCustOrders(d.items || d || []);
+   } catch (err) {
+     notify('Error loading transactions', 'error');
+     setCustOrders([]);
+   } finally {
+     setCustLoadingOrders(false);
+   }
+ };
+
+ 
 
  async function printInvoiceThermal(orderId) {
  try { await openAuthed(`/api/sales/orders/${orderId}/thermal-invoice`); }
@@ -4747,6 +4784,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  )}
 
+
  {/* Customer Transaction View Modal */}
  {custViewOrders && (
  <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:10000,display:'flex',justifyContent:'center',alignItems:'flex-start',overflowY:'auto',padding:'30px 0'}}>
@@ -4758,20 +4796,46 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  <button onClick={()=>{setCustViewOrders(null);setCustOrders([]);}} className="btn btn-secondary">Close</button>
  </div>
+
+ {/* The period. Every figure below is for the window chosen here, so the
+     window is stated on the screen rather than assumed. */}
+ <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:16,paddingBottom:16,borderBottom:'1px solid #eee'}}>
+ <span style={{fontSize:12,fontWeight:600,color:'#667eea'}}>Period</span>
+ {[['30','Last 30 days'],['90','Last 3 months'],['180','Last 6 months'],['365','Last 12 months'],['all','All time'],['custom','Custom…']].map(([value,label]) => (
+ <button key={value}
+ onClick={() => { setCustPeriod(value); if (value !== 'custom') loadCustomerTransactions(custViewOrders, value, custFrom, custTo); }}
+ style={{padding:'5px 12px',borderRadius:14,fontSize:12,fontWeight:600,cursor:'pointer',
+ border:`1px solid ${custPeriod===value?'#667eea':'#ddd'}`,
+ background:custPeriod===value?'#f0f4ff':'#fff',
+ color:custPeriod===value?'#667eea':'#666'}}>{label}</button>
+ ))}
+ {custPeriod==='custom' && (
+ <span style={{display:'flex',gap:6,alignItems:'center'}}>
+ <input type="date" value={custFrom} onChange={e=>setCustFrom(e.target.value)}
+ style={{padding:'5px 8px',borderRadius:6,border:'1px solid #ddd',fontSize:12}} />
+ <span style={{fontSize:12,color:'#888'}}>to</span>
+ <input type="date" value={custTo} onChange={e=>setCustTo(e.target.value)}
+ style={{padding:'5px 8px',borderRadius:6,border:'1px solid #ddd',fontSize:12}} />
+ <button className="btn btn-primary" style={{fontSize:11,padding:'4px 10px'}}
+ disabled={!custFrom && !custTo}
+ onClick={()=>loadCustomerTransactions(custViewOrders, 'custom', custFrom, custTo)}>Apply</button>
+ </span>
+ )}
+ </div>
  {custLoadingOrders ? <p style={{textAlign:'center',color:'#888'}}>Loading transactions...</p> : custOrders.length === 0 ? (
  <div style={{textAlign:'center',padding:40,color:'#aaa'}}>
- <div style={{fontSize:48,marginBottom:10}}>No transactions found</div>
- <p>This customer has no sales orders yet.</p>
+ <div style={{fontSize:20,fontWeight:600,marginBottom:10,color:'#888'}}>No transactions in this period</div>
+ <p>{custPeriod==='all' ? 'This customer has no sales orders at all.' : 'Try a longer period, or All time.'}</p>
  </div>
  ) : (
  <div>
  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:12,marginBottom:16}}>
  <div style={{background:'#f0f4ff',borderRadius:8,padding:'12px 16px'}}>
- <div style={{fontSize:11,color:'#667eea',fontWeight:600}}>Total Orders</div>
+ <div style={{fontSize:11,color:'#667eea',fontWeight:600}}>Orders in period</div>
  <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{custOrders.length}</div>
  </div>
  <div style={{background:'#f0fff4',borderRadius:8,padding:'12px 16px'}}>
- <div style={{fontSize:11,color:'#2ecc71',fontWeight:600}}>Total Spent</div>
+ <div style={{fontSize:11,color:'#2ecc71',fontWeight:600}}>Value in period</div>
  <div style={{fontSize:22,fontWeight:700,color:'#2c3e50'}}>{formatCurrency(custOrders.reduce((s,o)=>s+(parseFloat(o.total_amount)||0),0))}</div>
  </div>
  <div style={{background:'#fff5f5',borderRadius:8,padding:'12px 16px'}}>
@@ -4840,15 +4904,9 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <td style={{fontWeight:600}}>{orderCount}</td>
  <td className="actions" style={{whiteSpace:'nowrap'}}>
  <button onClick={async () => {
- setCustViewOrders(c); setCustLoadingOrders(true);
- try {
- const token = localStorage.getItem('access_token');
- const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
- const res = await authedFetch(`/api/sales/orders?customer_id=${c.id}&limit=100`, { headers });
- const d = await res.json();
- setCustOrders(d.items||d||[]);
- } catch(err) { notify('Error loading orders','error'); setCustOrders([]); }
- finally { setCustLoadingOrders(false); }
+ setCustViewOrders(c);
+ setCustPeriod('365'); setCustFrom(''); setCustTo('');
+ await loadCustomerTransactions(c, '365', '', '');
  }} className="btn btn-primary" style={{fontSize:11,padding:'4px 10px',marginRight:4}} title="View Transactions">Transactions</button>
  <button onClick={() => {
  setCustEditing(c);
@@ -10623,10 +10681,15 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {tab === 'document' ? 'Document' : tab === 'form' ? 'New Record' : `Records (${sopRecords.length})`}
  </button>
  ))}
- <a href={`${API}/templates/${encodeURIComponent(selected.sop_code)}/pdf`} target="_blank" rel="noopener noreferrer"
- style={{padding:'6px 12px',borderRadius:6,border:'1px solid #059669',background:'#059669',color:'#fff',textDecoration:'none',fontWeight:700,fontSize:12,textTransform:'uppercase'}}>
+ <button onClick={async () => {
+ try {
+ await openAuthed(`${API}/templates/${encodeURIComponent(selected.sop_code)}/pdf`,
+ { filename: `${selected.sop_code}.pdf` });
+ } catch (e) { notify(e.message || 'Could not download the SOP', 'error'); }
+ }}
+ style={{padding:'6px 12px',borderRadius:6,border:'1px solid #059669',background:'#059669',color:'#fff',cursor:'pointer',fontWeight:700,fontSize:12,textTransform:'uppercase'}}>
  Download PDF
- </a>
+ </button>
  </div>
  </div>
 
@@ -10775,8 +10838,14 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </td>
  <td style={{padding:8}}>{r.approved_by || ''}</td>
  <td style={{padding:8,whiteSpace:'nowrap'}}>
- <a href={`${API}/records/${r.id}/pdf`} target="_blank" rel="noopener noreferrer"
- style={{padding:'4px 10px',background:'#059669',color:'#fff',borderRadius:4,fontSize:11,fontWeight:600,textDecoration:'none',marginRight:6}}>PDF</a>
+<button onClick={async () => {
+ try {
+ await openAuthed(`${API}/records/${r.id}/pdf`, { filename: `SOP-record-${r.id}.pdf` });
+ } catch (e) { notify(e.message || 'Could not download the record', 'error'); }
+ }}
+ style={{padding:'4px 10px',background:'#059669',color:'#fff',border:'none',borderRadius:4,fontSize:11,fontWeight:600,cursor:'pointer',marginRight:6}}>
+ PDF
+ </button>
  {isAdmin && r.status !== 'approved' && (
  <button onClick={() => approveRecord(r)} style={{padding:'4px 10px',background:'#4f46e5',color:'#fff',border:'none',borderRadius:4,cursor:'pointer',fontSize:11,fontWeight:600}}>Approve</button>
  )}
