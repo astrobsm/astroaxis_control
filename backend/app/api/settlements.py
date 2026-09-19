@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import List, Optional
+import re
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -128,7 +129,11 @@ class RefundIn(BaseModel):
 
 
 class BusinessUnitIn(BaseModel):
-    code: str = Field(..., min_length=1, max_length=32)
+    # Optional: left out, it is derived from the name. A code is an internal
+    # handle, and asking somebody to invent one before they can name a unit is
+    # a question with no right answer -- which is how you end up with BU1, BU2
+    # and a unit called "new".
+    code: Optional[str] = Field(None, max_length=32)
     name: str = Field(..., min_length=1)
     description: Optional[str] = None
     is_active: bool = True
@@ -569,7 +574,10 @@ async def distribute(
             actor_label=current_user.email)
         await session.commit()
         return {
-            "success": result["status"] in ('COMPLETED', 'SKIPPED'),
+            # SKIPPED is not success: nothing was distributed. Reporting it
+            # as success is how a screen tells somebody their money has been
+            # routed when it has not.
+            "success": result["status"] == 'COMPLETED',
             "status": result["status"],
             "settlement_reference": result.get("settlement_reference"),
             "allocated_amount": float(result["allocated_amount"])
@@ -597,7 +605,13 @@ async def list_undistributed(
     session: AsyncSession = Depends(get_session),
     _user: User = Depends(require_authenticated_user),
 ):
-    """Money received that has not reached its destination accounts."""
+    """Money received that has not reached its destination accounts.
+
+    A SKIPPED settlement counts as not-reached. It means no destination could
+    be worked out for a product on the invoice, so the money is sitting exactly
+    where it landed -- which is the whole point of this list. Excluding it hid
+    every payment taken before the accounts were configured.
+    """
     await _require_schema(session)
     rows = (await session.execute(
         text("""
@@ -612,7 +626,7 @@ async def list_undistributed(
              WHERE NOT EXISTS (
                    SELECT 1 FROM settlements s
                     WHERE s.payment_id = p.id
-                      AND s.status IN ('PENDING','COMPLETED','SKIPPED'))
+                      AND s.status IN ('PENDING','COMPLETED'))
              ORDER BY p.payment_date DESC
              LIMIT :lim
         """),
@@ -1032,6 +1046,39 @@ async def list_business_units(
              "product_count": int(r.product_count)} for r in rows]
 
 
+async def _next_business_unit_code(session: AsyncSession, name: str) -> str:
+    """A short, stable, readable code derived from the unit's name.
+
+    "Wound Care" -> WOUNDCARE; "Gauze & Dressings" -> GAUZEDRESSINGS. One word
+    gives the first ten letters of it. The code appears in reports and in rule
+    listings, so it is worth being a word somebody recognises rather than a
+    sequence number -- a person reading a settlement rule should not have to
+    look up what BU3 was.
+
+    A collision takes a numeric suffix rather than failing, because two units
+    can reasonably start with the same letters, and the caller did not choose
+    this code and cannot be asked to pick another.
+    """
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", name.upper()) if w]
+    if not words:
+        base = "UNIT"
+    elif len(words) == 1:
+        base = words[0][:10]
+    else:
+        # Enough of each word to stay readable, capped so the code stays short.
+        base = "".join(w[:5] for w in words[:3])[:12]
+
+    taken = set((await session.execute(
+        text("SELECT code FROM business_units WHERE code LIKE :p"),
+        {"p": f"{base}%"})).scalars().all())
+    if base not in taken:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in taken:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
 @finance_router.post('/business-units')
 async def create_business_unit(
     body: BusinessUnitIn,
@@ -1039,21 +1086,26 @@ async def create_business_unit(
     current_user: User = Depends(require_admin),
 ):
     await _require_schema(session)
+    code = (body.code or "").strip().upper()
+    if not code:
+        code = await _next_business_unit_code(session, body.name)
     try:
         row = (await session.execute(
             text("""INSERT INTO business_units (id, code, name, description,
                                                 is_active)
                     VALUES (gen_random_uuid(), :c, :n, :d, :a) RETURNING id"""),
-            {"c": body.code, "n": body.name, "d": body.description,
+            {"c": code, "n": body.name, "d": body.description,
              "a": body.is_active},
         )).first()
         await mapd_audit(
             session, event_type="BUSINESS_UNIT_CREATED",
             entity_type="business_unit", entity_id=row.id,
             actor_user_id=current_user.id, actor_label=current_user.email,
-            detail={"code": body.code, "name": body.name})
+            detail={"code": code, "name": body.name,
+                    "code_generated": not body.code})
         await session.commit()
-        return {"success": True, "id": str(row.id)}
+        # The code is returned because the caller may not have chosen it.
+        return {"success": True, "id": str(row.id), "code": code}
     except Exception as e:                                # noqa: BLE001
         await session.rollback()
         raise HTTPException(status_code=400, detail=f"Could not create: {e}")

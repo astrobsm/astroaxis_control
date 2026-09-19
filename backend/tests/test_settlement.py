@@ -159,6 +159,8 @@ async def engine():
         c.commit()
         _apply_migration(c, "s8901234567r_mapd_settlement.py")
         c.commit()
+        _apply_migration(c, "j5678901234i_skipped_is_not_settled.py")
+        c.commit()
     seng.dispose()
     eng = create_async_engine(TEST_DB, future=True)
     yield eng
@@ -565,7 +567,7 @@ async def test_distributing_twice_does_not_pay_twice(session):
 
     live = (await session.execute(text("""
         SELECT COUNT(*) FROM settlements
-         WHERE payment_id = :p AND status IN ('PENDING','COMPLETED','SKIPPED')
+         WHERE payment_id = :p AND status IN ('PENDING','COMPLETED')
     """), {"p": str(payment_id)})).scalar()
     assert live == 1
 
@@ -983,3 +985,246 @@ async def test_plan_writes_nothing(session):
     count = (await session.execute(
         text("SELECT COUNT(*) FROM settlements"))).scalar()
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# A skip is a delay, not a decision
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_money_skipped_for_want_of_configuration_is_still_owed_somewhere(
+        session):
+    """The production case: 179 payments, every one skipped, all invisible.
+
+    A payment taken before the accounts were mapped was recorded as SKIPPED,
+    and SKIPPED then counted as a live settlement everywhere else -- so the
+    retry job passed it over, the exceptions list hid it, and distributing it
+    by hand answered "already settled". Mapping the products afterwards fixed
+    only what came next.
+    """
+    pid = await make_product(session, "P1", "Unmapped Product")
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+    result = await record_payment(
+        session, invoice_id=invoice_id, amount=total,
+        payment_method="cash", reference="STRANDED")
+    await session.commit()
+    assert result["settlement"]["status"] == "SKIPPED"
+
+    health = await settlement_health(session)
+    assert health["undistributed_payments"] == 1, (
+        "money that reached no account must be reported as undistributed")
+
+
+@pytest.mark.asyncio
+async def test_mapping_the_product_lets_the_retry_collect_the_backlog(session):
+    """Configure the account, run the retry, and yesterday's money moves."""
+    pid = await make_product(session, "P1", "Unmapped Product")
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+    await record_payment(session, invoice_id=invoice_id, amount=total,
+                         payment_method="cash", reference="BACKLOG")
+    await session.commit()
+
+    account = await make_account(session, "WCG", "Wound Care")
+    await map_product(session, pid, account)
+    await session.commit()
+
+    outcome = await retry_failed_settlements(session)
+    await session.commit()
+
+    assert outcome["attempted"] == 1
+    assert outcome["settled"] == 1
+
+    moved = money((await session.execute(text("""
+        SELECT COALESCE(SUM(d.amount), 0) FROM settlement_details d
+          JOIN settlements s ON s.id = d.settlement_id
+         WHERE s.status = 'COMPLETED' AND d.allocation_type = 'CASH'
+    """))).scalar())
+    assert moved == Decimal("500.00"), "the whole payment reached the account"
+
+    health = await settlement_health(session)
+    assert health["undistributed_payments"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_skip_is_kept_as_the_record_of_why(session):
+    """History, not a workaround. The skipped row says what was missing."""
+    pid = await make_product(session, "P1", "Unmapped Product")
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+    payment = await record_payment(
+        session, invoice_id=invoice_id, amount=total,
+        payment_method="cash", reference="KEEPSKIP")
+    await session.commit()
+    payment_id = payment["payment_id"]
+
+    account = await make_account(session, "WCG", "Wound Care")
+    await map_product(session, pid, account)
+    await session.commit()
+    await retry_failed_settlements(session)
+    await session.commit()
+
+    rows = (await session.execute(text("""
+        SELECT status, failure_reason FROM settlements
+         WHERE payment_id = :p ORDER BY created_at
+    """), {"p": str(payment_id)})).mappings().all()
+
+    assert [r["status"] for r in rows] == ["SKIPPED", "COMPLETED"]
+    assert "Unmapped Product" in rows[0]["failure_reason"]
+
+
+@pytest.mark.asyncio
+async def test_retrying_while_still_unconfigured_writes_nothing_new(session):
+    """Or a nightly job grows the table forever while a product stays unmapped.
+
+    The retry must be safe to run on a schedule for as long as the
+    configuration is outstanding, which means an unchanged answer writes no
+    new row.
+    """
+    pid = await make_product(session, "P1", "Unmapped Product")
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+    await record_payment(session, invoice_id=invoice_id, amount=total,
+                         payment_method="cash", reference="NOGROWTH")
+    await session.commit()
+
+    for _ in range(3):
+        await retry_failed_settlements(session)
+        await session.commit()
+
+    count = (await session.execute(text(
+        "SELECT COUNT(*) FROM settlements"))).scalar()
+    assert count == 1, "a repeated skip must not add a row each time"
+
+
+@pytest.mark.asyncio
+async def test_a_settled_payment_is_still_never_distributed_twice(session):
+    """The guarantee this change must not weaken.
+
+    Loosening the index to let a skipped payment be retried must not let a
+    COMPLETED one be paid again.
+    """
+    account = await make_account(session, "WCG", "Wound Care")
+    pid = await make_product(session, "P1", "Mapped Product")
+    await map_product(session, pid, account)
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+    payment = await record_payment(
+        session, invoice_id=invoice_id, amount=total,
+        payment_method="cash", reference="ONCEONLY")
+    await session.commit()
+    payment_id = payment["payment_id"]
+
+    again = await distribute_payment(session, payment_id=payment_id)
+    await session.commit()
+    assert again["idempotent"] is True
+    assert again["status"] == "COMPLETED"
+
+    moved = money((await session.execute(text("""
+        SELECT COALESCE(SUM(d.amount), 0) FROM settlement_details d
+          JOIN settlements s ON s.id = d.settlement_id
+         WHERE s.payment_id = :p AND d.allocation_type = 'CASH'
+    """), {"p": str(payment_id)})).scalar())
+    assert moved == Decimal("500.00"), "paid once, not twice"
+
+
+# ---------------------------------------------------------------------------
+# Business unit codes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_business_unit_code_is_derived_from_its_name(session):
+    """Asking somebody to invent a code before they can name a unit is a
+    question with no right answer, and the answers are BU1, BU2 and "new".
+
+    The generated code is a word, not a sequence number, because it appears in
+    rule listings and reports -- a person reading a settlement rule should not
+    have to look up what BU3 was.
+    """
+    from app.api.settlements import _next_business_unit_code
+
+    assert await _next_business_unit_code(session, "Wound Care") == "WOUNDCARE"
+    assert await _next_business_unit_code(session, "Dressings") == "DRESSINGS"
+    assert await _next_business_unit_code(
+        session, "Gauze & Dressings") == "GAUZEDRESS"
+    # Nothing usable in the name still has to produce something insertable.
+    assert await _next_business_unit_code(session, "***") == "UNIT"
+
+
+@pytest.mark.asyncio
+async def test_two_units_with_similar_names_do_not_collide(session):
+    """Two units can reasonably start with the same letters, and the caller
+    did not choose the code, so they cannot be asked to pick another.
+    """
+    from app.api.settlements import _next_business_unit_code
+
+    first = await _next_business_unit_code(session, "Wound Care")
+    await session.execute(
+        text("""INSERT INTO business_units (id, code, name)
+                VALUES (gen_random_uuid(), :c, 'Wound Care')"""),
+        {"c": first})
+    await session.commit()
+
+    second = await _next_business_unit_code(session, "Wound Care")
+    assert second != first
+    assert second.startswith(first)
+
+    await session.execute(
+        text("""INSERT INTO business_units (id, code, name)
+                VALUES (gen_random_uuid(), :c, 'Wound Care Two')"""),
+        {"c": second})
+    await session.commit()
+
+    third = await _next_business_unit_code(session, "Wound Care")
+    assert third not in (first, second)
+
+
+@pytest.mark.asyncio
+async def test_a_virtual_account_earmarks_money_without_moving_it(session):
+    """A virtual wallet is a label on money, not a place money goes.
+
+    Posting one would credit the bank for cash that is still sitting in the
+    bank -- understating the balance by the whole distribution and inventing a
+    transfer that never happened. The split still has to be recorded, because
+    that is what the per-product reports read.
+    """
+    account = await make_account(session, "WCG", "Wound Care Gauze",
+                                 gl="1200", kind="VIRTUAL")
+    pid = await make_product(session, "P1", "Wound Care Gauze")
+    await map_product(session, pid, account)
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+
+    await record_payment(session, invoice_id=invoice_id, amount=total,
+                         payment_method="bank_transfer", reference="VIRT")
+    await session.commit()
+
+    allocated = money((await session.execute(text("""
+        SELECT COALESCE(SUM(d.amount), 0) FROM settlement_details d
+          JOIN settlements s ON s.id = d.settlement_id
+         WHERE s.status = 'COMPLETED' AND d.allocation_type = 'CASH'
+    """))).scalar())
+    assert allocated == Decimal("500.00"), "the share must still be recorded"
+
+    posted = (await session.execute(text("""
+        SELECT COUNT(*) FROM gl_journal_entries
+         WHERE source_module = 'settlement'
+    """))).scalar()
+    assert posted == 0, "a virtual earmark must not touch the ledger"
+
+
+@pytest.mark.asyncio
+async def test_a_real_destination_still_posts(session):
+    """The exemption is for VIRTUAL only. Moving money to a bank account is a
+    movement, and the ledger has to carry it.
+    """
+    account = await make_account(session, "OPS", "Operations Bank",
+                                 gl="1250", kind="BANK")
+    pid = await make_product(session, "P1", "Some Product")
+    await map_product(session, pid, account)
+    invoice_id, _, total = await make_invoice(session, [(pid, 1, "500.00")])
+
+    await record_payment(session, invoice_id=invoice_id, amount=total,
+                         payment_method="bank_transfer", reference="REALMOVE")
+    await session.commit()
+
+    posted = (await session.execute(text("""
+        SELECT COUNT(*) FROM gl_journal_entries
+         WHERE source_module = 'settlement'
+    """))).scalar()
+    assert posted == 1

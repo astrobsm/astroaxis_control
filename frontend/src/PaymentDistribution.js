@@ -537,6 +537,7 @@ function BusinessUnitsPanel({ units, onChange }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
 
   const add = async () => {
     setErr('');
@@ -549,11 +550,29 @@ function BusinessUnitsPanel({ units, onChange }) {
   return (
     <Card>
       <SectionTitle>Business units</SectionTitle>
+      <div style={{ fontSize: 12.5, color: color.textSecondary, lineHeight: 1.6, marginBottom: space(1.5) }}>
+        A group of products whose money is handled together — a product line, a
+        brand, a division. Naming one lets a single settlement rule cover
+        everything in it, instead of one rule per product. Optional: a product
+        mapped straight to an account needs no unit at all.
+      </div>
       <ErrorBox msg={err} />
+      {msg && <div style={{ marginBottom: space(1.5) }}><Banner tone="success">{msg}</Banner></div>}
       <div style={{ display: 'flex', gap: space(1.5), alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: space(2) }}>
-        <div style={{ minWidth: 140 }}><Field label="Code"><input style={inputStyle} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} /></Field></div>
-        <div style={{ minWidth: 220 }}><Field label="Name"><input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} /></Field></div>
-        <Btn size="sm" variant="secondary" onClick={add} disabled={!code || !name}>Add unit</Btn>
+        <div style={{ minWidth: 240 }}>
+          <Field label="Name">
+            <input style={inputStyle} value={name} placeholder="e.g. Wound Care"
+              onChange={(e) => setName(e.target.value)} />
+          </Field>
+        </div>
+        <div style={{ minWidth: 160 }}>
+          <Field label="Code (optional)">
+            <input style={inputStyle} value={code}
+              placeholder={suggestedCode || 'from the name'}
+              onChange={(e) => setCode(e.target.value.toUpperCase())} />
+          </Field>
+        </div>
+        <Btn size="sm" variant="secondary" onClick={add} disabled={!name}>Add unit</Btn>
       </div>
       <DataTable
         cols={[{ key: 'code', label: 'Code' }, { key: 'name', label: 'Name' }, { key: 'product_count', label: 'Products', align: 'right' }]}

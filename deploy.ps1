@@ -84,6 +84,7 @@ $backendFiles = @(
     'backend/app/main.py',
     'backend/alembic/versions/s8901234567r_mapd_settlement.py',
     'backend/scripts/setup_mapd.py',
+    'backend/scripts/provision_product_wallets.py',
 
     # Staff operational wallet. main.py imports app.api.wallet, and router
     # registration RE-RAISES on failure -- so shipping main.py without these
@@ -182,6 +183,7 @@ $backendFiles = @(
     'backend/alembic/versions/g2345678901f_all_lgas.py',
     'backend/alembic/versions/h3456789012g_registration_links.py',
     'backend/alembic/versions/i4567890123h_registration_link_recoverable.py',
+    'backend/alembic/versions/j5678901234i_skipped_is_not_settled.py',
 
     'backend/requirements.txt'
 )

@@ -624,6 +624,22 @@ async def _post_settlement_entry(
     than posted as Dr 1200 / Cr 1200 -- a self-cancelling pair adds nothing to
     the ledger except noise in the bank account's history.
 
+    A VIRTUAL destination posts nothing at all, and that is the point of it. A
+    virtual account is an earmark: it records which product a share of the
+    money belongs to while the money itself stays exactly where it landed.
+    Nothing has moved, so the ledger must not say anything has. Posting it
+    would credit the bank for cash that is still in the bank -- understating
+    the balance by the whole distribution and inventing a transfer that never
+    happened.
+
+    The split is not lost by this: it lives in `settlement_details`, which is
+    what the per-product reports read. The ledger keeps the one fact it is
+    responsible for -- the money is in the bank -- and the distribution keeps
+    the other, whose share it is.
+
+    BANK, CASH and WALLET destinations still post, because moving money to one
+    of those IS a movement.
+
     No-ops unless ACCOUNTING_POSTING_ENABLED, and refuses to post twice for the
     same settlement reference.
     """
@@ -636,6 +652,8 @@ async def _post_settlement_entry(
     debits: dict[str, Decimal] = defaultdict(lambda: ZERO)
     credit_total = ZERO
     for a in allocations:
+        if a.get("account_kind") == "VIRTUAL":
+            continue
         debits[a["gl_account_code"]] += a["amount"]
         credit_total += a["amount"]
 
@@ -700,8 +718,15 @@ async def distribute_payment(
     why, so the caller's transaction stays usable and the money is never lost
     because a destination account happened to be suspended.
 
-    Idempotent: a payment that already has a live settlement returns it
+    Idempotent: a payment that has already been settled returns that settlement
     unchanged rather than distributing again.
+
+    SKIPPED does NOT count. A skipped settlement moved no money -- it is the
+    absence of a distribution with a note saying what was missing -- so it must
+    not own the payment. Treating it as final left every payment taken before
+    the accounts were configured permanently stranded (see j5678901234i). A
+    re-attempt is allowed, and the skipped row stays as the record of why the
+    money sat where it did.
     """
     if not await mapd_schema_ready(session):
         return {"status": "UNAVAILABLE",
@@ -711,7 +736,7 @@ async def distribute_payment(
         text("""SELECT id, settlement_reference, status, allocated_amount
                   FROM settlements
                  WHERE payment_id = :pid
-                   AND status IN ('PENDING','COMPLETED','SKIPPED')
+                   AND status IN ('PENDING','COMPLETED')
                  LIMIT 1"""),
         {"pid": str(payment_id)},
     )).first()
@@ -722,6 +747,18 @@ async def distribute_payment(
                 "allocated_amount": money(existing.allocated_amount),
                 "reason": "Already settled; nothing further was distributed.",
                 "idempotent": True}
+
+    # A payment already noted as skipped, whose configuration STILL has not
+    # arrived, is left exactly as it is. Without this the retry job would write
+    # a fresh skipped row on every run and the table would grow without bound
+    # for as long as a product goes unmapped.
+    prior_skip = (await session.execute(
+        text("""SELECT id, settlement_reference, failure_reason
+                  FROM settlements
+                 WHERE payment_id = :pid AND status = 'SKIPPED'
+                 ORDER BY created_at DESC LIMIT 1"""),
+        {"pid": str(payment_id)},
+    )).first()
 
     attempt = int((await session.execute(
         text("SELECT COUNT(*) FROM settlements WHERE payment_id = :pid"),
@@ -735,6 +772,16 @@ async def distribute_payment(
     savepoint = await session.begin_nested()
     try:
         plan = await build_plan(session, payment_id=payment_id)
+
+        if plan["status"] != "READY" and prior_skip is not None:
+            await savepoint.rollback()
+            return {"status": "SKIPPED",
+                    "settlement_id": prior_skip.id,
+                    "settlement_reference": prior_skip.settlement_reference,
+                    "allocated_amount": money(ZERO),
+                    "reason": prior_skip.failure_reason,
+                    "idempotent": True,
+                    "still_waiting": True}
 
         if plan["status"] == "READY":
             for a in plan["allocations"] + plan["obligations"]:
@@ -966,22 +1013,35 @@ async def retry_failed_settlements(
     session: AsyncSession, *, limit: int = 50,
     created_by: Optional[UUID] = None,
 ) -> dict:
-    """Re-attempt payments whose distribution failed.
+    """Re-attempt payments that have not reached their destination accounts.
 
-    Failures here are overwhelmingly transient-by-configuration -- a suspended
-    account, a rule not yet authored. Retrying costs nothing once the cause is
-    fixed, and the alternative is an operator hunting for payments that never
-    reached their accounts.
+    Both kinds are picked up, because both are waiting on the same thing --
+    somebody finishing the configuration:
+
+      FAILED   the plan was resolvable but could not be carried out, typically
+               a suspended destination account.
+      SKIPPED  no plan could be built at all, because a product on the invoice
+               has no account mapped and no rule covering it.
+
+    SKIPPED was excluded here originally, on the reading that a skip was a
+    decision rather than a delay. It is not: it means the money has gone
+    nowhere. Excluding it meant that mapping the products fixed only what came
+    afterwards, and the payments already taken stayed stranded with nothing in
+    the application willing to look at them again.
+
+    Re-attempting a payment whose configuration is still missing writes no new
+    row -- `distribute_payment` returns the existing skip untouched -- so this
+    is safe to run on a schedule however long a product stays unmapped.
     """
     rows = (await session.execute(
         text("""
             SELECT DISTINCT ON (s.payment_id) s.payment_id, s.failure_reason
               FROM settlements s
-             WHERE s.status = 'FAILED'
+             WHERE s.status IN ('FAILED', 'SKIPPED')
                AND NOT EXISTS (
                    SELECT 1 FROM settlements live
                     WHERE live.payment_id = s.payment_id
-                      AND live.status IN ('PENDING','COMPLETED','SKIPPED'))
+                      AND live.status IN ('PENDING','COMPLETED'))
              ORDER BY s.payment_id, s.created_at DESC
              LIMIT :lim
         """),
@@ -1192,13 +1252,17 @@ async def settlement_health(session: AsyncSession) -> dict:
         return {"healthy": None,
                 "summary": "MAPD schema is not installed on this database."}
 
+    # Money that has not reached a destination account, whether that is because
+    # distribution failed, was skipped for want of configuration, or was never
+    # attempted. All three mean the same thing to whoever is looking: it has
+    # not arrived.
     undistributed = (await session.execute(
         text("""
             SELECT COUNT(*) AS n, COALESCE(SUM(p.amount), 0) AS total
               FROM payments p
              WHERE NOT EXISTS (SELECT 1 FROM settlements s
                                 WHERE s.payment_id = p.id
-                                  AND s.status IN ('PENDING','COMPLETED','SKIPPED'))
+                                  AND s.status IN ('PENDING','COMPLETED'))
         """)
     )).first()
 
@@ -1207,10 +1271,10 @@ async def settlement_health(session: AsyncSession) -> dict:
             SELECT COUNT(DISTINCT s.payment_id) AS n,
                    COALESCE(SUM(s.gross_amount), 0) AS total
               FROM settlements s
-             WHERE s.status = 'FAILED'
+             WHERE s.status IN ('FAILED', 'SKIPPED')
                AND NOT EXISTS (SELECT 1 FROM settlements live
                                 WHERE live.payment_id = s.payment_id
-                                  AND live.status IN ('PENDING','COMPLETED','SKIPPED'))
+                                  AND live.status IN ('PENDING','COMPLETED'))
         """)
     )).first()
 
