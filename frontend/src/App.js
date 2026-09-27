@@ -6,6 +6,7 @@ import NotificationSettings from './NotificationSettings';
 import WifiLogin from './WifiLogin';
 import DistributorOrderPage from './DistributorOrderPage';
 import DistributorRegistrationPage from './DistributorRegistrationPage';
+import MeetingGuestPage from './MeetingGuestPage';
 import API_BASE_URL from './config';
 import { isPushSupported, getNotificationPermission, subscribeToPush } from './utils/pushNotifications';
 import './styles.css';
@@ -195,6 +196,15 @@ function App() {
       && window.location.pathname.startsWith('/register/')) {
     const registerToken = window.location.pathname.slice('/register/'.length);
     if (registerToken) return <DistributorRegistrationPage token={registerToken} />;
+  }
+
+  // Joining a meeting -- /meet/<token>. Before the auth gate, like the two
+  // above: the people opening it have no account, and the link admits them to
+  // one meeting and to nothing else in the ERP.
+  if (typeof window !== 'undefined'
+      && window.location.pathname.startsWith('/meet/')) {
+    const meetToken = window.location.pathname.slice('/meet/'.length);
+    if (meetToken) return <MeetingGuestPage token={meetToken} />;
   }
 
   // Captive portal route — render the Wi-Fi login page regardless of app auth.

@@ -184,6 +184,13 @@ $backendFiles = @(
     'backend/alembic/versions/h3456789012g_registration_links.py',
     'backend/alembic/versions/i4567890123h_registration_link_recoverable.py',
     'backend/alembic/versions/j5678901234i_skipped_is_not_settled.py',
+    'backend/alembic/versions/k6789012345j_meetings.py',
+
+    # Meetings. main.py imports app.api.meetings and router registration
+    # re-raises, so shipping main.py without these takes the ERP down rather
+    # than merely hiding the module.
+    'backend/app/services/meetings.py',
+    'backend/app/api/meetings.py',
 
     'backend/requirements.txt'
 )

@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.services import portal as svc
 from app.services import registration as reg
+from app.services import meetings as mtg
 
 router = APIRouter(prefix="/api/portal", tags=["Distributor ordering portal"])
 
@@ -242,5 +243,92 @@ async def submit_registration(
     result = await reg.submit(
         session, token=token, payload=body.model_dump(mode="json"),
         ip=client["ip"], user_agent=client["user_agent"])
+    await session.commit()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Joining a meeting as a guest -- PUBLIC, and a third kind of public link
+#
+# The ordering link is a credential for one distributor's account. The
+# registration link is a credential for nothing. This one sits between them: it
+# admits the holder to ONE meeting and to nothing else in the application.
+#
+# What a guest may learn from it is deliberately small -- the meeting title,
+# the host's name, when it starts. Not the agenda, not who else was invited,
+# not anything about the company. An invitation is forwarded; treat everything
+# it carries as public.
+# ---------------------------------------------------------------------------
+
+class GuestJoinIn(BaseModel):
+    display_name: str = Field(..., min_length=2, max_length=120)
+    passcode: Optional[str] = Field(None, max_length=64)
+
+
+@router.get("/meet/{token}")
+async def open_meeting(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """What this link is for. Enough to decide whether to join, no more."""
+    meeting = await mtg.resolve_link(session, token=token)
+    await session.commit()
+    return {
+        "meeting": mtg._public_meeting(meeting),
+        "requires_passcode": meeting["passcode_hash"] is not None,
+        "note": ("No account or download is needed. Enter the name you want "
+                 "other people in the meeting to see."),
+    }
+
+
+@router.post("/meet/{token}/join")
+async def join_meeting(
+    token: str,
+    body: GuestJoinIn,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Ask to join. Returns a waiting-room place or a seat in the meeting."""
+    client = _client(request)
+    result = await mtg.guest_join(
+        session, token=token, display_name=body.display_name,
+        passcode=body.passcode, ip=client["ip"],
+        user_agent=client["user_agent"])
+    await session.commit()
+    return result
+
+
+@router.get("/meet/{token}/waiting/{waiting_id}")
+async def meeting_waiting_status(
+    token: str,
+    waiting_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Has the host let me in yet? Polled by the guest's own browser."""
+    result = await mtg.guest_waiting_status(
+        session, token=token, waiting_id=waiting_id)
+    await session.commit()
+    return result
+
+
+@router.post("/meet/{token}/leave/{attendance_id}")
+async def guest_leave(
+    token: str,
+    attendance_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Close a guest's attendance row when they leave.
+
+    The token is resolved first so that this cannot be used to close an
+    attendance row belonging to some other meeting.
+    """
+    meeting = await mtg.resolve_link(session, token=token)
+    owned = (await session.execute(
+        text("""SELECT 1 FROM meeting_attendance
+                 WHERE id = :a AND meeting_id = :m"""),
+        {"a": str(attendance_id), "m": str(meeting["id"])})).first()
+    if owned is None:
+        return {"closed": False}
+    result = await mtg.leave(session, attendance_id=attendance_id)
     await session.commit()
     return result

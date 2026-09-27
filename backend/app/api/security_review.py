@@ -80,6 +80,27 @@ EXPECTED_PUBLIC = {
     ("POST", "/api/portal/register/{token}"): (
         "Sends an application. Creates no distributor, grants nothing, and is "
         "rate-limited per address."),
+
+    # Joining a meeting. A THIRD kind of public link, between the two above:
+    # the ordering link is a credential for one distributor's account, the
+    # registration link is a credential for nothing, and this one admits the
+    # holder to exactly one meeting. The guest pass it issues is signed with a
+    # different key from user sessions and carries typ=meeting_guest, which
+    # require_authenticated_user refuses outright.
+    ("GET", "/api/portal/meet/{token}"): (
+        "What the meeting is: title, host, start time. Not the agenda, not "
+        "who else was invited, nothing about the company. An invitation gets "
+        "forwarded, so everything this returns is treated as public."),
+    ("POST", "/api/portal/meet/{token}/join"): (
+        "Asks to join one meeting. Honours the waiting room, the passcode, "
+        "the lock and the participant limit, and is rate-limited per link. "
+        "Issues a pass scoped to that meeting and to nothing else."),
+    ("GET", "/api/portal/meet/{token}/waiting/{waiting_id}"): (
+        "Polled by a guest waiting in the lobby to learn whether the host has "
+        "admitted them. Scoped to the meeting the link resolves to."),
+    ("POST", "/api/portal/meet/{token}/leave/{attendance_id}"): (
+        "Closes the guest's own attendance row when they leave. The token is "
+        "resolved first, so it cannot close a row in another meeting."),
 }
 
 

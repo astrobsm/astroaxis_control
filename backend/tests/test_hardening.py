@@ -140,23 +140,36 @@ def test_no_new_public_route_appears():
 
 
 def test_the_public_routes_are_only_the_portal():
-    """Nothing outside the distributor portal is open.
+    """Nothing outside the portal is open, and each family is a known risk.
 
-    Two kinds live there and they are not the same risk: the ordering link is a
-    credential for ONE distributor's account, the registration link is shared
-    widely and is a credential for nothing. Both are public; only the first
-    reaches an existing account.
+    THREE kinds of public link live there, and they are deliberately different
+    risks:
+
+      ordering      a credential for ONE distributor's account. Reaches an
+                    existing account, so it is the most dangerous of the three.
+      registration  shared widely, a credential for nothing. Every submission
+                    lands in a review queue.
+      meeting       admits the holder to ONE meeting and to nothing else. The
+                    pass it issues is signed with a different key from user
+                    sessions and is refused by require_authenticated_user.
+
+    The families are counted separately so that a route added to the wrong one
+    -- a meeting route that quietly reaches a distributor account, say -- moves
+    a number and fails here.
     """
     for method, path in EXPECTED_PUBLIC:
         assert path.startswith("/api/portal/"), (
             f"{method} {path} is public but is not part of the portal")
 
-    ordering = {p for _, p in EXPECTED_PUBLIC
-                if not p.startswith("/api/portal/register")}
     registration = {p for _, p in EXPECTED_PUBLIC
                     if p.startswith("/api/portal/register")}
+    meeting = {p for _, p in EXPECTED_PUBLIC
+               if p.startswith("/api/portal/meet/")}
+    ordering = {p for _, p in EXPECTED_PUBLIC} - registration - meeting
+
     assert len(ordering) == 3, sorted(ordering)
     assert registration, "the registration form should be public"
+    assert len(meeting) == 4, sorted(meeting)
 
     for key, reason in EXPECTED_PUBLIC.items():
         assert len(reason) > 40, f"{key} needs a real justification, not a label"

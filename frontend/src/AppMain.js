@@ -19,6 +19,10 @@ import Recalls from './Recalls';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
+// Lazy: the meeting module pulls in the conference UI, and most users
+// never open it. Keeping it out of the main bundle keeps the rest of
+// the ERP loading at the speed it did before meetings existed.
+const MeetingsModule = React.lazy(() => import('./Meetings'));
 
 // Build stamp to verify fresh bundle after rebuilds
 const BUILD_TAG = 'v2026.03.04-offline-first';
@@ -312,11 +316,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  const [commMessages, setCommMessages] = useState([]);
  const [commChatInput, setCommChatInput] = useState('');
  const [commChatChannel, setCommChatChannel] = useState('general');
- const [commMeetingRoom, setCommMeetingRoom] = useState('');
- const [commMeetingActive, setCommMeetingActive] = useState(false);
- const [commMeetingName, setCommMeetingName] = useState('');
  const commChatEndRef = useRef(null);
- const commJitsiRef = useRef(null);
 
  // Announcements Module state
  const [announcements, setAnnouncements] = useState([]);
@@ -9740,71 +9740,12 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  }
 
  // Video Conference functions
- function handleStartMeeting() {
- const room = commMeetingRoom.trim() || ('astrobsm-' + Date.now());
- const displayName = commMeetingName.trim() || userName;
- setCommMeetingRoom(room);
- setCommMeetingActive(true);
- // Load Jitsi Meet API
- setTimeout(() => {
- const container = commJitsiRef.current;
- if (!container) return;
- container.innerHTML = '';
- function loadJitsiAPI() {
- if (window.JitsiMeetExternalAPI) {
- initJitsi(container, room, displayName);
- return;
- }
- const script = document.createElement('script');
- script.src = 'https://8x8.vc/vpaas-magic-cookie-ef5ce88c523d41a599c8b1dc5b3ab765/external_api.js';
- script.onload = () => initJitsi(container, room, displayName);
- script.onerror = () => {
- // Fallback to meet.jit.si
- const s2 = document.createElement('script');
- s2.src = 'https://meet.jit.si/external_api.js';
- s2.onload = () => initJitsi(container, room, displayName);
- s2.onerror = () => { container.innerHTML = '<p style="color:red;text-align:center;padding:40px;">Failed to load video conference engine. Please check your internet connection.</p>'; };
- document.head.appendChild(s2);
- };
- document.head.appendChild(script);
- }
- function initJitsi(container, room, displayName) {
- try {
- const api = new window.JitsiMeetExternalAPI('meet.jit.si', {
- roomName: 'AstroBSM_' + room.replace(/[^a-zA-Z0-9_-]/g, '_'),
- parentNode: container,
- width: '100%',
- height: 600,
- configOverwrite: {
- startWithAudioMuted: true,
- startWithVideoMuted: false,
- disableDeepLinking: true,
- prejoinPageEnabled: false,
- },
- interfaceConfigOverwrite: {
- TOOLBAR_BUTTONS: ['microphone','camera','closedcaptions','desktop','fullscreen','fodeviceselection','hangup','chat','recording','livestreaming','etherpad','sharedvideo','shareaudio','settings','raisehand','videoquality','filmstrip','invite','feedback','stats','shortcuts','tileview','select-background','download','help'],
- SHOW_JITSI_WATERMARK: false,
- SHOW_WATERMARK_FOR_GUESTS: false,
- DEFAULT_BACKGROUND: '#0f2460',
- },
- userInfo: { displayName: displayName, email: currentUser?.email || '' },
- });
- api.addEventListener('readyToClose', () => {
- setCommMeetingActive(false);
- container.innerHTML = '';
- });
- } catch(e) {
- container.innerHTML = '<p style="color:red;text-align:center;padding:40px;">Could not initialize video conference: ' + e.message + '</p>';
- }
- }
- loadJitsiAPI();
- }, 200);
- }
-
- function handleEndMeeting() {
- setCommMeetingActive(false);
- if (commJitsiRef.current) commJitsiRef.current.innerHTML = '';
- }
+ // The video conference moved to its own module (Meetings.js). What used
+ // to live here mounted the PUBLIC meet.jit.si in a room called
+ // 'AstroBSM_' + whatever was typed, so anyone who guessed
+ // 'AstroBSM_weekly-standup' was in the management meeting, and nothing
+ // about the meeting was recorded. Rooms are now issued by the server,
+ // unguessable, and carry scheduling, a waiting room and attendance.
 
  const channels = ['general', 'sales', 'production', 'hr', 'management'];
  const filteredMessages = commMessages;
@@ -9818,7 +9759,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {/* Header */}
  <div style={{background:'linear-gradient(135deg,#0f2460,#1a3a8a,#3b7ddd)', color:'#fff', padding:'20px 30px'}}>
  <h1 style={{fontSize:28, fontWeight:800, letterSpacing:2, margin:0, textAlign:'center'}}>COMMUNICATION HUB</h1>
- <p style={{fontSize:13, opacity:0.8, marginTop:4, letterSpacing:1, textAlign:'center'}}>Notice Board, Team Chat & Video Conference</p>
+ <p style={{fontSize:13, opacity:0.8, marginTop:4, letterSpacing:1, textAlign:'center'}}>Notice Board, Team Chat & Meetings</p>
  </div>
 
  {/* Tab Navigation */}
@@ -9826,7 +9767,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {[
  { key: 'notices', label: 'Notice Board', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
  { key: 'chat', label: 'Team Chat', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
- { key: 'videoConference', label: 'Video Conference', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
+ { key: 'videoConference', label: 'Meetings', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
  ].map(tab => (
  <button key={tab.key} onClick={() => {
  setCommView(tab.key);
@@ -10050,112 +9991,15 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  )}
 
- {/* ============ VIDEO CONFERENCE ============ */}
- {commView === 'videoConference' && (
- <div>
- {!commMeetingActive ? (
- <div style={{maxWidth:600, margin:'0 auto'}}>
- <div style={{background:'#fff', borderRadius:12, padding:32, boxShadow:'0 2px 12px rgba(0,0,0,0.08)', textAlign:'center'}}>
- <div style={{width:80, height:80, borderRadius:'50%', background:'linear-gradient(135deg,#0f2460,#3b7ddd)', margin:'0 auto 20px', display:'flex', alignItems:'center', justifyContent:'center'}}>
- <svg width="36" height="36" fill="none" stroke="white" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
- </div>
- <h2 style={{fontSize:22, fontWeight:800, color:'#1e293b', marginBottom:6}}>Start Video Conference</h2>
- <p style={{fontSize:14, color:'#6b7280', marginBottom:24}}>Host or join a meeting with your team using Jitsi Meet</p>
-
- <div style={{textAlign:'left', maxWidth:400, margin:'0 auto'}}>
- <div style={{marginBottom:16}}>
- <label style={{display:'block', fontSize:12, fontWeight:600, marginBottom:4, color:'#374151'}}>Your Display Name</label>
- <input type="text" value={commMeetingName} onChange={e => setCommMeetingName(e.target.value)}
- placeholder={userName} style={{width:'100%', padding:'12px 16px', border:'1.5px solid #d1d5db', borderRadius:8, fontSize:14}} />
- </div>
- <div style={{marginBottom:24}}>
- <label style={{display:'block', fontSize:12, fontWeight:600, marginBottom:4, color:'#374151'}}>Meeting Room Name</label>
- <input type="text" value={commMeetingRoom} onChange={e => setCommMeetingRoom(e.target.value)}
- placeholder="e.g., weekly-standup, team-review" style={{width:'100%', padding:'12px 16px', border:'1.5px solid #d1d5db', borderRadius:8, fontSize:14}} />
- <p style={{fontSize:11, color:'#9ca3af', marginTop:4}}>Leave blank to auto-generate. Share the room name with others to join the same meeting.</p>
- </div>
- </div>
-
- <button onClick={handleStartMeeting} style={{
- padding:'14px 48px', background:'linear-gradient(135deg,#059669,#10b981)', color:'#fff', border:'none', borderRadius:8,
- fontSize:16, fontWeight:700, cursor:'pointer', letterSpacing:0.5, boxShadow:'0 4px 12px rgba(5,150,105,0.3)', transition:'transform 0.2s',
- }}>
- Start Meeting
- </button>
-
- <div style={{marginTop:24, padding:16, background:'#f8fafc', borderRadius:8, textAlign:'left'}}>
- <h4 style={{fontSize:13, fontWeight:700, color:'#374151', marginBottom:8}}>Features Available:</h4>
- <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, fontSize:12, color:'#6b7280'}}>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- HD Video & Audio
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- Screen Sharing
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- In-meeting Chat
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- Hand Raise
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- Recording
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- Tile View
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- Background Blur
- </div>
- <div style={{display:'flex', alignItems:'center', gap:6}}>
- <svg width="14" height="14" fill="#059669" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
- No Sign-up Required
- </div>
- </div>
- </div>
- </div>
-
- {/* Join a Meeting */}
- <div style={{background:'#fff', borderRadius:12, padding:24, boxShadow:'0 2px 8px rgba(0,0,0,0.05)', marginTop:20}}>
- <h3 style={{fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:12}}>Share Meeting Link</h3>
- <p style={{fontSize:13, color:'#6b7280', marginBottom:12}}>Copy and share this link with team members to invite them:</p>
- <div style={{display:'flex', gap:8}}>
- <input type="text" readOnly value={commMeetingRoom ? `https://meet.jit.si/AstroBSM_${commMeetingRoom.replace(/[^a-zA-Z0-9_-]/g, '_')}` : 'Enter a room name above first'}
- style={{flex:1, padding:'10px 14px', border:'1.5px solid #d1d5db', borderRadius:6, fontSize:13, background:'#f9fafb', color:'#374151'}} />
- <button onClick={() => {
- const link = commMeetingRoom ? `https://meet.jit.si/AstroBSM_${commMeetingRoom.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
- if (link) { navigator.clipboard.writeText(link); notify('Meeting link copied!', 'success'); }
- else notify('Enter a room name first', 'error');
- }} style={{padding:'10px 16px', background:'#1a3a8a', color:'#fff', border:'none', borderRadius:6, fontWeight:600, cursor:'pointer', fontSize:12, whiteSpace:'nowrap'}}>
- Copy Link
- </button>
- </div>
- </div>
- </div>
- ) : (
- /* Active Meeting */
- <div>
- <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12}}>
- <div>
- <h2 style={{fontSize:18, fontWeight:700, color:'#1e293b', margin:0}}>Meeting: {commMeetingRoom}</h2>
- <p style={{fontSize:12, color:'#6b7280', margin:'2px 0 0'}}>Powered by Jitsi Meet - Free & Open Source</p>
- </div>
- <button onClick={handleEndMeeting} style={{padding:'10px 20px', background:'#ef4444', color:'#fff', border:'none', borderRadius:6, fontWeight:600, cursor:'pointer', fontSize:13}}>
- End Meeting
- </button>
- </div>
- <div ref={commJitsiRef} style={{width:'100%', minHeight:600, borderRadius:8, overflow:'hidden', background:'#000', boxShadow:'0 4px 20px rgba(0,0,0,0.2)'}} />
- </div>
- )}
- </div>
- )}
+        {/* ============ MEETINGS ============ */}
+        {/* Scheduling, guest links, waiting room and attendance live in
+            Meetings.js. Loaded only when this tab is opened -- somebody
+            checking stock should not pay for the conferencing stack. */}
+        {commView === 'videoConference' && (
+          <React.Suspense fallback={<div style={{padding:40,textAlign:'center',color:'#64748B'}}>Loading meetings…</div>}>
+            <MeetingsModule />
+          </React.Suspense>
+        )}
 
  </div>
  </div>

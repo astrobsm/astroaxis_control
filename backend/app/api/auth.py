@@ -149,6 +149,18 @@ async def require_authenticated_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     payload = decode_token(credentials.credentials)
+
+    # A meeting guest pass is NOT a user session, and must never be mistaken
+    # for one. It is already signed with a different key, so it cannot reach
+    # this line with a valid signature -- this second check exists so that a
+    # deployment which ever set both secrets to the same value still refuses
+    # it. One of those is a configuration mistake waiting to happen; two is a
+    # mistake that has to be made twice.
+    if payload.get("typ") == "meeting_guest":
+        raise HTTPException(
+            status_code=401,
+            detail="A meeting pass cannot be used to sign in.")
+
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token")

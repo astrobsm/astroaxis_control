@@ -10,7 +10,7 @@ in that state.
 
 This script does the configuration that was missing, in one pass:
 
-  1. a VIRTUAL financial account per active product, named after the product;
+  1. a VIRTUAL financial account per product, named after the product;
   2. `product_accounts.default_financial_account_id` pointing at it;
   3. a retry, so the payments already taken flow through the same path any new
      payment would.
@@ -85,7 +85,6 @@ async def main(apply: bool) -> int:
               LEFT JOIN product_accounts pa ON pa.product_id = p.id
               LEFT JOIN financial_accounts fa
                      ON upper(fa.name) = upper(p.name)
-             WHERE COALESCE(p.is_active, TRUE)
              ORDER BY p.name
         """))).mappings().all()
 

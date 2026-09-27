@@ -34,6 +34,26 @@ services:
       SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-this-in-production}
       DEBUG: ${DEBUG:-False}
       ENVIRONMENT: ${ENVIRONMENT:-production}
+
+      # Accounting. These were live on the droplet and missing from this file,
+      # so deploying it as it stood would have restarted the backend with GL
+      # posting silently OFF on a financial system. They belong in version
+      # control, not only in whatever the server happens to be running.
+      ACCOUNTING_POSTING_ENABLED: ${ACCOUNTING_POSTING_ENABLED:-true}
+      ACCOUNTING_CUTOVER_DATE: ${ACCOUNTING_CUTOVER_DATE:-2026-03-01}
+      BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-Africa/Lagos}
+
+      # Meetings. MEETING_GUEST_SECRET signs the pass a guest's browser holds
+      # and is DELIBERATELY not SECRET_KEY: a guest pass must never be usable
+      # as a user session. Generated on the server, kept in .env, never in git.
+      MEETING_GUEST_SECRET: ${MEETING_GUEST_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://erp.bonnesantemedicals.com}
+      # JaaS. Empty until a tenant is bought, and empty is a supported state:
+      # meetings then run on the public Jitsi server with server-issued
+      # unguessable rooms. All three are required before signing switches on.
+      JAAS_APP_ID: ${JAAS_APP_ID:-}
+      JAAS_API_KEY: ${JAAS_API_KEY:-}
+      JAAS_PRIVATE_KEY: ${JAAS_PRIVATE_KEY:-}
     depends_on:
       db:
         condition: service_healthy
