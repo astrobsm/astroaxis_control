@@ -333,6 +333,16 @@ async def create_meeting(
 
     # The host is a participant of their own meeting, so attendance and the
     # participant list do not have to special-case them everywhere.
+    #
+    # THE HOST CANNOT BE DEMOTED, and the guard is on the UPSERT below rather
+    # than on the caller. A host who ticked their own name in the invite list
+    # was overwritten with PARTICIPANT, which locked them out of their own
+    # meeting: require_host refused them, so they could not admit the people
+    # waiting outside, and the host panel never rendered. It happened on the
+    # first real meeting held with this feature.
+    #
+    # Guarding it here means every route that adds a participant inherits the
+    # rule, rather than each one having to remember it.
     await session.execute(
         text("""INSERT INTO meeting_participants
                     (id, meeting_id, user_id, role, invited_by)
@@ -350,7 +360,8 @@ async def create_meeting(
                         (id, meeting_id, user_id, role, invited_by)
                     VALUES (gen_random_uuid(), :m, :u, :r, :by)
                     ON CONFLICT (meeting_id, user_id) DO UPDATE
-                       SET role = EXCLUDED.role"""),
+                       SET role = EXCLUDED.role
+                     WHERE meeting_participants.role <> 'HOST'"""),
             {"m": str(meeting_id), "u": str(entry["user_id"]), "r": role,
              "by": str(actor.id) if actor else None})
 

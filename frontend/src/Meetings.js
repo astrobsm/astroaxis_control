@@ -52,6 +52,15 @@ const TONES = {
 };
 const tone = (s) => TONES[String(s || '').toUpperCase()] || 'neutral';
 
+// Who is signed in. For filtering the invite list only -- every permission
+// here is decided by the server, per meeting.
+function currentUserId() {
+  try {
+    const raw = localStorage.getItem('user') || localStorage.getItem('currentUser');
+    return String(JSON.parse(raw || '{}').id || '');
+  } catch { return ''; }
+}
+
 const when = (v) => (v ? new Date(v).toLocaleString(undefined, {
   day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
 }) : '—');
@@ -154,6 +163,13 @@ const BLANK = {
 };
 
 function ScheduleForm({ staff, onCreated, onCancel }) {
+  // The person scheduling is already the host. Offering their own name in the
+  // invite list is offering them a way to demote themselves -- which is
+  // exactly what happened on the first real meeting: the host ticked their
+  // own name, became a PARTICIPANT, and could not admit the people waiting
+  // outside. The server now refuses to demote a host; this stops the screen
+  // asking a question with only one wrong answer.
+  const me = currentUserId();
   const [form, setForm] = useState(BLANK);
   const [invited, setInvited] = useState([]);
   const [err, setErr] = useState('');
@@ -222,9 +238,10 @@ function ScheduleForm({ staff, onCreated, onCancel }) {
       </div>
 
       <Field label="Invite staff"
-        hint="Tap once to invite, again for co-host, a third time to remove.">
+        hint="Tap once to invite, again for co-host, a third time to remove. You are the host and are already in the meeting.">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {(staff || []).map((person) => {
+          {(staff || []).filter((person) => String(person.id) !== me)
+            .map((person) => {
             const mine = invited.find((i) => i.id === person.id);
             return (
               <button key={person.id} type="button"

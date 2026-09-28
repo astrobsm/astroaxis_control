@@ -701,3 +701,63 @@ def test_the_guest_secret_never_falls_back_to_the_session_key(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         svc.guest_secret()
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_a_host_who_invites_themselves_stays_the_host(db):
+    """The first real meeting held with this feature locked its own host out.
+
+    The host ticked their own name in the invite list. create_meeting writes
+    the HOST row first, then upserts every invitee -- and the upsert overwrote
+    HOST with PARTICIPANT. require_host then refused them, so they could not
+    admit the three people waiting outside, and the host panel never rendered
+    because the client is told its role by the server.
+    """
+    host = await _user(db, "Self Inviter")
+    created, _ = await _meeting(
+        db, host,
+        participants=[{"user_id": str(host.id), "role": "PARTICIPANT"}])
+
+    role = await svc.role_for_user(
+        db, meeting_id=uuid.UUID(created["id"]), user_id=host.id)
+    assert role == "HOST", "the host must not be demoted by their own invite"
+
+    assert await svc.require_host(
+        db, meeting_id=uuid.UUID(created["id"]), user=host) == "HOST"
+
+
+@pytest.mark.asyncio
+async def test_a_host_cannot_be_demoted_by_a_later_invitation_either(db):
+    """Same rule on the add-participant path, not only at creation."""
+    host = await _user(db, "Host")
+    created, _ = await _meeting(db, host)
+    meeting_id = uuid.UUID(created["id"])
+
+    await db.execute(
+        text("""INSERT INTO meeting_participants
+                    (id, meeting_id, user_id, role, invited_by)
+                VALUES (gen_random_uuid(), :m, :u, 'PARTICIPANT', :by)
+                ON CONFLICT (meeting_id, user_id) DO UPDATE
+                   SET role = EXCLUDED.role
+                 WHERE meeting_participants.role <> 'HOST'"""),
+        {"m": str(meeting_id), "u": str(host.id), "by": str(host.id)})
+    await db.commit()
+
+    assert await svc.role_for_user(
+        db, meeting_id=meeting_id, user_id=host.id) == "HOST"
+
+
+@pytest.mark.asyncio
+async def test_the_host_joining_is_told_they_are_the_host(db):
+    """The client draws the host panel from this. Wrong here, no panel there."""
+    host = await _user(db, "Host")
+    created, _ = await _meeting(
+        db, host,
+        participants=[{"user_id": str(host.id), "role": "PARTICIPANT"}])
+
+    seat = await svc.internal_join(
+        db, meeting_id=uuid.UUID(created["id"]), user=host)
+    await db.commit()
+
+    assert seat["role"] == "HOST"
+    assert seat["conference"]["moderator"] is True

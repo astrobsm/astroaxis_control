@@ -243,7 +243,8 @@ async def add_participant(
                     (id, meeting_id, user_id, role, invited_by)
                 VALUES (gen_random_uuid(), :m, :u, :r, :by)
                 ON CONFLICT (meeting_id, user_id)
-                DO UPDATE SET role = EXCLUDED.role"""),
+                DO UPDATE SET role = EXCLUDED.role
+                 WHERE meeting_participants.role <> 'HOST'"""),
         {"m": str(meeting_id), "u": str(body.user_id), "r": role,
          "by": str(user.id)})
     await svc.audit(session, event_type="PARTICIPANT_INVITED",
