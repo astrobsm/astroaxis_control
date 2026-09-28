@@ -61,6 +61,22 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('connecting');
 
+  // THE CALLBACKS LIVE IN REFS, AND THAT IS NOT A STYLE CHOICE.
+  //
+  // A parent re-renders for all sorts of reasons and hands down a fresh
+  // onLeave each time. If the effect below depended on those functions it
+  // would tear the meeting down and rebuild it on every one of those
+  // renders -- and because the effect itself calls setStatus when Jitsi
+  // connects, that render is guaranteed. The result was an iframe that
+  // reloaded every few seconds, for ever, saying "Connecting…" each time.
+  //
+  // Holding them in refs means the handlers always call the latest version
+  // while the effect sees a value that never changes.
+  const onLeaveRef = useRef(onLeave);
+  const onEventRef = useRef(onEvent);
+  useEffect(() => { onLeaveRef.current = onLeave; }, [onLeave]);
+  useEffect(() => { onEventRef.current = onEvent; }, [onEvent]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -116,16 +132,16 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
 
         api.addEventListener('videoConferenceJoined', () => {
           setStatus('connected');
-          onEvent && onEvent('joined');
+          onEventRef.current && onEventRef.current('joined');
         });
         api.addEventListener('readyToClose', () => {
-          onEvent && onEvent('left');
-          onLeave && onLeave();
+          onEventRef.current && onEventRef.current('left');
+          onLeaveRef.current && onLeaveRef.current();
         });
         api.addEventListener('participantJoined', () =>
-          onEvent && onEvent('participantJoined'));
+          onEventRef.current && onEventRef.current('participantJoined'));
         api.addEventListener('participantLeft', () =>
-          onEvent && onEvent('participantLeft'));
+          onEventRef.current && onEventRef.current('participantLeft'));
         // Jitsi reports its own connection trouble; surfacing it means the
         // user is told the call is struggling instead of wondering why nobody
         // is answering them.
@@ -143,7 +159,13 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
         apiRef.current = null;
       }
     };
-  }, [conference, onLeave, onEvent]);
+    // Primitives only. `conference` is an object, and an object prop that is
+    // rebuilt on render would restart the meeting just as surely as a
+    // function prop did. These five values are what actually decide which
+    // meeting this is; nothing else should ever tear it down.
+  }, [conference.domain, conference.room, conference.jwt,
+      conference.display_name, conference.can_screen_share,
+      conference.can_chat]);
 
   if (error) {
     return (

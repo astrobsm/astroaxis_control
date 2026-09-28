@@ -214,6 +214,11 @@ export default function MeetingGuestPage({ token }) {
     }
   }, [seat, token]);
 
+  const handleLeave = useCallback(() => {
+    leave();
+    setPhase('left');
+  }, [leave]);
+
   useEffect(() => {
     window.addEventListener('pagehide', leave);
     return () => window.removeEventListener('pagehide', leave);
@@ -246,7 +251,7 @@ export default function MeetingGuestPage({ token }) {
       <MeetingRoom
         conference={seat.conference}
         meeting={seat.meeting}
-        onLeave={() => { leave(); setPhase('left'); }}
+        onLeave={handleLeave}
       />
     );
   }

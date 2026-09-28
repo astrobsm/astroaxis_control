@@ -445,7 +445,7 @@ export default function Meetings() {
     } catch (e) { setErr(e.message); }
   };
 
-  const leave = async () => {
+  const leave = useCallback(async () => {
     if (active && active.attendance_id) {
       try {
         await postJSON(`/api/meetings/attendance/${active.attendance_id}/leave`);
@@ -453,7 +453,7 @@ export default function Meetings() {
     }
     setActive(null);
     await load();
-  };
+  }, [active, load]);
 
   const endMeeting = async (meeting) => {
     if (!window.confirm(`End "${meeting.title}" for everyone?`)) return;
