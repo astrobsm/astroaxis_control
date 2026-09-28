@@ -18,7 +18,7 @@
 // trade is deliberate: a link that can be re-read from the database is a link
 // that leaks with the database.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { authedFetch } from './utils/api';
 import { color, radius, space } from './ui/theme';
 import {
@@ -396,6 +396,216 @@ function HostControls({ meetingId, onError }) {
 }
 
 // ---------------------------------------------------------------------------
+// Host controls, INSIDE the meeting
+// ---------------------------------------------------------------------------
+//
+// This sits above the conference window because that is the only place it is
+// any use. The meeting fills the screen, so a waiting-room control anywhere
+// else is a control the host cannot reach at the one moment it matters --
+// while somebody is knocking.
+//
+// Closed it is a single button. It opens itself when somebody new arrives in
+// the lobby, because a host talking to the room is not watching a button, and
+// a supplier left waiting outside a meeting they were invited to is the
+// failure this whole panel exists to prevent.
+
+function InMeetingHostPanel({ meetingId, onError }) {
+  const [open, setOpen] = useState(false);
+  const [waiting, setWaiting] = useState([]);
+  const [inRoom, setInRoom] = useState([]);
+  const [busy, setBusy] = useState(null);
+  const announced = useRef(0);
+
+  const load = useCallback(async () => {
+    try {
+      const body = await getJSON(`/api/meetings/${meetingId}/waiting`);
+      const queue = body.waiting || [];
+      setWaiting(queue);
+      setInRoom(body.in_meeting || []);
+      // Opens on a NEW arrival only. Re-opening a panel the host deliberately
+      // closed, every five seconds, while the same person waits, would be
+      // worse than saying nothing.
+      if (queue.length > announced.current) setOpen(true);
+      announced.current = queue.length;
+    } catch (e) { onError && onError(e.message); }
+  }, [meetingId, onError]);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const decide = async (waitingId, admit) => {
+    setBusy(waitingId);
+    try {
+      await postJSON(`/api/meetings/${meetingId}/waiting/${waitingId}`, { admit });
+      await load();
+    } catch (e) { onError && onError(e.message); }
+    finally { setBusy(null); }
+  };
+
+  const remove = async (attendanceId, name) => {
+    if (!window.confirm(`Remove ${name} from the meeting?`)) return;
+    setBusy(attendanceId);
+    try {
+      await postJSON(
+        `/api/meetings/${meetingId}/participants/${attendanceId}/remove`);
+      await load();
+    } catch (e) { onError && onError(e.message); }
+    finally { setBusy(null); }
+  };
+
+  const pill = {
+    position: 'fixed', top: 58, right: 14, zIndex: 10001,
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '9px 15px', borderRadius: 22, cursor: 'pointer',
+    border: 'none', fontSize: 13.5, fontWeight: 700,
+    fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    background: waiting.length ? '#B45309' : 'rgba(255,255,255,0.18)',
+    color: '#fff', boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+  };
+
+  if (!open) {
+    return (
+      <button style={pill} onClick={() => setOpen(true)}
+        aria-label={waiting.length
+          ? `${waiting.length} waiting to be admitted` : 'Host controls'}>
+        {waiting.length > 0 && (
+          <span aria-hidden="true" style={{
+            width: 9, height: 9, borderRadius: '50%', background: '#fff',
+          }} />
+        )}
+        {waiting.length > 0
+          ? `${waiting.length} waiting` : `Participants (${inRoom.length})`}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 10001,
+      width: 'min(370px, 100vw)', background: '#fff',
+      boxShadow: '-6px 0 24px rgba(0,0,0,0.3)', display: 'flex',
+      flexDirection: 'column',
+      fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', padding: '12px 14px',
+        borderBottom: `1px solid ${color.border}`, flexShrink: 0,
+      }}>
+        <strong style={{ fontSize: 14.5 }}>Host controls</strong>
+        <button onClick={() => setOpen(false)} aria-label="Close host controls"
+          style={{
+            marginLeft: 'auto', border: 'none', background: 'transparent',
+            fontSize: 24, lineHeight: 1, cursor: 'pointer',
+            color: color.textMuted,
+          }}>&times;</button>
+      </div>
+
+      <div style={{ overflowY: 'auto', padding: 14, flex: 1 }}>
+        <div style={{
+          fontSize: 11.5, fontWeight: 700, color: color.textSecondary,
+          textTransform: 'uppercase', letterSpacing: '0.05em',
+          marginBottom: 8,
+        }}>
+          Waiting to be let in ({waiting.length})
+        </div>
+
+        {waiting.length === 0 ? (
+          <div style={{ fontSize: 13, color: color.textMuted, marginBottom: 20 }}>
+            Nobody is waiting.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 8, marginBottom: 20 }}>
+            {waiting.map((w) => (
+              <div key={w.id} style={{
+                border: `1px solid ${color.border}`, borderRadius: 9,
+                padding: 11, background: '#FFFBEB',
+              }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+                  {w.display_name}
+                </div>
+                <div style={{ fontSize: 11.5, color: color.textSecondary,
+                  marginTop: 2 }}>
+                  {w.is_guest ? 'Outside guest' : 'Staff'} &middot; asked{' '}
+                  {when(w.requested_at)}
+                </div>
+                <div style={{ display: 'flex', gap: 7, marginTop: 9 }}>
+                  <button disabled={busy === w.id}
+                    onClick={() => decide(w.id, true)} style={{
+                      flex: 1, padding: '8px 0', borderRadius: 7, border: 'none',
+                      background: '#16A34A', color: '#fff', fontWeight: 700,
+                      fontSize: 13, cursor: 'pointer',
+                      opacity: busy === w.id ? 0.5 : 1,
+                    }}>Admit</button>
+                  <button disabled={busy === w.id}
+                    onClick={() => decide(w.id, false)} style={{
+                      flex: 1, padding: '8px 0', borderRadius: 7,
+                      border: `1px solid ${color.borderStrong}`,
+                      background: '#fff', color: color.textSecondary,
+                      fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                      opacity: busy === w.id ? 0.5 : 1,
+                    }}>Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{
+          fontSize: 11.5, fontWeight: 700, color: color.textSecondary,
+          textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8,
+        }}>
+          In the meeting ({inRoom.length})
+        </div>
+
+        {inRoom.length === 0 ? (
+          <div style={{ fontSize: 13, color: color.textMuted }}>
+            Nobody has joined yet.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 6 }}>
+            {inRoom.map((p) => (
+              <div key={p.id} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                border: `1px solid ${color.border}`, borderRadius: 8,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600,
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap' }}>{p.display_name}</div>
+                  <div style={{ fontSize: 11, color: color.textMuted }}>
+                    {p.is_guest ? 'Guest' : 'Staff'} &middot; {p.role}
+                  </div>
+                </div>
+                {p.role !== 'HOST' && (
+                  <button disabled={busy === p.id}
+                    onClick={() => remove(p.id, p.display_name)} style={{
+                      marginLeft: 'auto', padding: '6px 11px', borderRadius: 7,
+                      border: `1px solid ${color.borderStrong}`,
+                      background: '#fff', color: '#B91C1C', fontSize: 12,
+                      fontWeight: 600, cursor: 'pointer', flexShrink: 0,
+                    }}>Remove</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ fontSize: 11.5, color: color.textMuted, marginTop: 16,
+          lineHeight: 1.6 }}>
+          Removing closes that attendance record. Ejecting somebody from the
+          live call is done with the participant controls inside the meeting
+          window itself.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // The screen
 // ---------------------------------------------------------------------------
 
@@ -502,10 +712,21 @@ export default function Meetings() {
   };
 
   if (active) {
+    // The host panel is rendered ON TOP of the meeting, not beside it.
+    //
+    // MeetingRoom covers the screen, so anything left on the page behind it is
+    // unreachable -- which is where the admit and remove controls used to
+    // live. A waiting-room control a host cannot reach while they are in the
+    // meeting is a control that does not exist: the only moment it is needed
+    // is the moment somebody is knocking.
+    const canHost = ['HOST', 'CO_HOST'].includes(active.role);
     return (
       <>
         <MeetingRoom conference={active.conference} meeting={active.meeting}
           onLeave={leave} />
+        {canHost && (
+          <InMeetingHostPanel meetingId={active.meeting.id} onError={setErr} />
+        )}
       </>
     );
   }
