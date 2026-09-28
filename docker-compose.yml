@@ -54,6 +54,18 @@ services:
       JAAS_APP_ID: ${JAAS_APP_ID:-}
       JAAS_API_KEY: ${JAAS_API_KEY:-}
       JAAS_PRIVATE_KEY: ${JAAS_PRIVATE_KEY:-}
+
+      # The field portal. FIELD_PORTAL_SECRET signs the session a
+      # distributor's marketer holds, and like MEETING_GUEST_SECRET it is
+      # deliberately a THIRD key. These people work for Penacea and
+      # Tripleluminance, not for this company; a token of theirs must not be
+      # a valid signature anywhere else in the system. There is no default --
+      # the portal returns 503 rather than quietly falling back to SECRET_KEY.
+      FIELD_PORTAL_SECRET: ${FIELD_PORTAL_SECRET:-}
+      # How long a marketer stays signed in, and how long their recorded
+      # positions are kept before the purge deletes them.
+      FIELD_SESSION_HOURS: ${FIELD_SESSION_HOURS:-12}
+      FIELD_LOCATION_RETENTION_DAYS: ${FIELD_LOCATION_RETENTION_DAYS:-90}
     depends_on:
       db:
         condition: service_healthy

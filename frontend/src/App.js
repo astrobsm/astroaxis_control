@@ -7,6 +7,7 @@ import WifiLogin from './WifiLogin';
 import DistributorOrderPage from './DistributorOrderPage';
 import DistributorRegistrationPage from './DistributorRegistrationPage';
 import MeetingGuestPage from './MeetingGuestPage';
+import FieldPortal from './FieldPortal';
 import API_BASE_URL from './config';
 import { isPushSupported, getNotificationPermission, subscribeToPush } from './utils/pushNotifications';
 import './styles.css';
@@ -205,6 +206,16 @@ function App() {
       && window.location.pathname.startsWith('/meet/')) {
     const meetToken = window.location.pathname.slice('/meet/'.length);
     if (meetToken) return <MeetingGuestPage token={meetToken} />;
+  }
+
+  // The field portal -- /field and /field/join/<token>. Before the auth gate,
+  // and this one stays outside it permanently: the people who use it are a
+  // distributor's own marketers, they hold a token signed with a different
+  // key, and no router in the ERP accepts it. Showing them the staff login
+  // would be showing them a door that does not open for them.
+  if (typeof window !== 'undefined'
+      && window.location.pathname.startsWith('/field')) {
+    return <FieldPortal path={window.location.pathname} />;
   }
 
   // Captive portal route — render the Wi-Fi login page regardless of app auth.

@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream, performance, inbox, command_centre, recalls, security_review, meetings
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream, performance, inbox, command_centre, recalls, security_review, meetings, field
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -129,6 +129,11 @@ try:
     app.include_router(profits.router)
     app.include_router(telephony_webhook.router)
     app.include_router(portal.router)
+    # field: distributor marketers, with accounts of their own. NOT public --
+    # every route but sign-in and invite-registration requires a field token,
+    # checked inside the router. It is mounted here rather than in the authed
+    # block because a Bonnesante staff session must NOT be accepted on it.
+    app.include_router(field.router)
 
     # --- Admin only -------------------------------------------------------
     app.include_router(permissions.router, dependencies=admin_only)
@@ -256,6 +261,29 @@ async def _start_auto_clockout_scheduler():
 @app.on_event("shutdown")
 async def _stop_auto_clockout_scheduler():
     task = getattr(app.state, "_auto_clockout_task", None)
+    if task:
+        task.cancel()
+
+
+# Background scheduler: delete field marketers' expired position rows.
+#
+# Their consent was given on the promise of a retention limit. This is what
+# keeps that promise, and it runs here rather than in a cron entry so it
+# cannot be lost the next time the server is rebuilt.
+@app.on_event("startup")
+async def _start_field_purge_scheduler():
+    try:
+        import asyncio
+        from app.services.field_portal import purge_scheduler
+        app.state._field_purge_task = asyncio.create_task(purge_scheduler())
+        print("✅ Field location purge scheduler started (daily)")
+    except Exception as e:
+        print(f"❌ Failed to start field purge scheduler: {e}")
+
+
+@app.on_event("shutdown")
+async def _stop_field_purge_scheduler():
+    task = getattr(app.state, "_field_purge_task", None)
     if task:
         task.cancel()
 

@@ -43,14 +43,27 @@ router = APIRouter(prefix="/api/security", tags=["Security review"])
 
 # The routers this review covers. The rest of the ERP predates this work and is
 # reported separately rather than silently included in a clean-looking total.
+# The surfaces this report audits closely. Everything the distributor module
+# reaches, plus the field portal -- which is not part of that module but is
+# the only place in the application where people who do not work for this
+# company hold credentials, so it is the last surface that should go
+# unexamined.
 DISTRIBUTION_PREFIXES = (
     "/api/geography", "/api/distributors", "/api/portal", "/api/batches",
     "/api/downstream", "/api/performance", "/api/inbox", "/api/command-centre",
-    "/api/recalls",
+    "/api/recalls", "/api/field",
 )
 
 # Public BY DESIGN. Anything reaching this list has to be justified here, in
 # the code, where a reviewer will see it.
+# Imported lazily: app.api.field imports the service layer, and a circular
+# import here would break the permissions report rather than the portal.
+try:
+    from app.api.field import current_marketer as _current_marketer
+except Exception:                                        # pragma: no cover
+    _current_marketer = None
+
+
 EXPECTED_PUBLIC = {
     ("GET", "/api/portal/{token}"): (
         "The distributor opens their ordering page. The long random token in "
@@ -101,6 +114,20 @@ EXPECTED_PUBLIC = {
     ("POST", "/api/portal/meet/{token}/leave/{attendance_id}"): (
         "Closes the guest's own attendance row when they leave. The token is "
         "resolved first, so it cannot close a row in another meeting."),
+
+    # The field portal's own front door. Everything else under /api/field
+    # classifies as FIELD -- authenticated against a separate key, reaching
+    # nothing outside that router.
+    ("GET", "/api/field/join/{token}"): (
+        "Opens a distributor's field-team invitation. Returns the "
+        "distributor's name and nothing else, so a guessed link reveals no "
+        "commercial information."),
+    ("POST", "/api/field/join/{token}"): (
+        "Creates a marketer account on the distributor named by the link. "
+        "Creates no users row and grants nothing outside /api/field."),
+    ("POST", "/api/field/sign-in"): (
+        "The field portal's sign-in. Answers identically for an unknown "
+        "number and a wrong password, and locks after repeated failures."),
 }
 
 
@@ -143,6 +170,13 @@ def _classify(calls: set) -> str:
         return "DISTRIBUTION"
     if require_authenticated_user in calls:
         return "AUTHENTICATED"
+    # The field portal authenticates distributor marketers against a different
+    # key entirely, so its guard is not require_authenticated_user and would
+    # otherwise be reported as no guard at all. FIELD is a real and much
+    # narrower level than AUTHENTICATED: it reaches nothing outside
+    # /api/field, and a staff session cannot be used on it.
+    if _current_marketer is not None and _current_marketer in calls:
+        return "FIELD"
     return "PUBLIC"
 
 

@@ -346,6 +346,16 @@ async def test_an_item_disappears_when_the_problem_is_fixed(db):
     assert f"recalled_stock:{bid}" not in {i["key"] for i in after["items"]}
 
 
+# A record of something that was actually DONE is not a stored notification.
+# `recall_notifications` is the log of having contacted a named distributor or
+# customer about a recall -- an event, and one the regulator can ask this
+# company to produce. The rule below is about the other thing: a derived
+# feed, cached as rows, which begins disagreeing with reality the moment the
+# underlying fact changes. Anything added to this set needs the same argument
+# made for it in writing.
+NOT_A_STORED_FEED = {"recall_notifications"}
+
+
 @pytest.mark.asyncio
 async def test_there_is_no_notifications_table(db):
     """A stored copy of a fact starts rotting the moment it is written."""
@@ -355,7 +365,8 @@ async def test_there_is_no_notifications_table(db):
                    AND (table_name LIKE '%notification%'
                         OR table_name LIKE '%alert%'
                         OR table_name LIKE '%inbox%')"""))).scalars().all()
-    assert tables == [], f"unexpected stored-notification tables: {tables}"
+    stored = [t for t in tables if t not in NOT_A_STORED_FEED]
+    assert stored == [], f"unexpected stored-notification tables: {stored}"
 
 
 @pytest.mark.asyncio

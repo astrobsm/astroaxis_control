@@ -1,4 +1,4 @@
-# Build and deploy to production.
+﻿# Build and deploy to production.
 #
 #   .\deploy.ps1              build the frontend, upload, restart, verify
 #   .\deploy.ps1 -Check       read-only: what is on the droplet right now
@@ -191,6 +191,16 @@ $backendFiles = @(
     # than merely hiding the module.
     'backend/app/services/meetings.py',
     'backend/app/api/meetings.py',
+
+    'backend/alembic/versions/l7890123456k_field_portal.py',
+
+    # The field portal. Same reasoning as meetings: main.py imports
+    # app.api.field, so these travel together or the API will not start.
+    # FIELD_PORTAL_SECRET must be in the droplet .env before this ships --
+    # without it the portal answers 503 rather than signing tokens with a
+    # key that also opens the ERP.
+    'backend/app/services/field_portal.py',
+    'backend/app/api/field.py',
 
     'backend/requirements.txt'
 )

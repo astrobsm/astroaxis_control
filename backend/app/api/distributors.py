@@ -31,6 +31,7 @@ from app.models import User
 from app.services import compliance as csvc
 from app.services import portal
 from app.services import registration as reg
+from app.services import field_portal as fsvc
 from app.services import distributors as svc
 
 router = APIRouter(prefix="/api/distributors", tags=["Distributors"])
@@ -1245,3 +1246,122 @@ async def distributor_orders(
     rows = await portal.distributor_orders(
         session, distributor_id=distributor_id, limit=limit)
     return {"orders": _rows(rows)}
+
+
+# ---------------------------------------------------------------------------
+# The field portal: a distributor's own marketers
+#
+# The marketers themselves sign in at /api/field with an account of their own.
+# These routes are the Bonnesante side: issuing the invitation, setting the
+# distributor's price list, and reading what the team has been doing.
+#
+# All behind require_distribution_access, like the rest of the distributor
+# register: what a distributor's field team is achieving is commercial
+# information about that distributor.
+# ---------------------------------------------------------------------------
+
+class FieldInviteIn(BaseModel):
+    label: str = Field(..., min_length=3, max_length=160)
+    valid_days: int = Field(14, ge=1, le=90)
+    max_uses: Optional[int] = Field(None, ge=1, le=500)
+
+
+class PriceIn(BaseModel):
+    product_id: UUID
+    unit: str = Field("unit", max_length=32)
+    price: Decimal = Field(..., ge=0)
+    note: Optional[str] = None
+
+
+@router.post("/{distributor_id}/field/invites", status_code=201)
+async def issue_field_invite(
+    distributor_id: UUID,
+    body: FieldInviteIn,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """A link this distributor's marketers use to create their accounts.
+
+    Admin only. It creates logins on a distributor record, which is a heavier
+    act than reading one.
+    """
+    result = await fsvc.issue_invite(
+        session, distributor_id=distributor_id, label=body.label,
+        valid_days=body.valid_days, max_uses=body.max_uses, actor=user)
+    await session.commit()
+    return result
+
+
+@router.post("/{distributor_id}/field/prices", status_code=201)
+async def set_field_price(
+    distributor_id: UUID,
+    body: PriceIn,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    """Set what this distributor sells a product for.
+
+    Pricing is also the range: a product with a live price here is one this
+    distributor's marketers can see and quote, and one without simply is not
+    in their catalogue.
+    """
+    result = await fsvc.set_price(
+        session, distributor_id=distributor_id, product_id=body.product_id,
+        unit=body.unit, price=body.price, note=body.note, actor=user)
+    await session.commit()
+    return result
+
+
+@router.get("/{distributor_id}/field/prices")
+async def get_field_prices(
+    distributor_id: UUID,
+    include_history: bool = False,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    return {"prices": await fsvc.price_list(
+        session, distributor_id=distributor_id,
+        include_history=include_history)}
+
+
+@router.get("/{distributor_id}/field/team")
+async def field_team(
+    distributor_id: UUID,
+    days: int = 30,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every marketer on this distributor and what they have been doing."""
+    return {"team": _rows(await fsvc.team_activity(
+        session, distributor_id=distributor_id, days=days))}
+
+
+@router.get("/{distributor_id}/field/trail/{marketer_id}")
+async def field_trail(
+    distributor_id: UUID,
+    marketer_id: UUID,
+    on: Optional[date] = None,
+    user: User = Depends(require_distribution_access),
+    session: AsyncSession = Depends(get_session),
+):
+    """One marketer's movements for one day.
+
+    Scoped by distributor in the WHERE clause as well as the path, so a
+    marketer id belonging to another distributor returns nothing rather than
+    somebody else's trail.
+    """
+    rows = (await session.execute(
+        text("""SELECT latitude, longitude, accuracy_m, speed_mps, recorded_at,
+                       captured_while_working
+                  FROM field_marketer_locations
+                 WHERE marketer_id = :m AND distributor_id = :d
+                   AND recorded_at::date = COALESCE(:on, CURRENT_DATE)
+                 ORDER BY recorded_at"""),
+        {"m": str(marketer_id), "d": str(distributor_id), "on": on})
+    ).mappings().all()
+    return {
+        "points": _rows(rows),
+        "note": ("Recorded only while the marketer was working and only with "
+                 "their agreement. Kept for "
+                 f"{fsvc.LOCATION_RETENTION_DAYS} days, then deleted."),
+    }

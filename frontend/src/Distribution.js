@@ -23,6 +23,7 @@ import { OrderingPanel } from './DistributorOrdering';
 import { DownstreamPanel } from './DownstreamSales';
 import { PerformancePanel } from './Performance';
 import { RegistrationDesk } from './DistributorRegistrations';
+import { FieldTeamPanel } from './FieldTeam';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -543,7 +544,7 @@ function Dossier({ distributorId, territories, onClose, onChanged }) {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: space(2) }}>
         {[['profile', 'Profile'], ['territory', 'Territory'],
           ['ordering', 'Ordering'], ['downstream', 'Sell-through'],
-          ['performance', 'Performance'],
+          ['performance', 'Performance'], ['field', 'Field team'],
           ['compliance', 'Facility & agreement']].map(([k, label]) => (
           <button key={k} onClick={() => setPane(k)} style={{
             padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5, fontWeight: 600,
@@ -563,6 +564,10 @@ function Dossier({ distributorId, territories, onClose, onChanged }) {
       {pane === 'ordering' && (
         <OrderingPanel distributorId={distributorId}
           distributorStatus={d.status} />
+      )}
+
+      {pane === 'field' && (
+        <FieldTeamPanel distributorId={distributorId} />
       )}
 
       {pane === 'downstream' && (

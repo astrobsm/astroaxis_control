@@ -158,18 +158,24 @@ def test_the_public_routes_are_only_the_portal():
     a number and fails here.
     """
     for method, path in EXPECTED_PUBLIC:
-        assert path.startswith("/api/portal/"), (
+        assert path.startswith("/api/portal/") or path.startswith("/api/field/"), (
             f"{method} {path} is public but is not part of the portal")
 
     registration = {p for _, p in EXPECTED_PUBLIC
                     if p.startswith("/api/portal/register")}
     meeting = {p for _, p in EXPECTED_PUBLIC
                if p.startswith("/api/portal/meet/")}
-    ordering = {p for _, p in EXPECTED_PUBLIC} - registration - meeting
+    field = {p for _, p in EXPECTED_PUBLIC if p.startswith("/api/field/")}
+    ordering = ({p for _, p in EXPECTED_PUBLIC}
+                - registration - meeting - field)
 
     assert len(ordering) == 3, sorted(ordering)
     assert registration, "the registration form should be public"
     assert len(meeting) == 4, sorted(meeting)
+    # Two PATHS -- /join/{token} is public for both GET and POST, and this
+    # set is of paths, not of method-and-path pairs. Everything else in the
+    # portal must be behind a field token.
+    assert len(field) == 2, sorted(field)
 
     for key, reason in EXPECTED_PUBLIC.items():
         assert len(reason) > 40, f"{key} needs a real justification, not a label"
@@ -197,15 +203,34 @@ def test_the_public_registration_cannot_search_customers_by_name():
 
 
 def test_everything_that_changes_data_needs_more_than_a_login():
-    """No write in this module is reachable by an unauthenticated caller."""
+    """No write is reachable by an unauthenticated caller, bar named doors.
+
+    The portal's writes are public by design -- the link IS the credential --
+    and the field portal has exactly two more: creating an account from an
+    invitation, and signing in. A sign-in cannot require a session, and an
+    account cannot be created by the person who does not yet have one.
+
+    They are listed by name rather than by prefix. A third public write
+    appearing under /api/field would fail this, which is the point: that is
+    the surface where people who do not work for this company hold
+    credentials.
+    """
+    FIELD_FRONT_DOORS = {
+        ("POST", "/api/field/join/{token}"),
+        ("POST", "/api/field/sign-in"),
+    }
+
     writes = [r for r in _distribution_routes()
               if r["method"] in ("POST", "PUT", "PATCH", "DELETE")]
     assert writes, "the walk found no write routes, so it is not working"
 
     unguarded = [r for r in writes if r["requires"] == "PUBLIC"]
-    portal_only = all(r["path"].startswith("/api/portal/") for r in unguarded)
-    assert portal_only, (
-        f"unauthenticated writes outside the portal: {unguarded}")
+    unexpected = [r for r in unguarded
+                  if not r["path"].startswith("/api/portal/")
+                  and (r["method"], r["path"]) not in FIELD_FRONT_DOORS]
+    assert unexpected == [], (
+        f"unauthenticated writes outside the portal and the field "
+        f"front doors: {unexpected}")
 
 
 def test_the_destructive_actions_are_admin_only():
