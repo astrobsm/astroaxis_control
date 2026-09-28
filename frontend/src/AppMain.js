@@ -255,6 +255,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  const [transferForm, setTransferForm] = useState({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', quantity: '', reason: '', notes: '' });
  const [showTransferForm, setShowTransferForm] = useState(false);
  const [transferLoading, setTransferLoading] = useState(false);
+ const [transferError, setTransferError] = useState('');
 
  // Returned Products Module state
  const [returnsList, setReturnsList] = useState([]);
@@ -4981,11 +4982,18 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <div className="modal" style={{maxWidth:600}}>
  <div className="modal-header">
  <div className="modal-header-left"><img src="/company-logo.png" alt="AstroBSM" className="modal-logo" onError={(e) => { e.target.style.display = 'none'; }}/><h3>New Warehouse Transfer</h3></div>
- <button className="modal-close" onClick={() => setShowTransferForm(false)}>x</button>
+ <button className="modal-close" onClick={() => { setTransferError(''); setShowTransferForm(false); }}>x</button>
  </div>
  <div className="modal-content">
+ {transferError && (
+ <div role="alert" style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderLeft:'4px solid #DC2626',borderRadius:8,padding:'12px 14px',marginBottom:16,color:'#7F1D1D',fontSize:14,lineHeight:1.6}}>
+ <strong style={{display:'block',marginBottom:2}}>Transfer not completed</strong>
+ {transferError}
+ </div>
+ )}
  <form onSubmit={async (e) => {
  e.preventDefault();
+ setTransferError('');
  setTransferLoading(true);
  try {
  const token = localStorage.getItem('access_token');
@@ -5005,10 +5013,15 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  const d = await res.json();
  if (!res.ok) throw new Error(d.detail || 'Transfer failed');
  notify(d.message, 'success');
+ setTransferError('');
  setShowTransferForm(false);
  fetchTransfers();
  fetchTransferSummary();
- } catch (err) { notify(err.message, 'error'); }
+ // Shown inside the dialog as well as in a toast. A toast about a form is
+ // read at the far corner of the screen, away from the thing it is about,
+ // and it disappears; the reason a transfer was refused belongs next to the
+ // button that was refused.
+ } catch (err) { setTransferError(err.message); notify(err.message, 'error'); }
  finally { setTransferLoading(false); }
  }}>
  <div className="form-row">

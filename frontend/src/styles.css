@@ -1257,7 +1257,12 @@ h1, h2, h3,
 }
 
 /* Notifications */
-.notifications-panel { position: fixed; right: 16px; top: 80px; display: flex; flex-direction: column; gap: 10px; z-index: 40; }
+/* 3000: ABOVE dialogs (2000). Toasts were at 40, so every error raised while
+   a dialog was open -- which is most of them, because dialogs are where forms
+   are submitted -- was drawn underneath it. The user saw a button that did
+   nothing and reported the feature as broken, while the server had in fact
+   said exactly what was wrong. */
+.notifications-panel { position: fixed; right: 16px; top: 80px; display: flex; flex-direction: column; gap: 10px; z-index: 3000; }
 .notification { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: var(--radius-lg); border: 1px solid var(--gray-200); background: #fff; box-shadow: var(--shadow-sm); min-width: 260px; }
 .notification.info { border-color: var(--blue-500); }
 .notification.success { border-color: var(--emerald-500); }
