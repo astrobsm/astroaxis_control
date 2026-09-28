@@ -49,6 +49,11 @@ class ParticipantIn(BaseModel):
 
 class MeetingIn(BaseModel):
     title: str = Field(..., min_length=2, max_length=255)
+    # Who runs the meeting. Defaults to whoever is scheduling it; naming
+    # somebody else makes them host and keeps the scheduler as a co-host, so
+    # the meeting is never handed over to a person who does not know they have
+    # it while the person who arranged it can no longer touch it.
+    host_user_id: Optional[UUID] = None
     scheduled_start: datetime
     duration_minutes: int = Field(60, ge=1, le=1440)
     description: Optional[str] = None
@@ -115,6 +120,30 @@ async def config(user: User = Depends(require_authenticated_user)):
     }
 
 
+@router.get("/colleagues")
+async def colleagues(
+    user: User = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Who can be invited to a meeting, or made its host.
+
+    Exists because /api/auth/users is admin-only, and scheduling a meeting is
+    not an administrative act -- a sales rep arranging a call with a customer
+    needs to name their colleagues. Without this they saw an empty list and
+    could invite nobody.
+
+    Names and ids only. Not emails, not roles, not phone numbers: the screen
+    needs to put a person in a list, and anything more would be a staff
+    directory handed to every login for no reason.
+    """
+    rows = (await session.execute(
+        text("""SELECT id, full_name FROM users
+                 WHERE COALESCE(is_active, TRUE) AND NOT COALESCE(is_locked, FALSE)
+                 ORDER BY full_name"""))).mappings().all()
+    return {"colleagues": [{"id": str(r["id"]), "full_name": r["full_name"]}
+                           for r in rows]}
+
+
 @router.get("")
 async def list_meetings(
     scope: str = "mine",
@@ -168,11 +197,17 @@ async def create_meeting(
     user: User = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Schedule a meeting. Any signed-in member of staff may hold one."""
+    """Schedule a meeting. Any signed-in member of staff may hold one.
+
+    The host defaults to the caller. Naming somebody else is allowed and is
+    ordinary practice -- an assistant arranges the management meeting -- and
+    the caller stays on it as a co-host so the meeting they arranged does not
+    become unreachable to them.
+    """
     result = await svc.create_meeting(
         session, title=body.title, scheduled_start=body.scheduled_start,
         duration_minutes=body.duration_minutes, description=body.description,
-        host_user_id=user.id,
+        host_user_id=body.host_user_id or user.id,
         participants=[p.model_dump(mode="json") for p in body.participants],
         guest_access_enabled=body.guest_access_enabled,
         waiting_room=body.waiting_room,

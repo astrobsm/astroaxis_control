@@ -306,6 +306,24 @@ async def create_meeting(
         raise HTTPException(status_code=400,
                             detail=f"Link validity must be 1-{MAX_LINK_DAYS} days.")
 
+    # The host need not be whoever is at the keyboard. An assistant schedules
+    # the management meeting; the managing director hosts it. So the named
+    # host is checked to be a real, usable account rather than trusted from
+    # the form -- a meeting whose host is a deactivated user has nobody who
+    # can admit anyone.
+    host = (await session.execute(
+        text("SELECT id, full_name, is_active, is_locked FROM users "
+             "WHERE id = :u"),
+        {"u": str(host_user_id)})).mappings().first()
+    if host is None:
+        raise HTTPException(status_code=400,
+                            detail="That host is not a user of this system.")
+    if host["is_active"] is False or host["is_locked"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{host['full_name']} cannot host a meeting: that account "
+                    f"is not active."))
+
     meeting_id = uuid4()
     token = secrets.token_urlsafe(32)
 
@@ -351,6 +369,21 @@ async def create_meeting(
         {"m": str(meeting_id), "u": str(host_user_id),
          "by": str(actor.id) if actor else None})
 
+    # Somebody who schedules a meeting for a colleague keeps co-host rights on
+    # it. Without this they would hand the meeting over and immediately lose
+    # the ability to correct the time, re-issue the link or cancel it -- and
+    # the only person who could would be the host, who may not know they were
+    # given it yet.
+    if actor is not None and str(actor.id) != str(host_user_id):
+        await session.execute(
+            text("""INSERT INTO meeting_participants
+                        (id, meeting_id, user_id, role, invited_by)
+                    VALUES (gen_random_uuid(), :m, :u, 'CO_HOST', :by)
+                    ON CONFLICT (meeting_id, user_id) DO UPDATE
+                       SET role = 'CO_HOST'
+                     WHERE meeting_participants.role <> 'HOST'"""),
+            {"m": str(meeting_id), "u": str(actor.id), "by": str(actor.id)})
+
     for entry in (participants or []):
         role = (entry.get("role") or "PARTICIPANT").upper()
         if role not in ("CO_HOST", "PARTICIPANT"):
@@ -368,13 +401,19 @@ async def create_meeting(
     await audit(session, event_type="MEETING_CREATED", meeting_id=meeting_id,
                 actor=actor, detail={"title": title.strip(),
                                      "guest_access": guest_access_enabled,
-                                     "waiting_room": waiting_room})
+                                     "waiting_room": waiting_room,
+                                     "host": str(host_user_id),
+                                     "hosted_by_someone_else": bool(
+                                         actor is not None
+                                         and str(actor.id) != str(host_user_id))})
 
     return {
         "id": str(meeting_id),
         "join_url": f"{public_base_url()}/meet/{token}",
         "link_expires_at": (_now() + timedelta(days=link_days)).isoformat(),
         "guest_access_enabled": guest_access_enabled,
+        "waiting_room": waiting_room,
+        "host_name": host["full_name"],
         "secured_by": "signature" if jaas_configured() else "unguessable-link",
     }
 

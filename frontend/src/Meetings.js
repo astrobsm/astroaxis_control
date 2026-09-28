@@ -158,8 +158,9 @@ function LinkPanel({ joinUrl, invitation, expiresAt, securedBy }) {
 
 const BLANK = {
   title: '', description: '', scheduled_start: '', duration_minutes: 60,
-  guest_access_enabled: true, waiting_room: true, guest_screen_share: false,
-  guest_chat: true, max_participants: 50, passcode: '',
+  host_user_id: '', guest_access_enabled: true, waiting_room: true,
+  guest_screen_share: false, guest_chat: true, max_participants: 50,
+  passcode: '',
 };
 
 function ScheduleForm({ staff, onCreated, onCancel }) {
@@ -192,6 +193,9 @@ function ScheduleForm({ staff, onCreated, onCancel }) {
       };
       if (!body.passcode) delete body.passcode;
       if (!body.description) delete body.description;
+      // Blank means "me", and the server defaults to the caller. Sending an
+      // empty string would be sending a user id that is not one.
+      if (!body.host_user_id) delete body.host_user_id;
       onCreated(await postJSON('/api/meetings', body));
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -237,10 +241,58 @@ function ScheduleForm({ staff, onCreated, onCancel }) {
         </div>
       </div>
 
-      <Field label="Invite staff"
-        hint="Tap once to invite, again for co-host, a third time to remove. You are the host and are already in the meeting.">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      <Field label="Host"
+        hint="Whoever runs the meeting: admits people, ends it, manages the link. Choose somebody else and you stay on it as a co-host, so you can still change or cancel what you arranged.">
+        <select style={input} value={form.host_user_id}
+          onChange={set('host_user_id')}>
+          <option value="">Me</option>
           {(staff || []).filter((person) => String(person.id) !== me)
+            .map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.full_name}
+              </option>
+            ))}
+        </select>
+      </Field>
+
+      <Field label="How people get in">
+        <div style={{ display: 'grid', gap: space(1) }}>
+          {[
+            [false, 'Let everyone join straight away',
+              'Anybody with the link walks in. Simplest, and right for a team '
+              + 'meeting or a training session.'],
+            [true, 'Hold guests in a waiting room until I admit them',
+              'You approve each outside guest as they arrive. Staff who are '
+              + 'signed in always join directly.'],
+          ].map(([value, label, hint]) => (
+            <label key={String(value)} style={{
+              display: 'flex', gap: 10, alignItems: 'flex-start',
+              cursor: 'pointer', padding: space(1.5),
+              border: `1px solid ${form.waiting_room === value
+                ? color.medical : color.border}`,
+              background: form.waiting_room === value ? color.infoBg : '#fff',
+              borderRadius: radius.md,
+            }}>
+              <input type="radio" name="joinMode" style={{ marginTop: 3 }}
+                checked={form.waiting_room === value}
+                onChange={() => setForm((f) => ({ ...f, waiting_room: value }))} />
+              <span>
+                <span style={{ fontSize: 13.5, fontWeight: 600 }}>{label}</span>
+                <span style={{ display: 'block', fontSize: 12,
+                  color: color.textSecondary, marginTop: 2, lineHeight: 1.5 }}>
+                  {hint}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Invite staff"
+        hint="Tap once to invite, again for co-host, a third time to remove. The host is already in the meeting.">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {(staff || []).filter((person) => String(person.id) !== me
+            && String(person.id) !== String(form.host_user_id))
             .map((person) => {
             const mine = invited.find((i) => i.id === person.id);
             return (
@@ -265,7 +317,6 @@ function ScheduleForm({ staff, onCreated, onCancel }) {
       <div style={{ display: 'grid', gap: space(1) }}>
         {[
           ['guest_access_enabled', 'Allow people outside the company to join by link'],
-          ['waiting_room', 'Hold them in a waiting room until I admit them'],
           ['guest_chat', 'Let guests use the meeting chat'],
           ['guest_screen_share', 'Let guests share their screen'],
         ].map(([key, label]) => (
@@ -658,9 +709,11 @@ export default function Meetings() {
   useEffect(() => {
     // Only needed when scheduling, so it is not fetched on every visit.
     if (!scheduling || staff.length) return;
-    getJSON('/api/auth/users').then((u) => setStaff(
-      (Array.isArray(u) ? u : u.users || []).filter((x) => x.is_active !== false)
-    )).catch(() => setStaff([]));
+    // Not /api/auth/users: that is admin-only, so everybody who is not an
+    // administrator saw an empty list and could invite nobody.
+    getJSON('/api/meetings/colleagues')
+      .then((body) => setStaff(body.colleagues || []))
+      .catch(() => setStaff([]));
   }, [scheduling, staff.length]);
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(''), 6000); };

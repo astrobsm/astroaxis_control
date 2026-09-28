@@ -761,3 +761,142 @@ async def test_the_host_joining_is_told_they_are_the_host(db):
 
     assert seat["role"] == "HOST"
     assert seat["conference"]["moderator"] is True
+
+
+# ---------------------------------------------------------------------------
+# Naming somebody else as host
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_meeting_can_be_hosted_by_somebody_else(db):
+    """An assistant arranges the management meeting; the director hosts it."""
+    scheduler = await _user(db, "Assistant")
+    director = await _user(db, "Managing Director")
+
+    result = await svc.create_meeting(
+        db, title="Management Meeting",
+        scheduled_start=datetime.now(timezone.utc) + timedelta(hours=2),
+        host_user_id=director.id, actor=scheduler)
+    await db.commit()
+    meeting_id = uuid.UUID(result["id"])
+
+    assert result["host_name"] == "Managing Director"
+    assert await svc.role_for_user(
+        db, meeting_id=meeting_id, user_id=director.id) == "HOST"
+    assert await svc.require_host(
+        db, meeting_id=meeting_id, user=director) == "HOST"
+
+
+@pytest.mark.asyncio
+async def test_whoever_arranged_it_keeps_control_of_it(db):
+    """Otherwise you hand a meeting over and immediately lose the ability to
+    move it, re-issue the link or cancel it -- and the only person who could
+    is the host, who may not know yet that they have it.
+    """
+    scheduler = await _user(db, "Assistant")
+    director = await _user(db, "Managing Director")
+
+    result = await svc.create_meeting(
+        db, title="Management Meeting",
+        scheduled_start=datetime.now(timezone.utc) + timedelta(hours=2),
+        host_user_id=director.id, actor=scheduler)
+    await db.commit()
+    meeting_id = uuid.UUID(result["id"])
+
+    assert await svc.role_for_user(
+        db, meeting_id=meeting_id, user_id=scheduler.id) == "CO_HOST"
+    assert await svc.require_host(
+        db, meeting_id=meeting_id, user=scheduler) == "CO_HOST"
+
+
+@pytest.mark.asyncio
+async def test_naming_the_host_does_not_demote_them_via_the_invite_list(db):
+    """The same demotion trap, from the other direction: the scheduler picks a
+    host and then also ticks that person in the staff list.
+    """
+    scheduler = await _user(db, "Assistant")
+    director = await _user(db, "Managing Director")
+
+    result = await svc.create_meeting(
+        db, title="Management Meeting",
+        scheduled_start=datetime.now(timezone.utc) + timedelta(hours=2),
+        host_user_id=director.id, actor=scheduler,
+        participants=[{"user_id": str(director.id), "role": "PARTICIPANT"}])
+    await db.commit()
+
+    assert await svc.role_for_user(
+        db, meeting_id=uuid.UUID(result["id"]), user_id=director.id) == "HOST"
+
+
+@pytest.mark.asyncio
+async def test_a_meeting_cannot_be_given_to_a_deactivated_account(db):
+    """A meeting whose host cannot sign in has nobody who can admit anyone."""
+    scheduler = await _user(db, "Assistant")
+    gone = await _user(db, "Departed Colleague")
+    await db.execute(text("UPDATE users SET is_active = FALSE WHERE id = :u"),
+                     {"u": str(gone.id)})
+    await db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.create_meeting(
+            db, title="Doomed Meeting",
+            scheduled_start=datetime.now(timezone.utc) + timedelta(hours=1),
+            host_user_id=gone.id, actor=scheduler)
+    assert exc.value.status_code == 400
+    assert "not active" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_host_is_refused(db):
+    scheduler = await _user(db, "Assistant")
+    with pytest.raises(HTTPException) as exc:
+        await svc.create_meeting(
+            db, title="Nobody Hosts This",
+            scheduled_start=datetime.now(timezone.utc) + timedelta(hours=1),
+            host_user_id=uuid.uuid4(), actor=scheduler)
+    assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Letting people in without a lobby
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_with_the_waiting_room_off_a_guest_walks_straight_in(db):
+    """The setting existed from the start but was worded as an opt-IN to the
+    waiting room, which is why it read as missing. The behaviour is what the
+    host chose either way.
+    """
+    host = await _user(db)
+    created, token = await _meeting(db, host, waiting_room=False)
+
+    seat = await svc.guest_join(db, token=token, display_name="Walks Right In")
+    await db.commit()
+
+    assert seat["status"] == "ADMITTED"
+    assert seat["conference"]["room"], "and is given the room immediately"
+
+    queued = (await db.execute(
+        text("SELECT COUNT(*) FROM meeting_waiting_room WHERE meeting_id = :m"),
+        {"m": created["id"]})).scalar()
+    assert queued == 0, "nobody should be queued when the lobby is off"
+
+
+@pytest.mark.asyncio
+async def test_signed_in_staff_never_wait_even_when_the_lobby_is_on(db):
+    """They have already proved who they are. Queueing them answers nothing
+    the login has not already answered.
+    """
+    host = await _user(db, "Host")
+    colleague = await _user(db, "Colleague")
+    created, _ = await _meeting(db, host, waiting_room=True)
+
+    seat = await svc.internal_join(
+        db, meeting_id=uuid.UUID(created["id"]), user=colleague)
+    await db.commit()
+
+    assert seat["conference"]["room"]
+    queued = (await db.execute(
+        text("SELECT COUNT(*) FROM meeting_waiting_room WHERE meeting_id = :m"),
+        {"m": created["id"]})).scalar()
+    assert queued == 0
