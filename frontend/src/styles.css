@@ -944,6 +944,21 @@ h1, h2, h3,
 .status.warning { background: var(--orange-50); color: var(--orange-700); border-color: var(--orange-500); }
 
 /* Modal - Fully Responsive & Scrollable */
+/* THE LAYER ORDER, WRITTEN DOWN BECAUSE IT WAS WRONG.
+ *
+ * The app chrome is fixed and sits high:
+ *     .app-topbar      900
+ *     .sidebar        1000
+ *     .sidebar-toggle 1001
+ *
+ * This overlay was 50, so every dialog in the application rendered UNDERNEATH
+ * the sidebar, the top bar and the sidebar toggle -- the toggle chip drew
+ * itself on top of the dimmed backdrop, and on a narrower window the dialog
+ * itself was obstructed.
+ *
+ * Dialogs live at 2000: above all app chrome, and below the meeting window
+ * (9999+), which is full-screen and is meant to cover everything.
+ */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -951,11 +966,19 @@ h1, h2, h3,
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 0;
-  z-index: 50;
+  /* Clear of the top bar rather than tucked beneath it. The dialog used to
+     start 20px from the very top of the viewport, inside the header band. */
+  padding: 28px 16px;
+  z-index: 2000;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 639px) {
+  .modal-overlay {
+    padding: 12px 8px;
+  }
 }
 
 .modal {
@@ -964,12 +987,21 @@ h1, h2, h3,
   border-radius: var(--radius-2xl);
   width: 100%;
   max-width: 95vw;
-  margin: 20px auto;
+  /* The overlay now provides the gap, so the margin would double it. */
+  margin: 0 auto;
   box-shadow: var(--shadow-2xl);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 40px);
+  /* Matches the overlay's padding, or a long form scrolls its own footer off
+     the bottom of the screen -- which is where Complete Transfer lives. */
+  max-height: calc(100vh - 56px);
   animation: modal-slide-in 0.3s ease-out;
+}
+
+@media (max-width: 639px) {
+  .modal {
+    max-height: calc(100vh - 24px);
+  }
 }
 
 @keyframes modal-slide-in {
@@ -1233,7 +1265,9 @@ h1, h2, h3,
 .notification.error { border-color: var(--red-500); }
 
 /* Loading */
-.loading-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.7); display: flex; align-items: center; justify-content: center; z-index: 50; }
+/* Same defect as .modal-overlay had: at 50 the sidebar covered it, so a
+   "working..." veil left the navigation looking usable while it was not. */
+.loading-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.7); display: flex; align-items: center; justify-content: center; z-index: 2010; }
 .loading-spinner { background: #fff; border: 2px solid var(--gray-200); padding: 10px 14px; border-radius: var(--radius-lg); font-weight: 700; color: var(--gray-700); box-shadow: var(--shadow-sm); }
 /* Attendance Module Styles */
 .attendance-pin-section {

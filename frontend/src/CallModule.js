@@ -84,7 +84,7 @@ function Sheet({ title, onClose, children, footer }) {
   }, []);
   return (
     <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 1000,
+      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 2000,   // above the sidebar (1000) and its toggle (1001)
       display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{

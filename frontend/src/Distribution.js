@@ -85,7 +85,7 @@ function Grid({ children, min = 220 }) {
 function Modal({ title, onClose, children, footer, width = 620 }) {
   return (
     <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 1000,
+      position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 2000,   // above the sidebar (1000) and its toggle (1001)
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: space(2),
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
