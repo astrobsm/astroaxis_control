@@ -61,6 +61,14 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('connecting');
 
+  // Somebody is presenting -- either this browser or another participant.
+  // Tracked separately because Jitsi reports them through different events,
+  // and the screen should get out of the way for either.
+  const [localShare, setLocalShare] = useState(false);
+  const [remoteShare, setRemoteShare] = useState(false);
+  const [filmstrip, setFilmstrip] = useState(true);
+  const sharing = localShare || remoteShare;
+
   // THE CALLBACKS LIVE IN REFS, AND THAT IS NOT A STYLE CHOICE.
   //
   // A parent re-renders for all sorts of reasons and hands down a fresh
@@ -108,12 +116,22 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
             channelLastN: 6,
             enableNoAudioDetection: true,
             enableNoisyMicDetection: true,
+            // The strip hides and shows only when asked, so the toggle and
+            // what is on screen cannot drift apart.
+            disableFilmstripAutohiding: true,
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
             SHOW_WATERMARK_FOR_GUESTS: false,
             MOBILE_APP_PROMO: false,
             DEFAULT_BACKGROUND: '#0B1F4A',
+            // Participants run down the RIGHT-HAND side, which is what the
+            // toggle below shows and hides. Stated rather than relied upon:
+            // it is Jitsi's default today, and a default is not a decision.
+            VERTICAL_FILMSTRIP: true,
+            // Without this the strip fades itself out on a timer, so the
+            // button would sometimes report showing while nothing was shown.
+            filmStripOnly: false,
             TOOLBAR_BUTTONS: [
               'microphone', 'camera',
               ...(conference.can_screen_share ? ['desktop'] : []),
@@ -147,6 +165,15 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
         // is answering them.
         api.addEventListener('connectionEstablished', () => setStatus('connected'));
         api.addEventListener('connectionFailed', () => setStatus('trouble'));
+
+        // Presenting. `screenSharingStatusChanged` is this browser;
+        // `contentSharingParticipantsChanged` is everybody else.
+        api.addEventListener('screenSharingStatusChanged',
+          (e) => setLocalShare(!!(e && e.on)));
+        api.addEventListener('contentSharingParticipantsChanged',
+          (e) => setRemoteShare(!!(e && e.data && e.data.length)));
+        api.addEventListener('filmstripDisplayChanged',
+          (e) => setFilmstrip(!!(e && e.visible)));
       } catch (e) {
         if (!cancelled) setError(e.message);
       }
@@ -166,6 +193,20 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
   }, [conference.domain, conference.room, conference.jwt,
       conference.display_name, conference.can_screen_share,
       conference.can_chat]);
+
+  // Jitsi owns the layout inside the iframe -- it is another origin, so this
+  // asks rather than restyles. Wrapped because a command Jitsi renames in a
+  // later version should cost the button, not the meeting.
+  const toggleParticipants = () => {
+    if (!apiRef.current) return;
+    try {
+      apiRef.current.executeCommand('toggleFilmStrip');
+      // Optimistic: filmstripDisplayChanged corrects it if Jitsi disagrees.
+      setFilmstrip((v) => !v);
+    } catch {
+      setFilmstrip((v) => v);
+    }
+  };
 
   if (error) {
     return (
@@ -194,8 +235,12 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
       position: 'fixed', inset: 0, background: '#0B1F4A', display: 'flex',
       flexDirection: 'column', zIndex: 9999,
     }}>
+      {/* Hidden while somebody is presenting. A shared spreadsheet is read
+          at the size it is given, and a title bar across the top is forty
+          pixels of somebody else's screen that nobody is looking at. */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
+        display: sharing ? 'none' : 'flex',
+        alignItems: 'center', gap: 12, padding: '10px 16px',
         color: '#fff', fontSize: 14,
         fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
         borderBottom: '1px solid rgba(255,255,255,0.12)', flexShrink: 0,
@@ -209,7 +254,16 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
             background: 'rgba(255,255,255,0.16)',
           }}>HOST</span>
         )}
-        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center',
+        <button onClick={toggleParticipants} style={{
+          marginLeft: 'auto', padding: '5px 12px', borderRadius: 14,
+          border: '1px solid rgba(255,255,255,0.28)', cursor: 'pointer',
+          background: 'transparent', color: '#fff', fontSize: 12.5,
+          fontWeight: 600, fontFamily: 'inherit',
+        }} aria-pressed={filmstrip}>
+          {filmstrip ? 'Hide participants' : 'Show participants'}
+        </button>
+
+        <span style={{ display: 'flex', alignItems: 'center',
           gap: 7, fontSize: 12.5, opacity: 0.85 }}>
           <span aria-hidden="true" style={{
             width: 8, height: 8, borderRadius: '50%',
@@ -222,6 +276,36 @@ export default function MeetingRoom({ conference, meeting, onLeave, onEvent }) {
       </div>
 
       <div ref={containerRef} style={{ flex: 1, minHeight: 0 }} />
+
+      {/* While presenting, the only control left on top of the shared screen.
+          Deliberately small and in the corner: everything else about this
+          view belongs to whoever is sharing. */}
+      {sharing && (
+        <div style={{
+          position: 'fixed', top: 12, right: 12, zIndex: 10002,
+          display: 'flex', alignItems: 'center', gap: 8,
+          fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+        }}>
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px',
+            borderRadius: 14, background: 'rgba(11,31,74,0.78)', color: '#fff',
+            fontSize: 12, fontWeight: 600,
+          }}>
+            <span aria-hidden="true" style={{
+              width: 8, height: 8, borderRadius: '50%', background: '#16A34A',
+            }} />
+            {localShare ? 'You are presenting' : 'Screen shared'}
+          </span>
+          <button onClick={toggleParticipants} aria-pressed={filmstrip}
+            style={{
+              padding: '6px 13px', borderRadius: 14, cursor: 'pointer',
+              border: 'none', background: 'rgba(11,31,74,0.78)', color: '#fff',
+              fontSize: 12, fontWeight: 700, fontFamily: 'inherit',
+            }}>
+            {filmstrip ? 'Hide participants' : 'Show participants'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
