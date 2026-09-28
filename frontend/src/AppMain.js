@@ -189,6 +189,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  const [ptDebtors, setPtDebtors] = useState([]);
  const [ptReminders, setPtReminders] = useState([]);
  const [ptSelectedInvoice, setPtSelectedInvoice] = useState(null);
+ const [ptDebtorSearch, setPtDebtorSearch] = useState('');
  const [ptSelectedDebtor, setPtSelectedDebtor] = useState(null);
  const [ptReminderMsg, setPtReminderMsg] = useState(null);
  const [ptPaymentForm, setPtPaymentForm] = useState({ amount: '', payment_method: 'bank_transfer', payment_date: new Date().toISOString().split('T')[0], reference: '', notes: '' });
@@ -7709,14 +7710,49 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  )}
 
- <h3 style={{marginBottom:12}}>Top Debtors</h3>
+ {/* Every debtor, not a top ten. The heading used to read "Top Debtors"
+     while the table rendered the whole list, so a full list looked like a
+     truncated one and there was no count to say otherwise. */}
+ {(() => {
+ const term = (ptDebtorSearch || '').trim().toLowerCase();
+ const shown = term
+ ? ptDebtors.filter(d => (d.customer_name || '').toLowerCase().includes(term)
+ || (d.phone || '').toLowerCase().includes(term))
+ : ptDebtors;
+ const shownOwed = shown.reduce((sum, d) => sum + (parseFloat(d.balance) || 0), 0);
+ const overdueCount = shown.filter(d => d.is_overdue).length;
+ return (
+ <>
+ <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:12}}>
+ <h3 style={{margin:0}}>
+ All Debtors ({ptDebtors.length})
+ </h3>
+ <span style={{fontSize:12,color:'#888'}}>largest balance first</span>
+ <input type="text" value={ptDebtorSearch}
+ onChange={e => setPtDebtorSearch(e.target.value)}
+ placeholder="Search name or phone..."
+ style={{marginLeft:'auto',padding:'8px 12px',borderRadius:6,border:'1px solid #ddd',fontSize:13,minWidth:220}} />
+ </div>
+
+ {ptDebtors.length > 0 && (
+ <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:12,fontSize:13,color:'#555'}}>
+ <span>Showing <strong>{shown.length}</strong> of {ptDebtors.length}</span>
+ <span>Outstanding shown: <strong style={{color:'#e74c3c'}}>{formatCurrency(shownOwed)}</strong></span>
+ {overdueCount > 0 && (
+ <span style={{color:'#e74c3c'}}>{overdueCount} overdue</span>
+ )}
+ </div>
+ )}
+
  {ptDebtors.length === 0 ? (
  <div style={{background:'#d4edda',padding:20,borderRadius:8,textAlign:'center',color:'#155724'}}>No outstanding debts! All payments are up to date.</div>
+ ) : shown.length === 0 ? (
+ <div style={{background:'#f8fafc',padding:20,borderRadius:8,textAlign:'center',color:'#666'}}>No debtor matches "{ptDebtorSearch}".</div>
  ) : (
  <div className="table-responsive"><table className="data-table"><thead><tr>
  <th>Customer</th><th>Phone</th><th>Invoices</th><th>Total Owed</th><th>Total Paid</th><th>Balance</th><th>Overdue</th><th>Actions</th>
  </tr></thead><tbody>
- {ptDebtors.map(d => (
+ {shown.map(d => (
  <tr key={d.customer_id} style={{background: d.is_overdue ? '#fff5f5' : '#fff'}}>
  <td><strong>{d.customer_name}</strong></td>
  <td>{d.phone || '-'}</td>
@@ -7733,6 +7769,9 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  ))}
  </tbody></table></div>
  )}
+ </>
+ );
+ })()}
  </div>
  )}
 
