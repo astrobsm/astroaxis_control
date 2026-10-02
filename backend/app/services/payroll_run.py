@@ -36,6 +36,35 @@ async def create_payroll_run(
         raise HTTPException(
             status_code=400, detail="period_end cannot precede period_start.")
 
+    # A RUN IS ONE MONTH, AND THE ARITHMETIC DOES NOT SAY SO OUT LOUD.
+    #
+    # calculate_payslip annualises as `gross * 12` and caps regular hours at
+    # STANDARD_MONTHLY_HOURS (160). Neither figure looks at how long the
+    # period actually is, so a two-month period silently produces:
+    #
+    #   * monthly staff paid ONE month's salary for two months of work --
+    #     underpaid by half;
+    #   * hourly staff with ~320 hours having ~160 of them reclassified as
+    #     OVERTIME at 1.5x -- substantially overpaid;
+    #   * PAYE annualised from the wrong base in both directions.
+    #
+    # None of that raises an error anywhere. It just produces wrong payslips
+    # that look entirely plausible, which is the worst kind of wrong for a
+    # figure staff will check and a tax authority may audit. So the engine
+    # refuses the input rather than quietly misreading it.
+    if (period_start.year, period_start.month) != (period_end.year,
+                                                   period_end.month):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"A payroll run covers one calendar month, and "
+                f"{period_start} to {period_end} spans more than one. Pay "
+                f"is calculated monthly -- salaries are not multiplied by the "
+                f"number of months and the overtime threshold is a monthly "
+                f"one -- so a longer period would underpay salaried staff and "
+                f"overpay hourly staff. Run each month separately."),
+        )
+
     # Refuse a second run for the same period unless the earlier one was
     # cancelled. Paying a month twice is not recoverable by a code fix.
     clash = (await session.execute(

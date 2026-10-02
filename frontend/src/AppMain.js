@@ -20,7 +20,7 @@ import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueu
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
 import PayrollDesk from './PayrollDesk';
-import { HideStaffControl, HiddenBadge, HiddenStaffPanel } from './StaffVisibility';
+import { HideStaffControl, HiddenBadge, HiddenStaffPanel, UserStaffLinks } from './StaffVisibility';
 // Lazy: the meeting module pulls in the conference UI, and most users
 // never open it. Keeping it out of the main bundle keeps the rest of
 // the ERP loading at the speed it did before meetings existed.
@@ -3748,6 +3748,12 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      visible in one place to somebody who can undo it. */}
  <div style={{marginTop:'1.5rem'}}>
  <HiddenStaffPanel onChanged={() => fetchData('staff')} />
+ </div>
+
+ {/* Which login belongs to which employee. The marketing module cannot
+     scope anybody to "their own records" until this is filled in. */}
+ <div style={{marginTop:'1.5rem'}}>
+ <UserStaffLinks />
  </div>
  </div>
  )}

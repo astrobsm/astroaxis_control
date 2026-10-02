@@ -218,6 +218,14 @@ $backendFiles = @(
     'backend/app/models.py',
     'backend/app/schemas.py',
 
+    'backend/alembic/versions/n9012345678m_marketing_scope.py',
+
+    # Closing the marketing IDOR. marketing.py and staff.py both import
+    # marketing_scope, and payroll_run.py carries the one-month guard.
+    'backend/app/services/marketing_scope.py',
+    'backend/app/services/payroll_run.py',
+    'backend/app/api/marketing.py',
+
     'backend/requirements.txt'
 )
 

@@ -267,4 +267,108 @@ export function HiddenStaffPanel({ onChanged }) {
   );
 }
 
+/** Which login belongs to which employee.
+ *
+ * The marketing module needs this to exist. Its routes used to take the staff
+ * id from the caller and trust it, so any employee could read or edit any
+ * marketer's visits, customers and order values. The fix is "a marketer sees
+ * only their own records" -- which could not be written at all until a login
+ * could be connected to a person, because nothing in the database joined
+ * `users` to `staff`.
+ *
+ * Deliberately not matched automatically on names: two people share a name
+ * far more often than is comfortable, and being wrong here means one person
+ * reading another's records under an assurance that they cannot.
+ */
+export function UserStaffLinks({ onChanged }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState('');
+
+  const load = useCallback(async () => {
+    try { setData(await req('/api/staff/user-links')); setErr(''); }
+    catch (e) { setErr(e.message); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const link = async (userId, staffId) => {
+    setBusy(userId);
+    try {
+      await req(`/api/staff/user-links/${userId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staff_id: staffId || null }),
+      });
+      await load();
+      if (onChanged) onChanged();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(''); }
+  };
+
+  if (!isAdmin()) return null;
+  if (err) return <ErrorBox msg={err} />;
+  if (!data) return <SkeletonCards n={1} />;
+
+  const needing = data.users.filter((u) => u.needs_link);
+
+  return (
+    <Card>
+      <div style={{ fontSize: 14, fontWeight: 700, color: color.navy,
+        marginBottom: 6 }}>
+        Logins linked to staff records
+      </div>
+      <div style={{ fontSize: 12, color: color.textSecondary,
+        marginBottom: space(2), lineHeight: 1.6 }}>
+        {data.note}
+      </div>
+
+      {needing.length > 0 && (
+        <Banner tone="warning"
+          title={`${needing.length} login${needing.length > 1 ? 's' : ''} cannot use the marketing module yet`}>
+          Until a login is linked, the system cannot tell which activity is
+          theirs, so it shows them nothing rather than everybody&apos;s.
+        </Banner>
+      )}
+
+      {data.users.map((u) => (
+        <div key={u.user_id} style={{
+          display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          padding: '9px 0', borderBottom: `1px solid ${color.border}`,
+        }}>
+          <div style={{ minWidth: 190, flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{u.name}</div>
+            <div style={{ fontSize: 11.5, color: color.textSecondary }}>
+              {u.email} · {u.role}
+              {data.supervisor_roles.includes(u.role) && ' · sees the whole team'}
+            </div>
+          </div>
+          <select
+            value={u.staff_id || ''}
+            disabled={busy === u.user_id}
+            onChange={(e) => link(u.user_id, e.target.value)}
+            style={{
+              ...inputStyle, width: 'auto', minWidth: 220,
+              borderColor: u.needs_link ? '#FCD34D' : color.borderStrong,
+              background: u.needs_link ? '#FFFBEB' : '#fff',
+            }}>
+            <option value="">
+              {data.supervisor_roles.includes(u.role)
+                ? 'Not linked (supervisor — not required)'
+                : 'Not linked — cannot use marketing'}
+            </option>
+            {data.staff
+              .filter((st) => !st.has_login || st.staff_id === u.staff_id)
+              .map((st) => (
+                <option key={st.staff_id} value={st.staff_id}>
+                  {st.employee_id} — {st.name}
+                  {st.position ? ` (${st.position})` : ''}
+                </option>
+              ))}
+          </select>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 export default HiddenStaffPanel;

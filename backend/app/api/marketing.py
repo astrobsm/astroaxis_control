@@ -14,8 +14,33 @@ from typing import Optional
 from datetime import date, datetime, time as time_type
 
 from app.db import get_session
+from app.api.auth import require_authenticated_user
+from app.models import User
+from app.services import marketing_scope as msc
 
 router = APIRouter(prefix='/api/marketing', tags=['Marketing'])
+
+
+# Every route below that touches a named person's records resolves a scope
+# first. See app.services.marketing_scope: a supervisor sees the whole team,
+# anybody else sees only the staff record their login is linked to, and an
+# unlinked login is refused with an explanation rather than shown everything.
+#
+# Before this existed, `staff_id` was a query parameter the caller chose and
+# the module trusted -- so any authenticated employee could read, edit or
+# delete any marketer's plans, visits, customers and order values.
+async def scope(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_authenticated_user),
+) -> msc.Scope:
+    return await msc.scope_for(session, user)
+
+
+def _supervisor_only(sc: msc.Scope, what: str):
+    if not sc.supervisor:
+        raise HTTPException(
+            403, f"{what} is done by a supervisor, not by the marketer whose "
+                 f"work it concerns.")
 
 
 # ======================== HELPERS ========================
@@ -80,20 +105,24 @@ def _proposal_to_dict(r):
 # ======================== DASHBOARD SUMMARY ========================
 
 @router.get('/dashboard')
-async def marketer_dashboard(session: AsyncSession = Depends(get_session)):
+async def marketer_dashboard(session: AsyncSession = Depends(get_session),
+                             sc: msc.Scope = Depends(scope)):
     """Get marketer dashboard summary - plans this week, logs today, active proposals."""
     today = date.today()
+    # Counted over what this caller may see, not over the whole company.
+    mine = "" if sc.supervisor else " AND marketer_staff_id = :sid"
+    sid = {} if sc.supervisor else {"sid": sc.staff_id}
     
     # Active plans count
     r1 = await session.execute(text(
-        "SELECT COUNT(*) FROM marketing_plans WHERE status IN ('submitted','approved','in_progress') AND week_end >= :today"
-    ), {"today": today})
+        "SELECT COUNT(*) FROM marketing_plans WHERE status IN ('submitted','approved','in_progress') AND week_end >= :today" + mine
+    ), {"today": today, **sid})
     active_plans = r1.scalar_one()
 
     # Today's logs
     r2 = await session.execute(text(
-        "SELECT COUNT(*) FROM marketing_daily_logs WHERE log_date = :today"
-    ), {"today": today})
+        "SELECT COUNT(*) FROM marketing_daily_logs WHERE log_date = :today" + mine
+    ), {"today": today, **sid})
     today_logs = r2.scalar_one()
 
     # Active proposals
@@ -162,7 +191,8 @@ async def marketer_dashboard(session: AsyncSession = Depends(get_session)):
 # ======================== WEEKLY PLANS ========================
 
 @router.post('/plans')
-async def create_plan(data: dict, session: AsyncSession = Depends(get_session)):
+async def create_plan(data: dict, session: AsyncSession = Depends(get_session),
+                      sc: msc.Scope = Depends(scope)):
     ws = data.get('week_start', '')
     we = data.get('week_end', '')
     if not ws or not we or not data.get('title'):
@@ -174,7 +204,7 @@ async def create_plan(data: dict, session: AsyncSession = Depends(get_session)):
             :planned_visits, :planned_calls, :budget_requested, :status, NOW(), NOW())
         RETURNING *
     """), {
-        "staff_id": data.get('marketer_staff_id') or None,
+        "staff_id": sc.may_write_as(data.get('marketer_staff_id')),
         "ws": date.fromisoformat(ws), "we": date.fromisoformat(we),
         "title": data['title'], "objectives": data.get('objectives', ''),
         "target_areas": data.get('target_areas', ''), "target_customers": data.get('target_customers', ''),
@@ -189,13 +219,23 @@ async def create_plan(data: dict, session: AsyncSession = Depends(get_session)):
 
 @router.get('/plans')
 async def list_plans(page: int = Query(1, ge=1), size: int = Query(50), status: Optional[str] = None,
-                     session: AsyncSession = Depends(get_session)):
-    where = ""
+                     staff_id: Optional[str] = None,
+                     session: AsyncSession = Depends(get_session),
+                     sc: msc.Scope = Depends(scope)):
+    parts = []
     params = {"limit": size, "offset": (page - 1) * size}
     if status:
-        where = "WHERE status = :status"
+        parts.append("mp.status = :status")
         params["status"] = status
-    count_r = await session.execute(text(f"SELECT COUNT(*) FROM marketing_plans {where}"), params)
+    # Forced rather than validated: a route that forgets this still returns
+    # the caller's own rows instead of everybody's.
+    only = sc.filter_staff_id(staff_id)
+    if only:
+        parts.append("mp.marketer_staff_id = :sid")
+        params["sid"] = only
+    where = ("WHERE " + " AND ".join(parts)) if parts else ""
+    count_r = await session.execute(text(
+        f"SELECT COUNT(*) FROM marketing_plans mp {where}"), params)
     total = count_r.scalar_one()
     result = await session.execute(text(f"""
         SELECT mp.*, s.first_name, s.last_name FROM marketing_plans mp
@@ -210,7 +250,16 @@ async def list_plans(page: int = Query(1, ge=1), size: int = Query(50), status: 
     return {"items": items, "total": total}
 
 @router.put('/plans/{plan_id}')
-async def update_plan(plan_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+async def update_plan(plan_id: str, data: dict,
+                      session: AsyncSession = Depends(get_session),
+                      sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_plans', row_id=plan_id)
+    # Budget approval and manager notes are the supervisor's half of the
+    # conversation. A marketer approving their own budget is the whole reason
+    # budget_approved exists separately from budget_requested.
+    if not sc.supervisor:
+        for locked in ('budget_approved', 'manager_notes'):
+            data.pop(locked, None)
     fields, params = [], {"id": plan_id}
     updatable = ['title','objectives','target_areas','target_customers','planned_visits','planned_calls',
                  'budget_requested','budget_approved','status','manager_notes','week_start','week_end']
@@ -237,8 +286,16 @@ async def update_plan(plan_id: str, data: dict, session: AsyncSession = Depends(
     return {"success": True, "data": _plan_to_dict(row)}
 
 @router.post('/plans/{plan_id}/approve')
-async def approve_plan(plan_id: str, data: dict = {}, session: AsyncSession = Depends(get_session)):
-    """Approve a marketing plan and automatically add its budget to expenses for the month."""
+async def approve_plan(plan_id: str, data: dict = {},
+                       session: AsyncSession = Depends(get_session),
+                       sc: msc.Scope = Depends(scope)):
+    """Approve a plan and book its budget as an expense.
+
+    Supervisor only. This writes a row to expense_records -- it commits the
+    company's money -- and it was previously open to every authenticated
+    login, including the marketer who requested the budget.
+    """
+    _supervisor_only(sc, "Approving a marketing plan")
     # Get plan details
     result = await session.execute(text(
         "SELECT * FROM marketing_plans WHERE id = :id"
@@ -289,7 +346,9 @@ async def approve_plan(plan_id: str, data: dict = {}, session: AsyncSession = De
 
 
 @router.delete('/plans/{plan_id}')
-async def delete_plan(plan_id: str, session: AsyncSession = Depends(get_session)):
+async def delete_plan(plan_id: str, session: AsyncSession = Depends(get_session),
+                      sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_plans', row_id=plan_id)
     result = await session.execute(text("DELETE FROM marketing_plans WHERE id = :id RETURNING id"), {"id": plan_id})
     if not result.fetchone():
         raise HTTPException(404, "Plan not found")
@@ -300,7 +359,8 @@ async def delete_plan(plan_id: str, session: AsyncSession = Depends(get_session)
 # ======================== DAILY ACTIVITY LOGS ========================
 
 @router.post('/logs')
-async def create_log(data: dict, session: AsyncSession = Depends(get_session)):
+async def create_log(data: dict, session: AsyncSession = Depends(get_session),
+                     sc: msc.Scope = Depends(scope)):
     if not data.get('log_date') or not data.get('activities_performed'):
         raise HTTPException(400, "log_date and activities_performed are required")
     ld = date.fromisoformat(data['log_date'])
@@ -318,7 +378,7 @@ async def create_log(data: dict, session: AsyncSession = Depends(get_session)):
             :challenges, :follow_up_required, :follow_up_date, :follow_up_notes, :mood_rating, NOW())
         RETURNING *
     """), {
-        "staff_id": data.get('marketer_staff_id') or None,
+        "staff_id": sc.may_write_as(data.get('marketer_staff_id')),
         "log_date": ld,
         "start_time": datetime.strptime(data['start_time'], '%H:%M').time() if isinstance(data.get('start_time'), str) and data.get('start_time') else (data.get('start_time') if isinstance(data.get('start_time'), time_type) else None),
         "end_time": datetime.strptime(data['end_time'], '%H:%M').time() if isinstance(data.get('end_time'), str) and data.get('end_time') else (data.get('end_time') if isinstance(data.get('end_time'), time_type) else None),
@@ -346,7 +406,8 @@ async def create_log(data: dict, session: AsyncSession = Depends(get_session)):
 async def list_logs(page: int = Query(1, ge=1), size: int = Query(50),
                     start_date: Optional[str] = None, end_date: Optional[str] = None,
                     staff_id: Optional[str] = None,
-                    session: AsyncSession = Depends(get_session)):
+                    session: AsyncSession = Depends(get_session),
+                    sc: msc.Scope = Depends(scope)):
     where_parts = []
     params = {"limit": size, "offset": (page - 1) * size}
     if start_date:
@@ -355,9 +416,11 @@ async def list_logs(page: int = Query(1, ge=1), size: int = Query(50),
     if end_date:
         where_parts.append("ml.log_date <= :end_date")
         params["end_date"] = date.fromisoformat(end_date)
-    if staff_id:
+    # The IDOR lived here: staff_id arrived from the caller and was trusted.
+    only = sc.filter_staff_id(staff_id)
+    if only:
         where_parts.append("ml.marketer_staff_id = :staff_id")
-        params["staff_id"] = staff_id
+        params["staff_id"] = only
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
     count_r = await session.execute(text(f"SELECT COUNT(*) FROM marketing_daily_logs ml {where}"), params)
     total = count_r.scalar_one()
@@ -374,14 +437,16 @@ async def list_logs(page: int = Query(1, ge=1), size: int = Query(50),
     return {"items": items, "total": total}
 
 @router.get('/logs/follow-ups')
-async def get_pending_followups(session: AsyncSession = Depends(get_session)):
-    """Get all logs with pending follow-ups."""
-    result = await session.execute(text("""
+async def get_pending_followups(session: AsyncSession = Depends(get_session),
+                                sc: msc.Scope = Depends(scope)):
+    """Logs with pending follow-ups, for whoever may see them."""
+    mine = "" if sc.supervisor else " AND ml.marketer_staff_id = :sid"
+    result = await session.execute(text(f"""
         SELECT ml.*, s.first_name, s.last_name FROM marketing_daily_logs ml
         LEFT JOIN staff s ON ml.marketer_staff_id = s.id
-        WHERE ml.follow_up_required = true
+        WHERE ml.follow_up_required = true{mine}
         ORDER BY ml.follow_up_date ASC NULLS FIRST, ml.log_date DESC
-    """))
+    """), ({} if sc.supervisor else {"sid": sc.staff_id}))
     items = []
     for r in result.fetchall():
         d = _log_to_dict(r)
@@ -390,7 +455,11 @@ async def get_pending_followups(session: AsyncSession = Depends(get_session)):
     return {"items": items, "count": len(items)}
 
 @router.put('/logs/{log_id}')
-async def update_log(log_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+async def update_log(log_id: str, data: dict,
+                     session: AsyncSession = Depends(get_session),
+                     sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_daily_logs',
+                          row_id=log_id)
     fields, params = [], {"id": log_id}
     updatable = ['log_date','start_time','end_time','location_visited','customer_contacted','contact_type',
                  'objective','activities_performed','outcome','products_discussed','samples_distributed',
@@ -419,7 +488,10 @@ async def update_log(log_id: str, data: dict, session: AsyncSession = Depends(ge
     return {"success": True, "data": _log_to_dict(row)}
 
 @router.delete('/logs/{log_id}')
-async def delete_log(log_id: str, session: AsyncSession = Depends(get_session)):
+async def delete_log(log_id: str, session: AsyncSession = Depends(get_session),
+                     sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_daily_logs',
+                          row_id=log_id)
     result = await session.execute(text("DELETE FROM marketing_daily_logs WHERE id = :id RETURNING id"), {"id": log_id})
     if not result.fetchone():
         raise HTTPException(404, "Log not found")
@@ -430,7 +502,8 @@ async def delete_log(log_id: str, session: AsyncSession = Depends(get_session)):
 # ======================== MARKETING PROPOSALS ========================
 
 @router.post('/proposals')
-async def create_proposal(data: dict, session: AsyncSession = Depends(get_session)):
+async def create_proposal(data: dict, session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
     if not data.get('title') or not data.get('description'):
         raise HTTPException(400, "title and description required")
     ts = data.get('timeline_start', '') or None
@@ -445,7 +518,7 @@ async def create_proposal(data: dict, session: AsyncSession = Depends(get_sessio
             :budget, :ts, :te, :products, :channels, :kpi, :status, NOW(), NOW())
         RETURNING *
     """), {
-        "staff_id": data.get('marketer_staff_id') or None,
+        "staff_id": sc.may_write_as(data.get('marketer_staff_id')),
         "title": data['title'], "type": data.get('proposal_type', 'campaign'),
         "audience": data.get('target_audience', ''), "desc": data['description'],
         "strategy": data.get('strategy', ''), "outcome": data.get('expected_outcome', ''),
@@ -460,12 +533,19 @@ async def create_proposal(data: dict, session: AsyncSession = Depends(get_sessio
 
 @router.get('/proposals')
 async def list_proposals(page: int = Query(1, ge=1), size: int = Query(50), status: Optional[str] = None,
-                         session: AsyncSession = Depends(get_session)):
-    where = ""
+                         staff_id: Optional[str] = None,
+                         session: AsyncSession = Depends(get_session),
+                         sc: msc.Scope = Depends(scope)):
+    parts = []
     params = {"limit": size, "offset": (page - 1) * size}
     if status:
-        where = "WHERE mp.status = :status"
+        parts.append("mp.status = :status")
         params["status"] = status
+    only = sc.filter_staff_id(staff_id)
+    if only:
+        parts.append("mp.marketer_staff_id = :sid")
+        params["sid"] = only
+    where = ("WHERE " + " AND ".join(parts)) if parts else ""
     count_r = await session.execute(text(f"SELECT COUNT(*) FROM marketing_proposals mp {where}"), params)
     total = count_r.scalar_one()
     result = await session.execute(text(f"""
@@ -481,7 +561,11 @@ async def list_proposals(page: int = Query(1, ge=1), size: int = Query(50), stat
     return {"items": items, "total": total}
 
 @router.put('/proposals/{proposal_id}')
-async def update_proposal(proposal_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+async def update_proposal(proposal_id: str, data: dict,
+                          session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_proposals',
+                          row_id=proposal_id)
     fields, params = [], {"id": proposal_id}
     updatable = ['title','proposal_type','target_audience','description','strategy','expected_outcome',
                  'budget_estimate','timeline_start','timeline_end','products_involved','channels',
@@ -509,7 +593,10 @@ async def update_proposal(proposal_id: str, data: dict, session: AsyncSession = 
     return {"success": True, "data": _proposal_to_dict(row)}
 
 @router.delete('/proposals/{proposal_id}')
-async def delete_proposal(proposal_id: str, session: AsyncSession = Depends(get_session)):
+async def delete_proposal(proposal_id: str, session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_proposals',
+                          row_id=proposal_id)
     result = await session.execute(text("DELETE FROM marketing_proposals WHERE id = :id RETURNING id"), {"id": proposal_id})
     if not result.fetchone():
         raise HTTPException(404, "Proposal not found")
@@ -628,7 +715,8 @@ def _facility_to_dict(r):
 
 
 @router.post('/facilities')
-async def create_facility(data: dict, session: AsyncSession = Depends(get_session)):
+async def create_facility(data: dict, session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
     await _ensure_facilities_table(session)
     if not data.get('facility_name'):
         raise HTTPException(400, "facility_name is required")
@@ -642,6 +730,9 @@ async def create_facility(data: dict, session: AsyncSession = Depends(get_sessio
     params = {}
     for c in cols:
         v = data.get(c)
+        if c == 'marketer_staff_id':
+            params[c] = sc.may_write_as(v)
+            continue
         if c in ('last_visit_date', 'next_visit_date'):
             params[c] = date.fromisoformat(v) if v else None
         elif c == 'estimated_monthly_value':
@@ -666,13 +757,15 @@ async def list_facilities(
     marketer_staff_id: Optional[str] = None,
     status: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    sc: msc.Scope = Depends(scope),
 ):
     await _ensure_facilities_table(session)
     where = []
     params = {}
-    if marketer_staff_id:
+    only = sc.filter_staff_id(marketer_staff_id)
+    if only:
         where.append("f.marketer_staff_id = :mid")
-        params['mid'] = marketer_staff_id
+        params['mid'] = only
     if status:
         where.append("f.relationship_status = :st")
         params['st'] = status
@@ -697,7 +790,11 @@ async def list_facilities(
 
 
 @router.put('/facilities/{facility_id}')
-async def update_facility(facility_id: str, data: dict, session: AsyncSession = Depends(get_session)):
+async def update_facility(facility_id: str, data: dict,
+                          session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_facilities',
+                          row_id=facility_id)
     await _ensure_facilities_table(session)
     updatable = {
         'marketer_staff_id', 'facility_name', 'facility_type', 'address', 'city', 'state',
@@ -732,7 +829,10 @@ async def update_facility(facility_id: str, data: dict, session: AsyncSession = 
 
 
 @router.delete('/facilities/{facility_id}')
-async def delete_facility(facility_id: str, session: AsyncSession = Depends(get_session)):
+async def delete_facility(facility_id: str, session: AsyncSession = Depends(get_session),
+                          sc: msc.Scope = Depends(scope)):
+    await msc.assert_owns(session, sc, table='marketing_facilities',
+                          row_id=facility_id)
     await _ensure_facilities_table(session)
     result = await session.execute(
         text("DELETE FROM marketing_facilities WHERE id = :id RETURNING id"),
@@ -751,18 +851,23 @@ async def marketer_performance(
     marketer_staff_id: Optional[str] = None,
     days: int = Query(30, ge=1, le=365),
     session: AsyncSession = Depends(get_session),
+    sc: msc.Scope = Depends(scope),
 ):
-    """Aggregate marketer performance: new customers attracted, sales volume,
-    facility coverage, visit productivity over the trailing window."""
+    """Aggregate marketer performance over the trailing window.
+
+    This is a league table of named colleagues -- visits, customers, order
+    value. A supervisor sees the team; a marketer sees only their own row.
+    """
     where_log = ["log_date >= CURRENT_DATE - INTERVAL ':days days'"]
     # NB: SQL interval cannot bind a parameter directly, so embed safely
     days_int = int(days)
     base_where = f"log_date >= CURRENT_DATE - INTERVAL '{days_int} days'"
     params = {}
     mfilter = ""
-    if marketer_staff_id:
-        mfilter = " AND marketer_staff_id = :mid"
-        params['mid'] = marketer_staff_id
+    only = sc.filter_staff_id(marketer_staff_id)
+    if only:
+        mfilter = " AND ml.marketer_staff_id = :mid"
+        params['mid'] = only
 
     # Per-marketer aggregates
     sql = f"""
@@ -815,16 +920,20 @@ async def marketer_performance(
             SELECT marketer_staff_id, log_date
             FROM marketing_daily_logs
             WHERE customer_contacted ILIKE c.name
-              AND {base_where}
+              AND {base_where} {mfilter.replace('ml.', '')}
             ORDER BY log_date ASC
             LIMIT 1
         ) ml ON TRUE
         LEFT JOIN staff s ON s.id = ml.marketer_staff_id
         WHERE c.created_at >= NOW() - INTERVAL '{days_int} days'
+          {"AND ml.marketer_staff_id IS NOT NULL" if only else ""}
         ORDER BY c.created_at DESC
         LIMIT 100
     """
-    new_cust = await session.execute(text(new_cust_sql))
+    # Scoped the same way as the table above: without the second clause a
+    # marketer would get every new customer in the company, each labelled
+    # with the colleague who brought them in.
+    new_cust = await session.execute(text(new_cust_sql), params)
     new_customers = []
     for r in new_cust.fetchall():
         new_customers.append({
@@ -850,10 +959,12 @@ async def marketer_performance(
         LEFT JOIN marketing_daily_logs ml
             ON ml.location_visited ILIKE f.facility_name
            AND ml.log_date >= CURRENT_DATE - INTERVAL '{days_int} days'
+           {mfilter}
+        {"WHERE f.marketer_staff_id = :mid" if only else ""}
         GROUP BY f.id, f.facility_name, f.facility_type, f.city, f.relationship_status
         ORDER BY value DESC, visit_count DESC
         LIMIT 20
-    """))
+    """), params)
     top_facilities = []
     for r in top_fac.fetchall():
         top_facilities.append({

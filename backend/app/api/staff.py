@@ -32,6 +32,7 @@ import string
 from pydantic import BaseModel as _VisBaseModel
 from app.api.auth import require_admin
 from app.services import staff_visibility as _vis
+from app.services import marketing_scope as _mscope
 
 router = APIRouter(prefix='/api/staff')
 
@@ -1429,6 +1430,51 @@ async def set_staff_visibility(
     """Hide this person from staff lists, or restore them. Reason required."""
     result = await _vis.set_visibility(
         session, staff_id=staff_id, hidden=body.hidden, reason=body.reason,
+        actor_id=user.id,
+        actor_name=getattr(user, 'full_name', None) or user.username)
+    await session.commit()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Linking a login to a staff record
+# ---------------------------------------------------------------------------
+#
+# Without this the marketing scope cannot work: a login that is not linked to
+# a staff record has no "own records" to be restricted to, and the module
+# refuses it. These routes are how an administrator makes that mapping.
+#
+# Deliberately not inferred from matching names. Two people share a name far
+# more often than is comfortable, and the cost of being wrong is one person
+# reading another's records under an assurance that they cannot.
+
+class StaffLinkIn(_VisBaseModel):
+    staff_id: Optional[UUID] = None
+
+
+@router.get('/user-links')
+async def list_user_links(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_admin),
+):
+    """Every active login and the staff record it points at.
+
+    Shown as a set so unlinked accounts are visible all at once, rather than
+    discovered one complaint at a time.
+    """
+    return await _mscope.link_overview(session)
+
+
+@router.post('/user-links/{user_id}')
+async def set_user_link(
+    user_id: UUID,
+    body: StaffLinkIn,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
+):
+    """Point a login at a staff record, or clear it with a null staff_id."""
+    result = await _mscope.link_user_to_staff(
+        session, user_id=user_id, staff_id=body.staff_id,
         actor_id=user.id,
         actor_name=getattr(user, 'full_name', None) or user.username)
     await session.commit()

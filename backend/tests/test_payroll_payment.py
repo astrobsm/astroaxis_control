@@ -641,3 +641,58 @@ async def test_hiding_an_unknown_staff_member_is_a_404(db):
         await vis.set_visibility(
             db, staff_id=uuid.uuid4(), hidden=True, reason="Does not exist")
     assert e.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# A run is one month, and the arithmetic never says so
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_run_spanning_two_months_is_refused(db):
+    """1 Aug to 30 Sep would underpay salaried staff and overpay hourly ones.
+
+    calculate_payslip annualises as gross * 12 and caps regular hours at a
+    MONTHLY 160, neither of which looks at the length of the period. Nothing
+    raises; it just produces plausible, wrong payslips.
+    """
+    actor = await _user(db)
+    s = await _staff(db)
+    with pytest.raises(HTTPException) as e:
+        await create_payroll_run(
+            db, period_start=date(2026, 8, 1), period_end=date(2026, 9, 30),
+            staff_ids=[s], created_by=actor)
+    assert e.value.status_code == 400
+    assert "one calendar month" in str(e.value.detail)
+    assert "Run each month separately" in str(e.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_single_month_is_accepted(db):
+    actor = await _user(db)
+    s = await _staff(db)
+    run = await create_payroll_run(
+        db, period_start=date(2026, 8, 1), period_end=date(2026, 8, 31),
+        staff_ids=[s], created_by=actor)
+    assert run["staff_paid"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_part_month_is_accepted(db):
+    """A starter mid-month is a normal case and must not be blocked."""
+    actor = await _user(db)
+    s = await _staff(db)
+    run = await create_payroll_run(
+        db, period_start=date(2026, 8, 15), period_end=date(2026, 8, 31),
+        staff_ids=[s], created_by=actor)
+    assert run["staff_paid"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_same_month_in_a_different_year_is_still_refused(db):
+    actor = await _user(db)
+    s = await _staff(db)
+    with pytest.raises(HTTPException) as e:
+        await create_payroll_run(
+            db, period_start=date(2025, 8, 1), period_end=date(2026, 8, 31),
+            staff_ids=[s], created_by=actor)
+    assert e.value.status_code == 400

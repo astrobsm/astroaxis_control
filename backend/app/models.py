@@ -20,6 +20,11 @@ class User(Base):
     __tablename__ = 'users'
     id = sa.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = sa.Column(sa.String(255), unique=True, nullable=False, index=True)
+    # Which employee this login belongs to. Nullable: the mapping is made
+    # by a person who knows, never inferred from matching names. Until it
+    # is set, the marketing module refuses a non-supervisor rather than
+    # guessing whose records are theirs.
+    staff_id = sa.Column(UUID(as_uuid=True), sa.ForeignKey('staff.id'))
     full_name = sa.Column(sa.String(255), nullable=False)
     hashed_password = sa.Column(sa.String(255), nullable=False)
     role = sa.Column(sa.String(50), nullable=False, default='customer_care')  # admin, sales_staff, marketer, customer_care, production_staff, warehouse_logistics
