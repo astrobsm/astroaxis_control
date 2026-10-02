@@ -59,8 +59,13 @@ async def hr_dashboard(session: AsyncSession = Depends(get_session)):
 
     # Upcoming birthdays - fetch all staff with DOB, compute days_until in Python
     r7 = await session.execute(text("""
-        SELECT first_name, last_name, date_of_birth, position FROM staff 
+        SELECT first_name, last_name, date_of_birth, position FROM staff
         WHERE date_of_birth IS NOT NULL AND is_active = true
+          -- Hidden staff are left off the birthday panel deliberately. A
+          -- bereavement, a suspension or a resignation are all reasons
+          -- somebody asked for a name not to appear here, and a birthday
+          -- card prompt is the most conspicuous place to get that wrong.
+          AND display_hidden = FALSE
         ORDER BY first_name
     """))
     from datetime import date as _date

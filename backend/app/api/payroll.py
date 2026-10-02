@@ -10,7 +10,7 @@ from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,8 @@ from app.api.auth import require_authenticated_user, require_admin
 from app.models import User
 from app.services.payroll import load_rate_config
 from app.services.payroll_run import create_payroll_run, approve_payroll_run
+from app.services import payroll_payment as pay
+from app.services import payroll_pdf
 
 router = APIRouter(prefix='/api/payroll', tags=['Payroll'])
 
@@ -457,3 +459,183 @@ async def list_deductions(
          "start_date": str(r.start_date)}
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Who may be paid, paying them, and saying so afterwards
+# ---------------------------------------------------------------------------
+#
+# The payment route sits behind require_admin rather than
+# require_authenticated_user. The rest of this module reports on payroll;
+# that one decides that money has moved and settles a liability in the ledger.
+
+class PaymentIn(BaseModel):
+    payslip_ids: List[UUID] = Field(..., min_items=1)
+    paid_on: date
+    method: str = 'BANK_TRANSFER'
+    bank_reference: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get('/eligibility')
+async def eligibility(
+    period_start: date,
+    period_end: date,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Staff who worked the selected period, and separately those who did not.
+
+    The payroll screen shows the first group by default. The second is
+    returned rather than discarded, so that nobody can go unpaid simply by
+    being absent from a list.
+    """
+    return await pay.eligibility(
+        session, period_start=period_start, period_end=period_end)
+
+
+@router.post('/runs/{run_id}/payments', status_code=201)
+async def record_payment(
+    run_id: UUID,
+    body: PaymentIn,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
+):
+    """Record that these people have been paid, and settle the liability.
+
+    Posts Dr Staff Salary Payable / Cr Bank or Cash. Until this runs, an
+    approved payroll is a debt the company owes -- which is exactly what it
+    is, and the reason account 2200 could previously only grow.
+    """
+    result = await pay.pay_payslips(
+        session, run_id=run_id, payslip_ids=body.payslip_ids,
+        paid_on=body.paid_on, method=body.method,
+        bank_reference=body.bank_reference, notes=body.notes,
+        paid_by=user.id,
+        paid_by_name=getattr(user, 'full_name', None) or user.username)
+    await session.commit()
+    return result
+
+
+@router.get('/payment-report')
+async def payment_report(
+    period_start: date,
+    period_end: date,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """What the period costs, who has been paid, and what is still owed."""
+    return await pay.payment_report(
+        session, period_start=period_start, period_end=period_end)
+
+
+@router.get('/payment-report.pdf')
+async def payment_report_pdf(
+    period_start: date,
+    period_end: date,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    report = await pay.payment_report(
+        session, period_start=period_start, period_end=period_end)
+    if not report['lines']:
+        raise HTTPException(
+            status_code=404,
+            detail='No payroll has been processed for this period.')
+    pdf = payroll_pdf.payment_report_pdf(report)
+    return Response(
+        content=pdf, media_type='application/pdf',
+        headers={'Content-Disposition':
+                 f'attachment; filename="payroll_report_'
+                 f'{period_start}_{period_end}.pdf"'})
+
+
+@router.get('/payslips.pdf')
+async def payslips_pdf(
+    period_start: date,
+    period_end: date,
+    payslip_ids: Optional[str] = Query(
+        None, description='Comma-separated payslip ids; omit for everyone '
+                          'processed in the period.'),
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Every selected payslip in one PDF, one person per page.
+
+    Generated in bulk because the alternative -- downloading forty files one
+    at a time -- is how a payroll clerk ends up handing somebody the wrong
+    slip.
+    """
+    wanted = None
+    if payslip_ids:
+        wanted = [p.strip() for p in payslip_ids.split(',') if p.strip()]
+        if not wanted:
+            raise HTTPException(
+                status_code=400, detail='No payslips selected.')
+
+    clause = ''
+    params = {'ps': period_start, 'pe': period_end}
+    if wanted:
+        clause = ' AND p.id = ANY(CAST(:ids AS uuid[]))'
+        params['ids'] = wanted
+
+    slips = (await session.execute(text(f"""
+        SELECT p.id, p.payslip_number, p.gross_pay, p.total_deductions,
+               p.net_pay, p.employer_contributions, p.regular_hours,
+               p.overtime_hours, p.paid_at,
+               s.employee_id, s.first_name, s.last_name, s.position,
+               s.bank_name, s.bank_account_number,
+               b.batch_number, b.paid_on, b.method
+          FROM payslips p
+          JOIN payroll_runs r ON r.id = p.run_id
+          JOIN staff s ON s.id = p.staff_id
+     LEFT JOIN payroll_payment_batches b ON b.id = p.payment_batch_id
+         WHERE r.period_start = :ps AND r.period_end = :pe
+           AND r.status <> 'CANCELLED'{clause}
+         ORDER BY s.employee_id
+    """), params)).fetchall()
+
+    if not slips:
+        raise HTTPException(
+            status_code=404,
+            detail='No payslips found for that period and selection.')
+
+    out = []
+    for sl in slips:
+        comps = (await session.execute(text("""
+            SELECT component_type, code, label, amount, basis_amount,
+                   rate_applied
+              FROM payslip_components WHERE payslip_id = :p ORDER BY sequence
+        """), {'p': str(sl.id)})).fetchall()
+        out.append({
+            'payslip_number': sl.payslip_number,
+            'employee_id': sl.employee_id,
+            'name': f'{sl.first_name} {sl.last_name}',
+            'position': sl.position or '',
+            'bank_name': sl.bank_name or '',
+            'bank_account_number': sl.bank_account_number or '',
+            'gross_pay': float(sl.gross_pay or 0),
+            'total_deductions': float(sl.total_deductions or 0),
+            'net_pay': float(sl.net_pay or 0),
+            'employer_contributions': float(sl.employer_contributions or 0),
+            'regular_hours': float(sl.regular_hours or 0),
+            'overtime_hours': float(sl.overtime_hours or 0),
+            'paid_on': str(sl.paid_on) if sl.paid_on else None,
+            'method': sl.method,
+            'batch_number': sl.batch_number,
+            'components': [
+                {'type': c.component_type, 'code': c.code, 'label': c.label,
+                 'amount': float(c.amount),
+                 'basis_amount': float(c.basis_amount) if c.basis_amount else None,
+                 'rate_applied': float(c.rate_applied) if c.rate_applied else None}
+                for c in comps],
+        })
+
+    pdf = payroll_pdf.payslip_pdf(
+        out, {'start': str(period_start), 'end': str(period_end)})
+    label = 'selected' if wanted else 'all'
+    return Response(
+        content=pdf, media_type='application/pdf',
+        headers={'Content-Disposition':
+                 f'attachment; filename="payslips_{label}_'
+                 f'{period_start}_{period_end}.pdf"'})

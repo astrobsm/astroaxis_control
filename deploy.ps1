@@ -202,6 +202,22 @@ $backendFiles = @(
     'backend/app/services/field_portal.py',
     'backend/app/api/field.py',
 
+    'backend/alembic/versions/m8901234567l_payroll_payment.py',
+
+    # Paying a payroll run, and hiding staff from displays. api/payroll.py
+    # imports both services and api/staff.py imports staff_visibility, so
+    # these travel together. models.py and schemas.py carry the new staff
+    # columns; hr_customercare.py is what keeps hidden staff off the
+    # dashboard birthday panel.
+    'backend/app/services/payroll_payment.py',
+    'backend/app/services/payroll_pdf.py',
+    'backend/app/services/staff_visibility.py',
+    'backend/app/api/payroll.py',
+    'backend/app/api/staff.py',
+    'backend/app/api/hr_customercare.py',
+    'backend/app/models.py',
+    'backend/app/schemas.py',
+
     'backend/requirements.txt'
 )
 

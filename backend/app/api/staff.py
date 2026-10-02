@@ -29,6 +29,10 @@ from datetime import timedelta
 import random
 import string
 
+from pydantic import BaseModel as _VisBaseModel
+from app.api.auth import require_admin
+from app.services import staff_visibility as _vis
+
 router = APIRouter(prefix='/api/staff')
 
 # Helper function to generate unique 4-digit PIN
@@ -522,9 +526,21 @@ async def create_staff(staff_data: StaffCreate, session: AsyncSession = Depends(
 
 
 @router.get('/staffs', response_model=PaginatedResponse[StaffSchema])
-async def list_staffs(skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000), session: AsyncSession = Depends(get_session)):
+async def list_staffs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=1000),
+    include_hidden: bool = Query(
+        False, description='Include staff hidden from displays. The register '
+                           'offers this as a toggle so a hiding can be '
+                           'reviewed and undone from the same screen.'),
+    session: AsyncSession = Depends(get_session),
+):
     query = select(Staff)
-    count_result = await session.execute(select(func.count(Staff.id)))
+    count_q = select(func.count(Staff.id))
+    if not include_hidden:
+        query = query.where(Staff.display_hidden == False)  # noqa: E712
+        count_q = count_q.where(Staff.display_hidden == False)  # noqa: E712
+    count_result = await session.execute(count_q)
     total = count_result.scalar_one()
     result = await session.execute(query.offset(skip).limit(limit).order_by(Staff.first_name))
     items = result.scalars().all()
@@ -1365,3 +1381,55 @@ async def get_upcoming_birthdays(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching birthdays: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Hiding a member of staff from the lists their name appears on
+# ---------------------------------------------------------------------------
+#
+# Admin only, with a compulsory reason, and every hiding and restoration is
+# written to an append-only log. See app.services.staff_visibility for why
+# this is a display control and must never become a pay control.
+
+class VisibilityIn(_VisBaseModel):
+    hidden: bool
+    reason: str
+
+
+@router.get('/hidden')
+async def list_hidden_staff(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_admin),
+):
+    """Everyone currently hidden, with the reason and who hid them.
+
+    This list is what makes the feature safe. Hiding colleagues is only
+    acceptable while the whole set of hidden people is visible in one place
+    to somebody who can undo it.
+    """
+    return {'hidden': await _vis.hidden_staff(session)}
+
+
+@router.get('/{staff_id}/visibility-history')
+async def staff_visibility_history(
+    staff_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_admin),
+):
+    return {'history': await _vis.visibility_history(session, staff_id=staff_id)}
+
+
+@router.post('/{staff_id}/visibility')
+async def set_staff_visibility(
+    staff_id: UUID,
+    body: VisibilityIn,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_admin),
+):
+    """Hide this person from staff lists, or restore them. Reason required."""
+    result = await _vis.set_visibility(
+        session, staff_id=staff_id, hidden=body.hidden, reason=body.reason,
+        actor_id=user.id,
+        actor_name=getattr(user, 'full_name', None) or user.username)
+    await session.commit()
+    return result

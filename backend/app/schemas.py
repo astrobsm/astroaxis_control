@@ -422,6 +422,8 @@ class StaffSchema(StaffBase):
     employee_id: str  # Auto-generated BSM + 4 digits
     clock_pin: str  # Include PIN in response for admin use
     is_active: bool
+    display_hidden: bool = False
+    hidden_reason: Optional[str] = None
     created_at: datetime
     full_name: Optional[str] = None  # Computed field
 

@@ -19,6 +19,8 @@ import Recalls from './Recalls';
 import { initOfflineEngine, subscribeOffline, pullFromCloud, processMutationQueue, clearOfflineCache } from './utils/offlineEngine';
 import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
+import PayrollDesk from './PayrollDesk';
+import { HideStaffControl, HiddenBadge, HiddenStaffPanel } from './StaffVisibility';
 // Lazy: the meeting module pulls in the conference UI, and most users
 // never open it. Keeping it out of the main bundle keeps the rest of
 // the ERP loading at the speed it did before meetings existed.
@@ -3724,7 +3726,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  {(data.staff || []).map(staff => (
  <tr key={staff.id}>
  <td>{staff.employee_id}</td>
- <td>{staff.first_name} {staff.last_name}</td>
+ <td>{staff.first_name} {staff.last_name}{staff.display_hidden && <HiddenBadge reason={staff.hidden_reason} />}</td>
  <td>{staff.position}</td>
  <td><strong>{staff.clock_pin}</strong></td>
  <td>{staff.phone || 'N/A'}</td>
@@ -3733,12 +3735,19 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  <td className="actions">
  <button onClick={() => openForm('staff', staff)} className="btn-edit">Edit</button>
  <button onClick={() => openForm('payroll', { staff_id: staff.id })} className="btn-download">Payroll</button>
+ <HideStaffControl staff={staff} compact onChanged={() => fetchData('staff')} />
  <button onClick={() => deleteItem('staff', staff.id)} className="btn-delete">Delete</button>
  </td>
  </tr>
  ))}
  </tbody>
  </table>
+ </div>
+
+ {/* Hiding people is only safe while the whole set of hidden people is
+     visible in one place to somebody who can undo it. */}
+ <div style={{marginTop:'1.5rem'}}>
+ <HiddenStaffPanel onChanged={() => fetchData('staff')} />
  </div>
  </div>
  )}
@@ -3842,134 +3851,20 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
  </div>
  </div>
 
- {/* Period Selector */}
- <div style={{display:'flex', gap:'1rem', alignItems:'center', padding:'0.75rem 1rem', background:'var(--gray-50, #f8f9fa)', borderRadius:8, marginBottom:'1rem', flexWrap:'wrap'}}>
- <label style={{fontWeight:600, fontSize:13}}>Pay Period:</label>
- <input type="date" value={payrollPeriod.start} onChange={(e) => setPayrollPeriod(p => ({...p, start: e.target.value}))} style={{padding:'6px 10px', borderRadius:6, border:'1px solid #ddd'}} />
- <span>to</span>
- <input type="date" value={payrollPeriod.end} onChange={(e) => setPayrollPeriod(p => ({...p, end: e.target.value}))} style={{padding:'6px 10px', borderRadius:6, border:'1px solid #ddd'}} />
- <button className="btn btn-primary" onClick={() => fetchPayrollDashboard(payrollPeriod.start, payrollPeriod.end)} style={{fontSize:12}}>Load Period</button>
- <button className="btn btn-secondary" onClick={() => {
- const now = new Date();
- const s = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
- const e = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
- setPayrollPeriod({ start: s, end: e });
- fetchPayrollDashboard(s, e);
- }} style={{fontSize:12}}>Current Month</button>
- </div>
+ {/* DASHBOARD TAB
+     ==============
+     The whole of this tab -- period selector, summary cards and staff table --
+     now lives in PayrollDesk, and it reads /api/payroll rather than
+     /api/staff/payroll/dashboard.
 
- {/* DASHBOARD TAB */}
+     The old screen reported `net_pay = gross_pay` with the backend comment
+     "No deductions for now". Adding bulk payslips and a paid marker on top of
+     that would have shipped a payment workflow that pays gross and withholds
+     no PAYE, pension, NHF or NHIA -- and under-deducted PAYE is recovered
+     from the COMPANY. The calculator behind those figures was retired in the
+     backend for exactly this reason; the screen had outlived it. */}
  {payrollTab === 'dashboard' && (
- <div>
- {/* Summary Cards */}
- {payrollDashboard && (
- <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'1rem', marginBottom:'1.5rem'}}>
- <div style={{background:'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
- <div style={{fontSize:28, fontWeight:700}}>N{(payrollDashboard.total_due || 0).toLocaleString('en-NG', {minimumFractionDigits:2})}</div>
- <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Total Due Salaries</div>
- </div>
- <div style={{background:'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
- <div style={{fontSize:28, fontWeight:700}}>{payrollDashboard.total_staff || 0}</div>
- <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Active Staff</div>
- </div>
- <div style={{background:'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
- <div style={{fontSize:28, fontWeight:700}}>{(payrollDashboard.total_hours || 0).toFixed(1)}</div>
- <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Total Hours Worked</div>
- </div>
- <div style={{background:'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', color:'#fff', borderRadius:12, padding:'1.25rem', textAlign:'center'}}>
- <div style={{fontSize:28, fontWeight:700}}>{payrollDashboard.period_start} - {payrollDashboard.period_end}</div>
- <div style={{fontSize:12, opacity:0.9, marginTop:4}}>Current Period</div>
- </div>
- </div>
- )}
-
- {/* Staff Salary Table */}
- <div className="table-container">
- <table className="data-table">
- <thead>
- <tr>
- <th>Employee ID</th>
- <th>Name</th>
- <th>Position</th>
- <th>Pay Mode</th>
- <th>Rate</th>
- <th>Hours Worked</th>
- <th>Days</th>
- <th>Overtime</th>
- <th>Gross Pay (N)</th>
- <th>Status</th>
- <th>Actions</th>
- </tr>
- </thead>
- <tbody>
- {(payrollDashboard?.staff || []).map(s => (
- <tr key={s.staff_id} style={{background: s.payroll_status === 'paid' ? '#e8f5e9' : s.payroll_status === 'approved' ? '#e3f2fd' : s.payroll_status === 'draft' ? '#fff8e1' : 'transparent'}}>
- <td><strong>{s.employee_id}</strong></td>
- <td>{s.first_name} {s.last_name}</td>
- <td>{s.position}</td>
- <td><span style={{background: s.payment_mode === 'hourly' ? '#e3f2fd' : '#f3e5f5', padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600}}>{s.payment_mode === 'hourly' ? 'Hourly' : 'Monthly'}</span></td>
- <td>{s.payment_mode === 'hourly' ? `N${s.hourly_rate.toLocaleString()}/hr` : `N${s.monthly_salary.toLocaleString()}/mo`}</td>
- <td>{s.hours_worked.toFixed(1)}</td>
- <td>{s.days_worked}</td>
- <td style={{color: s.overtime_hours > 0 ? '#e65100' : 'inherit', fontWeight: s.overtime_hours > 0 ? 600 : 400}}>{s.overtime_hours.toFixed(1)}</td>
- <td><strong style={{color:'#1b5e20'}}>N{s.gross_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</strong></td>
- <td>
- <span style={{
- padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:600,
- background: s.payroll_status === 'paid' ? '#c8e6c9' : s.payroll_status === 'approved' ? '#bbdefb' : s.payroll_status === 'draft' ? '#fff9c4' : '#f5f5f5',
- color: s.payroll_status === 'paid' ? '#2e7d32' : s.payroll_status === 'approved' ? '#1565c0' : s.payroll_status === 'draft' ? '#f57f17' : '#757575'
- }}>
- {s.payroll_status === 'not_processed' ? 'Pending' : s.payroll_status.toUpperCase()}
- </span>
- </td>
- <td className="actions" style={{whiteSpace:'nowrap'}}>
- {s.payroll_status === 'not_processed' && (
- <button className="btn-edit" onClick={() => processSinglePayroll(s.staff_id)} disabled={payrollProcessing} style={{fontSize:11}}>Process</button>
- )}
- {s.payroll_id && (
- <button className="btn-download" onClick={() => downloadPayslipPdf(s.payroll_id, `${s.employee_id}_${s.first_name}`)} style={{fontSize:11}}>Payslip PDF</button>
- )}
- {s.payroll_id && s.payroll_status === 'draft' && (
- <button className="btn-edit" onClick={() => updatePayrollEntryStatus(s.payroll_id, 'approved')} style={{fontSize:11, background:'#1565c0', color:'#fff'}}>Approve</button>
- )}
- {s.payroll_id && s.payroll_status === 'approved' && (
- <button className="btn-edit" onClick={() => updatePayrollEntryStatus(s.payroll_id, 'paid')} style={{fontSize:11, background:'#2e7d32', color:'#fff'}}>Mark Paid</button>
- )}
- </td>
- </tr>
- ))}
- {(!payrollDashboard?.staff || payrollDashboard.staff.length === 0) && (
- <tr><td colSpan="11" style={{textAlign:'center', padding:'2rem', color:'#999'}}>No staff data. Click "Load Period" to fetch salary data.</td></tr>
- )}
- </tbody>
- </table>
- </div>
-
- {/* Bank Details Summary */}
- {payrollDashboard?.staff?.length > 0 && (
- <div style={{marginTop:'1.5rem'}}>
- <h3 style={{marginBottom:'0.75rem', fontSize:15}}>Bank Payment Summary</h3>
- <div className="table-container">
- <table className="data-table">
- <thead>
- <tr><th>Employee</th><th>Bank</th><th>Account Name</th><th>Account Number</th><th>Amount (N)</th></tr>
- </thead>
- <tbody>
- {payrollDashboard.staff.filter(s => s.gross_pay > 0).map(s => (
- <tr key={s.staff_id}>
- <td>{s.first_name} {s.last_name}</td>
- <td>{s.bank_name || 'N/A'}</td>
- <td>{s.bank_account_name || 'N/A'}</td>
- <td>{s.bank_account_number || 'N/A'}</td>
- <td><strong>N{s.net_pay.toLocaleString('en-NG', {minimumFractionDigits:2})}</strong></td>
- </tr>
- ))}
- </tbody>
- </table>
- </div>
- </div>
- )}
- </div>
+ <PayrollDesk notify={notify} />
  )}
 
  {/* HISTORY TAB */}

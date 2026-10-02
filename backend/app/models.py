@@ -443,6 +443,12 @@ class Staff(Base):
     bank_currency = sa.Column(sa.String(8), default='NGN')
     hire_date = sa.Column(sa.Date)
     is_active = sa.Column(sa.Boolean, default=True)
+    # Display only. is_active means "no longer employed"; display_hidden means
+    # "keep this name off the lists" and never affects pay -- see
+    # app.services.staff_visibility.
+    display_hidden = sa.Column(sa.Boolean, default=False, nullable=False)
+    hidden_reason = sa.Column(sa.Text)
+    hidden_at = sa.Column(sa.TIMESTAMP(timezone=True))
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), server_default=func.now())
 
 # Attendance model for timed clock-in / clock-out

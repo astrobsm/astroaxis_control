@@ -314,11 +314,19 @@ async def _batch(db, admin, product_id=None, *, number=None, expiry_days=365,
 @pytest.mark.asyncio
 async def test_there_is_no_stored_batch_balance(db):
     """A second copy of a quantity drifts, and drift surfaces during a recall."""
+    # This rule is about PRODUCT batches -- a stored copy of a batch quantity,
+    # which drifts from the movements that produced it and surfaces as a wrong
+    # number during a recall. It is not about the word "batch". A payroll
+    # payment batch is a group of staff paid together and holds no inventory
+    # quantity at all, so it is named here rather than widening the rule.
+    NOT_A_PRODUCT_BATCH = {"payroll_payment_batches"}
+
     tables = (await db.execute(
         text("""SELECT table_name FROM information_schema.tables
                  WHERE table_schema = 'public'
                    AND table_name ILIKE '%batch%'"""))).scalars().all()
-    assert set(tables) == {"product_batches", "batch_status_events"}, (
+    batch_tables = set(tables) - NOT_A_PRODUCT_BATCH
+    assert batch_tables == {"product_batches", "batch_status_events"}, (
         "no batch balance table may exist")
 
     columns = (await db.execute(
