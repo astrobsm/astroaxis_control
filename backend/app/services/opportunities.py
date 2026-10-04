@@ -76,17 +76,22 @@ TYPES = {
     "HIGH_VALUE_QUIET": "COMMERCIAL",
     "CROSS_SELL": "COMMERCIAL",
     "SATISFACTION_CHECK": "RELATIONSHIP",
+    "QUOTATION_PENDING": "COMMERCIAL",
 }
 
 # Ranking within a priority. Money already owed outranks money that might be
 # earned, because it is the company's cash and it is already late.
 RANK = {
     "UNPAID_INVOICE": 0,
-    "REORDER_DUE": 1,
-    "DORMANT": 2,
-    "HIGH_VALUE_QUIET": 3,
-    "CROSS_SELL": 4,
-    "SATISFACTION_CHECK": 5,
+    # A quotation the customer is holding is the warmest thing on this list:
+    # they asked for a price and have not said no. It outranks a reorder
+    # reminder, which is a guess by comparison.
+    "QUOTATION_PENDING": 1,
+    "REORDER_DUE": 2,
+    "DORMANT": 3,
+    "HIGH_VALUE_QUIET": 4,
+    "CROSS_SELL": 5,
+    "SATISFACTION_CHECK": 6,
 }
 
 # Orders that count as real trade. A cancelled order is not evidence of a
@@ -340,6 +345,56 @@ async def _cross_sell(session: AsyncSession) -> list[dict]:
     return out
 
 
+async def _open_quotations(session: AsyncSession) -> list[dict]:
+    """Quotations the customer has and has not answered.
+
+    Ranked just below unpaid invoices and above everything else: the customer
+    asked for a price, received one, and has not said no. Nothing else on this
+    list is that warm.
+
+    Expiry is computed here rather than read from a status, for the same
+    reason it is computed everywhere else -- a quote that expired on Friday
+    must not still read as live on Monday because a job did not run.
+    """
+    rows = (await session.execute(text("""
+        SELECT c.id AS customer_id, c.name, c.customer_code, c.phone,
+               q.quotation_number, q.total_amount, q.valid_until,
+               q.sent_at, q.status,
+               (q.valid_until - CURRENT_DATE) AS days_left
+          FROM quotations q
+          JOIN customers c ON c.id = q.customer_id
+         WHERE q.status IN ('SENT', 'ACCEPTED')
+           AND c.merged_into_id IS NULL
+         ORDER BY q.valid_until
+    """))).mappings().all()
+
+    out = []
+    for r in rows:
+        days = int(r["days_left"] or 0)
+        if r["status"] == "ACCEPTED":
+            reason = (f"Accepted quotation {r['quotation_number']} not yet "
+                      f"turned into an order")
+            action = "Convert to an order"
+        elif days < 0:
+            reason = (f"Quotation {r['quotation_number']} expired "
+                      f"{abs(days)} days ago with no answer")
+            action = "Re-quote at current prices"
+        else:
+            reason = (f"Quotation {r['quotation_number']} awaiting a decision, "
+                      f"{days} day{'' if days == 1 else 's'} left")
+            action = "Follow up the quotation"
+
+        out.append(_finding(
+            type_="QUOTATION_PENDING", customer=r,
+            reason=reason, action=action,
+            value=r["total_amount"], due_days=-days if days < 0 else None,
+            detail={"quotation_number": r["quotation_number"],
+                    "valid_until": str(r["valid_until"]),
+                    "days_left": days,
+                    "status": r["status"]}))
+    return out
+
+
 async def _satisfaction(session: AsyncSession) -> list[dict]:
     """Deliveries completed recently enough that asking still makes sense."""
     rows = (await session.execute(text("""
@@ -388,6 +443,7 @@ async def queue(
     """
     groups = [
         await _unpaid_invoices(session),
+        await _open_quotations(session),
         await _reorder_and_dormant(session),
         await _cross_sell(session),
         await _satisfaction(session),

@@ -21,6 +21,7 @@ import { requireLocation } from './utils/geo';
 import { authedFetch, openAuthed } from './utils/api';
 import PayrollDesk from './PayrollDesk';
 import Opportunities from './Opportunities';
+import Quotations from './Quotations';
 import { HideStaffControl, HiddenBadge, HiddenStaffPanel, UserStaffLinks } from './StaffVisibility';
 // Lazy: the meeting module pulls in the conference UI, and most users
 // never open it. Keeping it out of the main bundle keeps the rest of
@@ -3303,6 +3304,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      ]],
      ['Distribution Network', [
        ['opportunities','Who to Contact','trendup'],
+       ['quotations','Quotations','doc'],
        ['commandCentre','Command Centre','chart'],
        ['distributors','Distributors & Territories','map'],
        ['batches','Batches & Recall','asset'],
@@ -3363,7 +3365,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      // something every staff login needs. Mirrors require_distribution_access
      // in app/api/auth.py; if these disagree, the API is the one that decides,
      // and a hidden menu item that 403s is the better failure of the two.
-     if (['distributors','commandCentre','opportunities'].includes(m))
+     if (['distributors','commandCentre','opportunities','quotations'].includes(m))
        return !!currentUser && ['admin','sales_staff','customer_care']
          .includes(currentUser.role);
      // batches, attention and recalls are deliberately NOT in that list: a
@@ -9279,6 +9281,19 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
 
  {/* The Monday list: who to contact and why, derived live from the order
      book. Nothing here is stored and nothing is sent. */}
+ {/* Quotations: a price promise with a date on it. */}
+ {activeModule === 'quotations' && (
+ <div className="module-content">
+ <div className="module-header">
+ <div className="module-header-left">
+ <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+ <h2>Quotations</h2>
+ </div>
+ </div>
+ <Quotations notify={notify} />
+ </div>
+ )}
+
  {activeModule === 'opportunities' && (
  <div className="module-content">
  <div className="module-header">

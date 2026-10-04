@@ -248,6 +248,13 @@ $backendFiles = @(
     'backend/app/services/messaging.py',
     'backend/app/api/messaging.py',
 
+    'backend/alembic/versions/r0123456789q_quotations.py',
+
+    # Quotations. The opportunity queue reads them for its "awaiting a
+    # decision" finding, so opportunities.py ships with them.
+    'backend/app/services/quotations.py',
+    'backend/app/api/quotations.py',
+
     'backend/requirements.txt'
 )
 
