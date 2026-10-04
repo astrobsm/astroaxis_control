@@ -233,6 +233,14 @@ $backendFiles = @(
     'backend/app/services/opportunities.py',
     'backend/app/api/opportunities.py',
 
+    'backend/alembic/versions/p0123456789o_customer_merge.py',
+
+    # Customer deduplication. 21 of 102 live customer records shared a phone
+    # number, which makes inbound WhatsApp identification impossible and
+    # splits one customer's order history across several records.
+    'backend/app/services/customer_merge.py',
+    'backend/app/api/customer_dedupe.py',
+
     'backend/requirements.txt'
 )
 

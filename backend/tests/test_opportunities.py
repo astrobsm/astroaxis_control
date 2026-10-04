@@ -116,6 +116,9 @@ async def db():
                 c.execute(text(stmt))
         c.commit()
         _apply(c, "o0123456789n_opportunity_queue.py")
+        # The queue excludes absorbed duplicates, so it needs the
+        # merge migration's customers.merged_into_id column.
+        _apply(c, "p0123456789o_customer_merge.py")
         c.commit()
     seng.dispose()
     eng = create_async_engine(TEST_DB, future=True)

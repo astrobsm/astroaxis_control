@@ -25,6 +25,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { authedFetch } from './utils/api';
 import { color, naira, radius, space } from './ui/theme';
 import { Banner, Btn, Card, Chip, ErrorBox, SkeletonCards } from './ui/kit';
+import CustomerDuplicates from './CustomerDuplicates';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -215,6 +216,8 @@ function Row({ item, onAction }) {
 }
 
 export default function Opportunities({ notify }) {
+  const [pane, setPane] = useState('queue');
+  const [dupes, setDupes] = useState(0);
   const [data, setData] = useState(null);
   const [perf, setPerf] = useState(null);
   const [limit, setLimit] = useState(20);
@@ -225,11 +228,13 @@ export default function Opportunities({ notify }) {
   const load = useCallback(async () => {
     try {
       const q = `limit=${limit}${priority ? `&priority=${priority}` : ''}`;
-      const [queue, performance] = await Promise.all([
+      const [queue, performance, duplicates] = await Promise.all([
         req(`/api/opportunities?${q}`),
         req('/api/opportunities/performance?days=90').catch(() => null),
+        req('/api/customers/duplicates').catch(() => null),
       ]);
       setData(queue); setPerf(performance); setErr('');
+      setDupes(duplicates ? duplicates.group_count : 0);
     } catch (e) { setErr(e.message); }
   }, [limit, priority]);
 
@@ -240,11 +245,50 @@ export default function Opportunities({ notify }) {
   if (err) return <ErrorBox msg={err} />;
   if (!data) return <SkeletonCards n={4} />;
 
+  const tabs = (
+    <div style={{ display: 'flex', gap: 6, marginBottom: space(2),
+      flexWrap: 'wrap' }}>
+      {[['queue', 'Who to contact'],
+        ['duplicates', `Duplicate customers${dupes ? ` (${dupes})` : ''}`]]
+        .map(([k, label]) => (
+        <button key={k} onClick={() => setPane(k)} style={{
+          padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5,
+          fontWeight: 600, cursor: 'pointer',
+          border: `1px solid ${pane === k ? color.medical : color.borderStrong}`,
+          background: pane === k ? color.infoBg : '#fff',
+          color: pane === k ? color.royal : color.textSecondary,
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  if (pane === 'duplicates') {
+    return (
+      <div>
+        {tabs}
+        <CustomerDuplicates notify={notify} />
+      </div>
+    );
+  }
+
   const commercial = data.by_priority.COMMERCIAL || { count: 0, value: 0 };
   const relationship = data.by_priority.RELATIONSHIP || { count: 0, value: 0 };
 
   return (
     <div>
+      {tabs}
+
+      {dupes > 0 && (
+        <div style={{ marginBottom: space(2) }}>
+          <Banner tone="warning"
+            title={`${dupes} set${dupes === 1 ? '' : 's'} of duplicate customer records`}>
+            A customer split across several records appears several times
+            here, and their order history is divided between them. Worth
+            clearing before working the list.
+          </Banner>
+        </div>
+      )}
+
       {/* The two numbers the morning is actually about */}
       <div style={{ display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',

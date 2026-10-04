@@ -93,6 +93,11 @@ RANK = {
 # buying pattern, and a pending one has not been accepted yet.
 REAL_ORDERS = "('confirmed','completed')"
 
+# Absorbed duplicates are excluded everywhere. Before deduplication one
+# person appeared seven times in the live book, which produced seven
+# identical 'gone quiet' findings -- the fastest way to teach a sales
+# officer that the list is not worth opening.
+
 
 def _money(v) -> float:
     return float(Decimal(str(v or 0)).quantize(Decimal("0.01")))
@@ -144,6 +149,7 @@ async def _unpaid_invoices(session: AsyncSession) -> list[dict]:
           FROM invoices i
           JOIN customers c ON c.id = i.customer_id
          WHERE i.status IN ('pending', 'partial')
+           AND c.merged_into_id IS NULL
            AND i.due_date IS NOT NULL
            AND i.due_date::date < CURRENT_DATE
            AND (i.total_amount - COALESCE(i.paid_amount, 0)) > 0
@@ -210,7 +216,7 @@ async def _reorder_and_dormant(session: AsyncSession) -> list[dict]:
           FROM totals t
           JOIN customers c ON c.id = t.customer_id
      LEFT JOIN gaps g ON g.customer_id = t.customer_id
-         WHERE c.is_active
+         WHERE c.is_active AND c.merged_into_id IS NULL
     """))).mappings().all()
 
     out = []
@@ -312,7 +318,8 @@ async def _cross_sell(session: AsyncSession) -> list[dict]:
                   FROM sales_orders
                  WHERE status IN {REAL_ORDERS} AND customer_id IS NOT NULL
                  GROUP BY customer_id) t ON t.customer_id = b.customer_id
-         WHERE c.is_active AND t.order_count >= 2 AND b.buyers >= 2
+         WHERE c.is_active AND c.merged_into_id IS NULL
+           AND t.order_count >= 2 AND b.buyers >= 2
     """))).mappings().all()
 
     out = []
@@ -344,6 +351,7 @@ async def _satisfaction(session: AsyncSession) -> list[dict]:
           JOIN customers c ON c.id = o.customer_id
          WHERE LOWER(d.status) IN ('delivered', 'completed')
            AND d.delivery_date IS NOT NULL
+           AND c.merged_into_id IS NULL
            AND d.delivery_date >= NOW() - CAST(:w || ' days' AS interval)
          ORDER BY d.delivery_date DESC
     """), {"w": str(SATISFACTION_WINDOW_DAYS)})).mappings().all()
