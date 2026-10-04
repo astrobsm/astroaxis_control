@@ -390,24 +390,26 @@ async def confirm_customer_delivery(mc_id: UUID, data: dict, session: AsyncSessi
 
 @router.put('/manifests/{manifest_id}/status')
 async def update_manifest_status(manifest_id: UUID, data: dict, session: AsyncSession = Depends(get_session)):
-    """Update manifest status: preparing, dispatched, in_transit, completed, cancelled."""
-    try:
-        new_status = data.get('status', 'dispatched')
-        sql = text("""
-            UPDATE delivery_manifests SET status = :status, updated_at = NOW()
-            WHERE id = :id RETURNING id, manifest_number
-        """)
-        result = await session.execute(sql, {"status": new_status, "id": str(manifest_id)})
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Manifest not found")
-        await session.commit()
-        return {"message": f"Manifest {row.manifest_number} updated to {new_status}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        await session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    """Update a manifest's status. Delegates to app.services.delivery.
+
+    This endpoint used to write whatever string it was handed straight into
+    the column, so a typo set a manifest to a status nothing else in the
+    system recognised and no screen would show again. It now goes through the
+    same transition rules as the new delivery routes: a run cannot go from
+    preparing to completed without being dispatched, and a run cannot be
+    closed while drops on it have no outcome recorded.
+
+    Kept rather than removed so existing callers keep working and simply
+    start getting the validation.
+    """
+    from app.services import delivery as _delivery
+
+    result = await _delivery.set_manifest_status(
+        session, manifest_id=manifest_id,
+        status=data.get('status', 'dispatched'), note=data.get('note'))
+    await session.commit()
+    return {"message": f"Manifest {result['manifest_number']} updated to "
+                       f"{result['status']}", **result}
 
 
 @router.put('/manifests/{manifest_id}/cost')

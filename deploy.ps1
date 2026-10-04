@@ -274,6 +274,14 @@ $backendFiles = @(
     'backend/app/api/raw_materials.py',
     'backend/app/api/stock_management.py',
 
+    'backend/alembic/versions/u1023456789t_delivery_workflow.py',
+
+    # The delivery workflow. logistics.py's status endpoint now delegates to
+    # the service, so it ships with them.
+    'backend/app/services/delivery.py',
+    'backend/app/api/delivery.py',
+    'backend/app/api/logistics.py',
+
     'backend/requirements.txt'
 )
 
