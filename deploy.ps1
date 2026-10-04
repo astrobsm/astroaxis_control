@@ -241,6 +241,13 @@ $backendFiles = @(
     'backend/app/services/customer_merge.py',
     'backend/app/api/customer_dedupe.py',
 
+    'backend/alembic/versions/q0123456789p_contact_consent.py',
+
+    # Consent, contact details, the outbox and the kill switch. There is no
+    # sender: the outbox is filled and nothing drains it, deliberately.
+    'backend/app/services/messaging.py',
+    'backend/app/api/messaging.py',
+
     'backend/requirements.txt'
 )
 

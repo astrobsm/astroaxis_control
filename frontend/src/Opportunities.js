@@ -26,6 +26,7 @@ import { authedFetch } from './utils/api';
 import { color, naira, radius, space } from './ui/theme';
 import { Banner, Btn, Card, Chip, ErrorBox, SkeletonCards } from './ui/kit';
 import CustomerDuplicates from './CustomerDuplicates';
+import MessagingSettings from './MessagingSettings';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -249,7 +250,8 @@ export default function Opportunities({ notify }) {
     <div style={{ display: 'flex', gap: 6, marginBottom: space(2),
       flexWrap: 'wrap' }}>
       {[['queue', 'Who to contact'],
-        ['duplicates', `Duplicate customers${dupes ? ` (${dupes})` : ''}`]]
+        ['duplicates', `Duplicate customers${dupes ? ` (${dupes})` : ''}`],
+        ['messaging', 'Messaging controls']]
         .map(([k, label]) => (
         <button key={k} onClick={() => setPane(k)} style={{
           padding: '6px 13px', borderRadius: radius.pill, fontSize: 12.5,
@@ -267,6 +269,15 @@ export default function Opportunities({ notify }) {
       <div>
         {tabs}
         <CustomerDuplicates notify={notify} />
+      </div>
+    );
+  }
+
+  if (pane === 'messaging') {
+    return (
+      <div>
+        {tabs}
+        <MessagingSettings notify={notify} />
       </div>
     );
   }
