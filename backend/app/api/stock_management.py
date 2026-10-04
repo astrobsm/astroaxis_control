@@ -140,6 +140,7 @@ async def get_product_stock_levels(
     try:
         sql = """
             SELECT sl.id, sl.warehouse_id, sl.product_id, sl.current_stock,
+                   COALESCE(sl.reserved_stock, 0) AS reserved_stock,
                    COALESCE(sl.min_stock, 0) as min_stock,
                    p.name as product_name, p.sku as product_sku,
                    p.unit as product_unit,
@@ -164,6 +165,11 @@ async def get_product_stock_levels(
         stock_levels = []
         for row in rows:
             current_stock = float(row.current_stock or 0)
+            reserved_stock = float(row.reserved_stock or 0)
+            # Reserved is real now: inventory_reservations writes it. Showing
+            # a hardcoded zero here promised stock that was already held for
+            # somebody else's order.
+            reserved_stock = float(row.reserved_stock or 0)
             reorder_level = float(row.reorder_level or 10)
             is_low_stock = current_stock <= reorder_level
             
@@ -179,8 +185,8 @@ async def get_product_stock_levels(
                 'product_name': row.product_name or 'Unknown',
                 'product_sku': row.product_sku or '',
                 'current_stock': current_stock,
-                'reserved_stock': 0,
-                'available_stock': current_stock,
+                'reserved_stock': reserved_stock,
+                'available_stock': current_stock - reserved_stock,
                 'reorder_level': reorder_level,
                 'product_unit': row.product_unit or '',
                 'available_units': available_units,
@@ -309,6 +315,7 @@ async def get_raw_material_stock_levels(
                    COALESCE(rm.unit, 'kg') as unit,
                    COALESCE(sl.id, gen_random_uuid()) as stock_level_id,
                    COALESCE(sl.current_stock, 0) as current_stock,
+                   COALESCE(sl.reserved_stock, 0) as reserved_stock,
                    COALESCE(sl.min_stock, 0) as min_stock,
                    sl.warehouse_id,
                    COALESCE(w.name, 'Default') as warehouse_name,
@@ -344,8 +351,8 @@ async def get_raw_material_stock_levels(
                 'raw_material_name': row.rm_name or 'Unknown',
                 'raw_material_sku': row.rm_sku or '',
                 'current_stock': current_stock,
-                'reserved_stock': 0,
-                'available_stock': current_stock,
+                'reserved_stock': reserved_stock,
+                'available_stock': current_stock - reserved_stock,
                 'reorder_level': reorder_level,
                 'is_low_stock': is_low_stock,
                 'unit': row.unit or 'kg',

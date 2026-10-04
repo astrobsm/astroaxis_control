@@ -353,7 +353,8 @@ async def get_raw_material_stock(
     """Get stock levels for a raw material across all warehouses"""
     result = await session.execute(
         text("""
-            SELECT sl.current_stock, sl.min_stock, sl.max_stock,
+            SELECT sl.current_stock, COALESCE(sl.reserved_stock, 0) AS reserved_stock,
+                   sl.min_stock, sl.max_stock,
                    w.id as wh_id, w.name as wh_name, COALESCE(w.wh_id, w.code) as wh_code
             FROM stock_levels sl
             LEFT JOIN warehouses w ON sl.warehouse_id::text = w.id::text
@@ -365,6 +366,9 @@ async def get_raw_material_stock(
     stock_data = []
     for row in result.fetchall():
         current = float(row.current_stock or 0)
+        # Reserved is real now; a hardcoded zero here promised stock that was
+        # already held for somebody else's order.
+        reserved = float(row.reserved_stock or 0)
         min_s = float(row.min_stock or 0)
         max_s = float(row.max_stock or 0)
         stock_data.append({
@@ -374,8 +378,8 @@ async def get_raw_material_stock(
                 "name": row.wh_name or 'Default'
             },
             "current_stock": current,
-            "reserved_stock": 0,
-            "available_stock": current,
+            "reserved_stock": reserved,
+            "available_stock": current - reserved,
             "min_stock": min_s,
             "max_stock": max_s,
             "stock_status": "LOW" if current <= min_s else "HIGH" if max_s > 0 and current >= max_s else "NORMAL"

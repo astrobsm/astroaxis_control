@@ -263,6 +263,17 @@ $backendFiles = @(
     'backend/app/services/staff_engagement.py',
     'backend/app/api/staff_engagement.py',
 
+    'backend/alembic/versions/t0123456789s_inventory_reservations.py',
+
+    # Stock reservations. The three modules below read reserved_stock and
+    # were corrected in the same change -- a reservation system half the
+    # application cannot see is worse than none.
+    'backend/app/services/reservations.py',
+    'backend/app/api/reservations.py',
+    'backend/app/api/production.py',
+    'backend/app/api/raw_materials.py',
+    'backend/app/api/stock_management.py',
+
     'backend/requirements.txt'
 )
 

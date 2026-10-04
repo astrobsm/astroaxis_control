@@ -92,7 +92,7 @@ async def health():
 
 # Import and include API routers (no COM/Oracle dependencies)
 try:
-    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream, performance, inbox, command_centre, recalls, security_review, meetings, field, opportunities, customer_dedupe, messaging, quotations, staff_engagement
+    from app.api import staff, attendance, products, raw_materials, stock, warehouses, production, sales, stock_management, bom, settings, auth, permissions, financial, bulk_upload, notifications, production_consumables, machines_equipment, production_completions, marketing, hr_customercare, payment_tracking, procurement, logistics, warehouse_transfers, returns, damaged_transfers, receive_transfers, legacy_debts, communication, sop, public_orders, production_tasks, profits, announcements, radio, geo, regulatory, wifi, accounting, payroll, assets, budgeting, tax, maintenance, dashboard, costs, settlements, wallet, calls, telephony_webhook, geography, distributors, portal, batches, downstream, performance, inbox, command_centre, recalls, security_review, meetings, field, opportunities, customer_dedupe, messaging, quotations, staff_engagement, reservations
     
     from fastapi import Depends
     from app.api.auth import require_authenticated_user, require_admin
@@ -143,7 +143,7 @@ try:
     for _router in (
         batches, downstream, performance, inbox, command_centre,
         recalls, security_review, meetings, opportunities, customer_dedupe,
-        messaging, quotations, staff_engagement,
+        messaging, quotations, staff_engagement, reservations,
         staff, products, raw_materials, stock, warehouses, production, sales,
         stock_management, bom, settings, bulk_upload, notifications,
         production_consumables, machines_equipment, production_completions,
@@ -285,6 +285,29 @@ async def _start_field_purge_scheduler():
 @app.on_event("shutdown")
 async def _stop_field_purge_scheduler():
     task = getattr(app.state, "_field_purge_task", None)
+    if task:
+        task.cancel()
+
+
+# Background scheduler: give back stock whose hold has lapsed.
+#
+# Without this an abandoned basket holds stock forever and the warehouse reads
+# as empty while being full -- a failure harder to diagnose than a plain stock
+# error, because every individual number looks right.
+@app.on_event("startup")
+async def _start_reservation_expiry_scheduler():
+    try:
+        import asyncio
+        from app.services.reservations import expiry_scheduler
+        app.state._reservation_task = asyncio.create_task(expiry_scheduler())
+        print("✅ Reservation expiry scheduler started (hourly)")
+    except Exception as e:
+        print(f"❌ Failed to start reservation expiry scheduler: {e}")
+
+
+@app.on_event("shutdown")
+async def _stop_reservation_expiry_scheduler():
+    task = getattr(app.state, "_reservation_task", None)
     if task:
         task.cancel()
 

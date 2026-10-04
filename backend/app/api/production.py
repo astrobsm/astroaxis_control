@@ -392,7 +392,13 @@ async def calculate_production_requirements(
                 .where(StockLevel.raw_material_id == bom_line.raw_material_id)
             )
             stock_level = stock_result.scalars().first()
-            available_quantity = float(stock_level.current_stock) if stock_level else 0
+            # Available, not on-hand. Material already held for another
+            # production order or a sale cannot also be promised to this one,
+            # and reading current_stock alone is how a run is scheduled
+            # against material that is already spoken for.
+            available_quantity = (
+                float(stock_level.current_stock - (stock_level.reserved_stock or 0))
+                if stock_level else 0)
             
             # Check if sufficient stock is available
             is_sufficient = available_quantity >= required_quantity
