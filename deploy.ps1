@@ -255,6 +255,14 @@ $backendFiles = @(
     'backend/app/services/quotations.py',
     'backend/app/api/quotations.py',
 
+    'backend/alembic/versions/s0123456789r_staff_engagement.py',
+
+    # Staff birthdays and work anniversaries. Deliberately separate from
+    # anything customer-facing; queues into the same outbox, which nothing
+    # drains.
+    'backend/app/services/staff_engagement.py',
+    'backend/app/api/staff_engagement.py',
+
     'backend/requirements.txt'
 )
 
