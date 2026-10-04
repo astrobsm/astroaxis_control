@@ -226,6 +226,13 @@ $backendFiles = @(
     'backend/app/services/payroll_run.py',
     'backend/app/api/marketing.py',
 
+    'backend/alembic/versions/o0123456789n_opportunity_queue.py',
+
+    # The opportunity queue. main.py imports app.api.opportunities and router
+    # registration re-raises, so these travel together.
+    'backend/app/services/opportunities.py',
+    'backend/app/api/opportunities.py',
+
     'backend/requirements.txt'
 )
 
