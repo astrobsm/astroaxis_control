@@ -89,6 +89,20 @@ async def awaiting_return(
     return await svc.awaiting_return(session)
 
 
+@router.get('/unclosed-runs')
+async def unclosed_runs(
+    older_than_days: int = 2,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_authenticated_user),
+):
+    """Runs that went out and were never closed.
+
+    Declared before the /manifests/{id} route so a static path cannot be
+    swallowed by a parameter route.
+    """
+    return await svc.unclosed_runs(session, older_than_days=older_than_days)
+
+
 @router.get('/manifests/{manifest_id}/history')
 async def manifest_history(
     manifest_id: UUID,

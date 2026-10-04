@@ -22,6 +22,7 @@ import { authedFetch, openAuthed } from './utils/api';
 import PayrollDesk from './PayrollDesk';
 import Opportunities from './Opportunities';
 import Quotations from './Quotations';
+import DeliveryDesk from './DeliveryDesk';
 import { HideStaffControl, HiddenBadge, HiddenStaffPanel, UserStaffLinks } from './StaffVisibility';
 import StaffEngagement from './StaffEngagement';
 // Lazy: the meeting module pulls in the conference UI, and most users
@@ -3306,6 +3307,7 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      ['Distribution Network', [
        ['opportunities','Who to Contact','trendup'],
        ['quotations','Quotations','doc'],
+       ['deliveryDesk','Delivery Desk','truck'],
        ['commandCentre','Command Centre','chart'],
        ['distributors','Distributors & Territories','map'],
        ['batches','Batches & Recall','asset'],
@@ -9289,6 +9291,20 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
 
  {/* The Monday list: who to contact and why, derived live from the order
      book. Nothing here is stored and nothing is sent. */}
+ {/* The aftermath of a delivery: runs nobody closed, and goods that came
+     back from a failed drop and are missing from stock. */}
+ {activeModule === 'deliveryDesk' && (
+ <div className="module-content">
+ <div className="module-header">
+ <div className="module-header-left">
+ <img src="/company-logo.png" alt="AstroBSM StockMaster" className="module-logo" onError={(e) => { e.target.style.display = 'none'; }} />
+ <h2>Delivery Desk</h2>
+ </div>
+ </div>
+ <DeliveryDesk notify={notify} />
+ </div>
+ )}
+
  {/* Quotations: a price promise with a date on it. */}
  {activeModule === 'quotations' && (
  <div className="module-content">

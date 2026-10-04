@@ -552,3 +552,45 @@ async def test_an_internal_status_is_not_news_to_the_customer(db):
     after = (await db.execute(text(
         "SELECT COUNT(*) FROM outbound_messages"))).scalar()
     assert after == before
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_went_out_and_was_never_closed_is_surfaced(db):
+    """Sixteen of these exist in the live database, up to five months old."""
+    user = await _user(db)
+    s = await _setup(db, drops=2)
+    await svc.set_manifest_status(db, manifest_id=s["manifest"],
+                                  status="dispatched", actor=user)
+    await db.execute(text(
+        "UPDATE delivery_manifests SET delivery_date = CURRENT_DATE - 30 "
+        "WHERE id = :i"), {"i": str(s["manifest"])})
+
+    result = await svc.unclosed_runs(db)
+    assert result["count"] == 1
+    assert result["open_drops"] == 2
+    assert result["runs"][0]["days_old"] == 30
+
+
+@pytest.mark.asyncio
+async def test_a_run_closed_properly_is_not_surfaced(db):
+    user = await _user(db)
+    s = await _setup(db, drops=1)
+    await svc.set_manifest_status(db, manifest_id=s["manifest"],
+                                  status="dispatched", actor=user)
+    await db.execute(text(
+        "UPDATE delivery_manifests SET delivery_date = CURRENT_DATE - 30 "
+        "WHERE id = :i"), {"i": str(s["manifest"])})
+    await svc.set_drop_status(db, drop_id=s["drops"][0], status="delivered",
+                              actor=user)
+    await svc.set_manifest_status(db, manifest_id=s["manifest"],
+                                  status="completed", actor=user)
+    assert (await svc.unclosed_runs(db))["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_todays_run_is_not_yet_overdue(db):
+    user = await _user(db)
+    s = await _setup(db, drops=1)
+    await svc.set_manifest_status(db, manifest_id=s["manifest"],
+                                  status="dispatched", actor=user)
+    assert (await svc.unclosed_runs(db))["count"] == 0

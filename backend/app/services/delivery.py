@@ -402,6 +402,57 @@ async def awaiting_return(session: AsyncSession) -> dict:
     }
 
 
+async def unclosed_runs(session: AsyncSession, *, older_than_days: int = 2) -> dict:
+    """Runs that went out and were never closed.
+
+    In the live database today there are 16 drops still `pending` on manifests
+    dispatched in March and April -- vans that left and whose outcome nobody
+    recorded. The transition rules added with this module stop new ones
+    accumulating, because a run can no longer be completed while a drop has no
+    outcome. They do nothing about the ones already there.
+
+    Each of these is a customer who may or may not have received their goods,
+    and nobody can say which. That is worth a screen rather than a comment.
+    """
+    rows = (await session.execute(
+        text("""
+            SELECT dm.id, dm.manifest_number, dm.delivery_date, dm.status,
+                   dm.driver_name,
+                   (CURRENT_DATE - dm.delivery_date) AS days_old,
+                   COUNT(mc.id) FILTER (
+                       WHERE mc.status IN ('pending','out_for_delivery')
+                   ) AS open_drops,
+                   COUNT(mc.id) AS total_drops
+              FROM delivery_manifests dm
+              JOIN manifest_customers mc ON mc.manifest_id = dm.id
+             WHERE dm.status IN ('dispatched','in_transit')
+               AND dm.delivery_date <= CURRENT_DATE - CAST(:d || ' days' AS interval)
+             GROUP BY dm.id, dm.manifest_number, dm.delivery_date, dm.status,
+                      dm.driver_name
+            HAVING COUNT(mc.id) FILTER (
+                       WHERE mc.status IN ('pending','out_for_delivery')) > 0
+             ORDER BY dm.delivery_date
+        """), {"d": str(int(older_than_days))})).mappings().all()
+
+    return {
+        "runs": [{
+            "manifest_id": str(r["id"]),
+            "manifest_number": r["manifest_number"],
+            "delivery_date": str(r["delivery_date"]) if r["delivery_date"] else None,
+            "days_old": int(r["days_old"] or 0),
+            "status": r["status"],
+            "driver": r["driver_name"],
+            "open_drops": int(r["open_drops"]),
+            "total_drops": int(r["total_drops"]),
+        } for r in rows],
+        "count": len(rows),
+        "open_drops": sum(int(r["open_drops"]) for r in rows),
+        "note": ("Each open drop is a customer who may or may not have "
+                 "received their goods, and nobody can say which. Mark each "
+                 "one delivered or failed, then close the run."),
+    }
+
+
 async def history(session: AsyncSession, *, manifest_id: UUID) -> list:
     rows = (await session.execute(
         text("""SELECT e.from_status, e.to_status, e.note, e.actor_name,
