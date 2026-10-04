@@ -282,6 +282,11 @@ $backendFiles = @(
     'backend/app/api/delivery.py',
     'backend/app/api/logistics.py',
 
+    # The customer timeline. No migration: it reads eleven existing tables and
+    # stores nothing.
+    'backend/app/services/customer_timeline.py',
+    'backend/app/api/customer_timeline.py',
+
     'backend/requirements.txt'
 )
 

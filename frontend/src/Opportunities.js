@@ -27,6 +27,7 @@ import { color, naira, radius, space } from './ui/theme';
 import { Banner, Btn, Card, Chip, ErrorBox, SkeletonCards } from './ui/kit';
 import CustomerDuplicates from './CustomerDuplicates';
 import MessagingSettings from './MessagingSettings';
+import CustomerTimeline from './CustomerTimeline';
 
 async function req(url, opts) {
   const res = await authedFetch(url, opts);
@@ -167,7 +168,7 @@ function ActionDialog({ item, onClose, onDone }) {
   );
 }
 
-function Row({ item, onAction }) {
+function Row({ item, onAction, onHistory }) {
   return (
     <div style={{
       background: '#fff', border: `1px solid ${color.border}`,
@@ -189,6 +190,12 @@ function Row({ item, onAction }) {
           lineHeight: 1.55 }}>{item.reason}</div>
 
         <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 4 }}>
+          <button onClick={() => onHistory(item)} style={{
+            border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+            color: color.medical, fontWeight: 600, fontSize: 11.5,
+            fontFamily: 'inherit', textDecoration: 'underline',
+          }}>History</button>
+          {' · '}
           {item.customer_code}
           {item.phone ? ` · ${item.phone}` : ''}
           {item.detail && item.detail.basis
@@ -224,6 +231,7 @@ export default function Opportunities({ notify }) {
   const [limit, setLimit] = useState(20);
   const [priority, setPriority] = useState('');
   const [acting, setActing] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const [err, setErr] = useState('');
 
   const load = useCallback(async () => {
@@ -364,7 +372,8 @@ export default function Opportunities({ notify }) {
         </Banner>
       ) : (
         data.items.map((item) => (
-          <Row key={item.key} item={item} onAction={setActing} />
+          <Row key={item.key} item={item} onAction={setActing}
+            onHistory={setViewing} />
         ))
       )}
 
@@ -383,6 +392,11 @@ export default function Opportunities({ notify }) {
         {data.recently_actioned > 0
           && ` ${data.recently_actioned} worked in the last 7 days.`}
       </div>
+
+      {viewing && (
+        <CustomerTimeline customerId={viewing.customer_id}
+          onClose={() => setViewing(null)} />
+      )}
 
       {acting && (
         <ActionDialog item={acting} onClose={() => setActing(null)}
