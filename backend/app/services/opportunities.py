@@ -134,13 +134,18 @@ async def _unpaid_invoices(session: AsyncSession) -> list[dict]:
         SELECT c.id AS customer_id, c.name, c.customer_code, c.phone,
                COUNT(i.id) AS invoice_count,
                SUM(i.total_amount - COALESCE(i.paid_amount, 0)) AS outstanding,
-               MIN(i.due_date) AS oldest_due,
-               (CURRENT_DATE - MIN(i.due_date)) AS days_late
+               MIN(i.due_date::date) AS oldest_due,
+               -- ::date on every side. due_date is TIMESTAMPTZ in this
+               -- database, and date minus timestamptz yields an INTERVAL, not
+               -- a number of days -- which reached production as a 500
+               -- because the test schema declared the column DATE and the
+               -- subtraction therefore returned an integer there.
+               (CURRENT_DATE - MIN(i.due_date::date)) AS days_late
           FROM invoices i
           JOIN customers c ON c.id = i.customer_id
          WHERE i.status IN ('pending', 'partial')
            AND i.due_date IS NOT NULL
-           AND i.due_date < CURRENT_DATE
+           AND i.due_date::date < CURRENT_DATE
            AND (i.total_amount - COALESCE(i.paid_amount, 0)) > 0
          GROUP BY c.id, c.name, c.customer_code, c.phone
     """))).mappings().all()

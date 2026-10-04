@@ -30,6 +30,12 @@ pytestmark = pytest.mark.skipif(
 
 NOW = datetime.now(timezone.utc)
 
+# Column types here are COPIED FROM PRODUCTION, not chosen. invoices.due_date
+# is TIMESTAMPTZ and logistics_deliveries.delivery_date is DATE. Declaring
+# them the other way round is exactly how this suite passed green while the
+# live endpoint returned a 500 on date arithmetic: date minus timestamptz is
+# an INTERVAL, date minus date is an integer, and only one of those is what
+# the code expects.
 SCHEMA = """
 DROP TABLE IF EXISTS customer_opportunity_actions CASCADE;
 DROP TABLE IF EXISTS logistics_deliveries CASCADE;
@@ -74,14 +80,14 @@ CREATE TABLE invoices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     invoice_number VARCHAR(64) UNIQUE NOT NULL,
     customer_id UUID REFERENCES customers(id),
-    due_date DATE, total_amount NUMERIC(18,2) DEFAULT 0,
+    due_date TIMESTAMPTZ, total_amount NUMERIC(18,2) DEFAULT 0,
     paid_amount NUMERIC(18,2) DEFAULT 0, status VARCHAR(32) DEFAULT 'pending'
 );
 CREATE TABLE logistics_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     delivery_number VARCHAR(64) UNIQUE NOT NULL,
     sales_order_id UUID REFERENCES sales_orders(id),
-    delivery_date TIMESTAMPTZ, status VARCHAR(32) DEFAULT 'delivered'
+    delivery_date DATE, status VARCHAR(32) DEFAULT 'delivered'
 );
 """
 
