@@ -350,6 +350,53 @@ async def prepare(
     }
 
 
+async def consent_roster(session: AsyncSession) -> dict:
+    """Every active member of staff and what they have agreed to.
+
+    Separate from `calendar` on purpose. The calendar deliberately omits
+    anybody who has not agreed to be listed -- which is precisely the people
+    whose answer still needs recording, so it is the wrong source for this
+    screen.
+    """
+    rows = (await session.execute(text("""
+        SELECT s.id, s.employee_id, s.first_name, s.last_name, s.position,
+               s.phone, s.display_hidden, s.hidden_reason,
+               (s.date_of_birth IS NOT NULL) AS has_birthday,
+               (s.hire_date IS NOT NULL)     AS has_hire_date,
+               COALESCE(c.birthday_messages, FALSE)    AS birthday_messages,
+               COALESCE(c.anniversary_messages, FALSE) AS anniversary_messages,
+               COALESCE(c.visibility, 'NOBODY')        AS visibility,
+               c.preferred_name, c.consent_source, c.consent_at
+          FROM staff s
+     LEFT JOIN staff_engagement_consent c ON c.staff_id = s.id
+         WHERE s.is_active
+         ORDER BY s.first_name, s.last_name
+    """))).mappings().all()
+
+    return {
+        "staff": [{
+            "staff_id": str(r["id"]), "employee_id": r["employee_id"],
+            "name": f"{r['first_name']} {r['last_name']}",
+            "position": r["position"] or "",
+            "has_phone": bool(r["phone"]),
+            "has_birthday": bool(r["has_birthday"]),
+            "has_hire_date": bool(r["has_hire_date"]),
+            "display_hidden": bool(r["display_hidden"]),
+            "hidden_reason": r["hidden_reason"],
+            "birthday_messages": bool(r["birthday_messages"]),
+            "anniversary_messages": bool(r["anniversary_messages"]),
+            "visibility": r["visibility"],
+            "preferred_name": r["preferred_name"],
+            "consent_source": r["consent_source"],
+            "consent_at": (r["consent_at"].isoformat()
+                           if r["consent_at"] else None),
+        } for r in rows],
+        "note": ("Everything starts at no. Ask each person before recording "
+                 "an answer, and note that somebody hidden from staff "
+                 "displays is never messaged whatever is set here."),
+    }
+
+
 async def history(session: AsyncSession, *, staff_id: UUID) -> dict:
     sends = (await session.execute(
         text("""SELECT occasion, occasion_year, years_of_service, status,

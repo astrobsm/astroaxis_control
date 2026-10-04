@@ -23,6 +23,7 @@ import PayrollDesk from './PayrollDesk';
 import Opportunities from './Opportunities';
 import Quotations from './Quotations';
 import { HideStaffControl, HiddenBadge, HiddenStaffPanel, UserStaffLinks } from './StaffVisibility';
+import StaffEngagement from './StaffEngagement';
 // Lazy: the meeting module pulls in the conference UI, and most users
 // never open it. Keeping it out of the main bundle keeps the rest of
 // the ERP loading at the speed it did before meetings existed.
@@ -3758,6 +3759,13 @@ function AppMain({ currentUser = null, commUnread = { notices: 0, messages: {}, 
      scope anybody to "their own records" until this is filled in. */}
  <div style={{marginTop:'1.5rem'}}>
  <UserStaffLinks />
+ </div>
+
+ {/* Birthdays and work anniversaries. Nobody is listed or messaged
+     until they have agreed, which is why it looks empty at first. */}
+ <div style={{marginTop:'1.5rem'}}>
+ <h3 style={{fontSize:15, marginBottom:'0.75rem'}}>Birthdays &amp; anniversaries</h3>
+ <StaffEngagement notify={notify} />
  </div>
  </div>
  )}

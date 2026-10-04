@@ -43,6 +43,19 @@ async def engagement_calendar(
     return await svc.calendar(session, days=days, for_display=True)
 
 
+@router.get('/consent')
+async def consent_roster(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(require_admin),
+):
+    """Every active member of staff and what they have agreed to.
+
+    Declared before the /{staff_id} routes so a static path cannot be
+    swallowed by a parameter route.
+    """
+    return await svc.consent_roster(session)
+
+
 @router.post('/prepare')
 async def prepare_today(
     on: Optional[date] = None,
