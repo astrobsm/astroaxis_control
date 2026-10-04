@@ -66,6 +66,16 @@ services:
       # positions are kept before the purge deletes them.
       FIELD_SESSION_HOURS: ${FIELD_SESSION_HOURS:-12}
       FIELD_LOCATION_RETENTION_DAYS: ${FIELD_LOCATION_RETENTION_DAYS:-90}
+
+      # Paystack. No default: with no key the payment routes answer 503
+      # rather than silently behaving as though payment were configured.
+      # Start on the TEST key -- it is available before the business is
+      # activated and cannot move real money. PAYSTACK_WEBHOOK_PATH is the
+      # unguessable segment in the callback URL given to Paystack, and is a
+      # password in the same way the telephony callback URL is.
+      PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY:-}
+      PAYSTACK_PUBLIC_KEY: ${PAYSTACK_PUBLIC_KEY:-}
+      PAYSTACK_WEBHOOK_PATH: ${PAYSTACK_WEBHOOK_PATH:-}
     depends_on:
       db:
         condition: service_healthy
